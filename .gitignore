@@ -1,0 +1,76 @@
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+.eggs/
+build/
+dist/
+.Python
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Test / type / lint caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+
+# ---------------------------------------------------------------------------
+# Node / Next.js
+# ---------------------------------------------------------------------------
+node_modules/
+.pnpm-store/
+.next/
+out/
+next-env.d.ts.timestamp
+*.tsbuildinfo
+.turbo/
+
+# ---------------------------------------------------------------------------
+# Environment & secrets (NEVER commit real values)
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ---------------------------------------------------------------------------
+# Engine runtime artifacts (local caches, generated output, candidate data)
+# ---------------------------------------------------------------------------
+.cache/
+*.cache
+ats-engine-cache/
+generated/
+output/
+artifacts/
+# Private candidate/applicant documents and generated kits must never be committed
+resumes/
+candidate_data/
+*.resume.pdf
+
+# Generated application artifacts
+*.tex.pdf
+
+# ---------------------------------------------------------------------------
+# OS / editor
+# ---------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+*~

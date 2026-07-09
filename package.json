@@ -1,0 +1,16 @@
+{
+  "name": "ats-ninja-v2",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ATS-Ninja-V2 monorepo: deterministic-first, truth-grounded AI career SaaS.",
+  "packageManager": "pnpm@9.15.9",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev:web": "pnpm --filter @ats-ninja/web dev",
+    "build:web": "pnpm --filter @ats-ninja/web build",
+    "lint:web": "pnpm --filter @ats-ninja/web lint",
+    "typecheck:web": "pnpm --filter @ats-ninja/web typecheck"
+  }
+}

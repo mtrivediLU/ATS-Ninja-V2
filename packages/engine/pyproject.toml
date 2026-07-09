@@ -1,0 +1,63 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ats-engine"
+version = "0.1.0"
+description = "ATS-Ninja-V2 career intelligence engine: deterministic-first, truth-grounded resume and application-kit generation."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "ATS-Ninja" }]
+keywords = ["ats", "resume", "career", "nlp", "deterministic"]
+
+# Core runtime dependencies are intentionally light and portable. The engine
+# does NOT depend on any LLM SDK: LLM providers are reached through the stdlib
+# HTTP transport behind the LLMProvider interface (see ats_engine/providers).
+dependencies = [
+    "pdfplumber>=0.11.0",  # PDF resume text extraction
+    "jinja2>=3.1.0",       # LaTeX artifact templating
+    "diskcache>=5.6.0",    # content-hash cache backend
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.6.0",
+    "mypy>=1.11.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/mtrivediLU/ATS-Ninja-V2"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ats_engine"]
+# Ship the LaTeX templates and the py.typed marker as package data (they live
+# inside the package tree, so hatchling includes them automatically).
+artifacts = ["*.tex", "py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "W"]
+# `ruff format` owns code line width; E501's only remaining hits are string
+# literals / regexes the formatter deliberately does not wrap, so it is disabled.
+ignore = ["B008", "E501"]
+
+[tool.mypy]
+python_version = "3.11"
+packages = ["ats_engine"]
+mypy_path = "src"
+strict = true
+# Third-party libraries without bundled type stubs.
+[[tool.mypy.overrides]]
+module = ["pdfplumber", "pdfplumber.*", "diskcache"]
+ignore_missing_imports = true

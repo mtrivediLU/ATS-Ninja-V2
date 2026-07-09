@@ -1,0 +1,103 @@
+"""ATS-Ninja engine: deterministic-first, truth-grounded career intelligence.
+
+This is the public surface of the engine. Callers (the API service, an async
+worker, tests, notebooks) should import from here or from the documented
+subpackages (``ats_engine.parsing``, ``.evidence``, ``.scoring``,
+``.validation``, ``.generation``, ``.providers``) rather than reaching into
+private modules.
+
+Design contract (enforced by architecture, see AGENTS.md):
+  * No web-framework or LLM-vendor SDK is imported by this package.
+  * LLM output is untrusted until it passes the validation gates.
+  * Candidate-specific claims must be backed by evidence from the resume.
+"""
+
+from __future__ import annotations
+
+from ats_engine.config import EngineSettings
+from ats_engine.evidence import (
+    build_evidence_matrix,
+    classify_keyword,
+    interview_probability,
+)
+from ats_engine.generation import (
+    build_resume_plan,
+    run_pipeline,
+    validate_pipeline_result,
+)
+from ats_engine.models import (
+    AnswerPlan,
+    Certification,
+    ContactInfo,
+    CoverLetterPlan,
+    Education,
+    EvidenceItem,
+    Experience,
+    JDProfile,
+    Mode,
+    ParsedInput,
+    PipelineResult,
+    Profile,
+    ResumePlan,
+)
+from ats_engine.parsing import (
+    build_profile,
+    extract_profile,
+    extract_text_from_pdf,
+    parse_input,
+    parse_jd,
+)
+from ats_engine.providers import LLMProvider, OllamaProvider
+from ats_engine.scoring import calculate_ats_score, compare_scores, extract_keywords
+from ats_engine.validation import (
+    is_fatal_validation_error,
+    partition_validation_errors,
+    validate_claims,
+)
+
+__version__ = "0.1.0"
+
+__all__ = [
+    # settings
+    "EngineSettings",
+    # models
+    "AnswerPlan",
+    "Certification",
+    "ContactInfo",
+    "CoverLetterPlan",
+    "Education",
+    "EvidenceItem",
+    "Experience",
+    "JDProfile",
+    "Mode",
+    "ParsedInput",
+    "PipelineResult",
+    "Profile",
+    "ResumePlan",
+    # parsing
+    "build_profile",
+    "extract_profile",
+    "extract_text_from_pdf",
+    "parse_input",
+    "parse_jd",
+    # evidence
+    "build_evidence_matrix",
+    "classify_keyword",
+    "interview_probability",
+    # scoring
+    "calculate_ats_score",
+    "compare_scores",
+    "extract_keywords",
+    # validation
+    "is_fatal_validation_error",
+    "partition_validation_errors",
+    "validate_claims",
+    # generation
+    "build_resume_plan",
+    "run_pipeline",
+    "validate_pipeline_result",
+    # providers
+    "LLMProvider",
+    "OllamaProvider",
+    "__version__",
+]
