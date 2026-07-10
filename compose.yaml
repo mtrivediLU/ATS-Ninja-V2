@@ -1,0 +1,61 @@
+# ATS-Ninja-V2 local development topology.
+#
+# Phase 0 runs ONLY services that genuinely exist: the FastAPI backend and the
+# Next.js frontend. PostgreSQL, Redis, and the async worker are deliberately
+# NOT declared here yet — the engineering rule is "do not run unused
+# infrastructure merely for appearance." They will be added in the phase that
+# introduces persistence and background jobs (see docs/architecture.md), slotting
+# in as new services below without reshaping these two.
+name: ats-ninja-v2
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: infra/docker/api.Dockerfile
+    environment:
+      ATS_API_ENVIRONMENT: development
+      ATS_API_CORS_ORIGINS: '["http://localhost:3000"]'
+      # Engine settings (Ollama is optional; the engine degrades deterministically)
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  web:
+    build:
+      context: .
+      dockerfile: infra/docker/web.Dockerfile
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+      PORT: "3000"
+      HOSTNAME: 0.0.0.0
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - require('http').get('http://localhost:3000',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+# Future (later phase) services, intentionally not enabled in Phase 0:
+#   db:      postgres:16-alpine   (persistence: SQLAlchemy 2.x + Alembic)
+#   redis:   redis:7-alpine       (cache + async job broker)
+#   worker:  build api image, run the async worker command against redis + db

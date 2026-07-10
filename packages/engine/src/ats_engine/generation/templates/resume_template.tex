@@ -1,0 +1,165 @@
+\documentclass[letterpaper,11pt]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[default]{sourcesanspro}
+\usepackage[empty]{fullpage}
+\usepackage{titlesec}
+\usepackage[usenames,dvipsnames]{color}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage[english]{babel}
+\usepackage{tabularx}
+\usepackage{geometry}
+\usepackage{setspace}
+\usepackage[protrusion=true,expansion=false]{microtype}
+\usepackage{xcolor}
+\usepackage{needspace}
+\usepackage[hidelinks,breaklinks=true]{hyperref}
+\input{glyphtounicode}
+\pdfgentounicode=1
+\urlstyle{same}
+
+\geometry{
+    letterpaper,
+    left   = 0.5in,
+    right  = 0.5in,
+    top    = 0.45in,
+    bottom = 0.45in
+}
+\setstretch{1.04}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0pt}
+\raggedbottom
+\pagestyle{empty}
+
+\definecolor{PRIMARYCOLOR}{RGB}{0, 51, 102}
+\definecolor{ACCENTCOLOR}{RGB}{0, 112, 192}
+\definecolor{RULECOLOR}{RGB}{0, 51, 102}
+
+\hypersetup{
+    colorlinks = true,
+    linkcolor  = ACCENTCOLOR,
+    filecolor  = ACCENTCOLOR,
+    urlcolor   = ACCENTCOLOR
+}
+
+\titleformat{\section}
+    {\Large\bfseries\color{PRIMARYCOLOR}\uppercase}
+    {}{0em}{}
+    [\color{RULECOLOR}\titlerule\vspace{-4pt}]
+\titlespacing*{\section}{0pt}{9pt}{5pt}
+
+\newcommand{\resumeItem}[1]{
+    \item\small{#1}
+}
+
+\newcommand{\resumeSubheading}[4]{
+    \Needspace{8\baselineskip}
+    \vspace{1pt}\item
+    \begin{tabular*}{1.0\textwidth}[t]{@{}l@{\extracolsep{\fill}}r@{}}
+        \textbf{#1} & \textbf{\small #2} \\
+        \textit{\small #3} & \textit{\small #4} \\
+    \end{tabular*}\vspace{-4pt}
+}
+
+\newcommand{\resumeSubHeadingListStart}{
+    \begin{itemize}[leftmargin=0.12in, label={}, itemsep=3pt, parsep=0pt, topsep=2pt]
+}
+\newcommand{\resumeSubHeadingListEnd}{\end{itemize}}
+
+\newcommand{\resumeItemListStart}{
+    \begin{itemize}[leftmargin=0.18in, label=\color{PRIMARYCOLOR}\textbullet,
+                    itemsep=1pt, parsep=0pt, topsep=2pt]
+}
+\newcommand{\resumeItemListEnd}{\end{itemize}\vspace{-2pt}}
+
+\begin{document}
+
+\begin{center}
+    {\Huge\bfseries\color{PRIMARYCOLOR} {{ name }} } \\[5pt]
+{% if headline %}
+    {\large \textbf{ {{ headline }} }} \\[7pt]
+{% endif %}
+{% for row in contact_rows %}
+    \small
+{% for item in row %}
+{% if not loop.first %}
+    \ \ \textcolor{ACCENTCOLOR}{$|$} \ \
+{% endif %}
+{% if item.href %}
+    \href{ {{ item.href }} }{\underline{ {{ item.label }} }}
+{% else %}
+    {{ item.label }}
+{% endif %}
+{% endfor %}
+{% if not loop.last %} \\[4pt]{% endif %}
+{% endfor %}
+\end{center}
+
+\vspace{3pt}
+
+\section{Professional Summary}
+\vspace{4pt}
+\small
+{{ summary }}
+
+{% if skills %}
+\section{Technical Skills}
+\vspace{4pt}
+\begin{itemize}[leftmargin=0.12in, label={}, itemsep=2pt, parsep=0pt, topsep=0pt]
+    \small\item
+{% for group in skills %}
+    \textbf{ {{ group.category }} }: {{ group.items_text }}{% if not loop.last %} \\[1pt]{% endif %}
+{% endfor %}
+\end{itemize}
+{% endif %}
+
+{% if experience %}
+\section{Professional Experience}
+\resumeSubHeadingListStart
+{% for entry in experience %}
+\resumeSubheading
+    { {{ entry.company }} }{ {{ entry.location }} }
+    { {{ entry.title }} }{ {{ entry.dates }} }
+{% if entry.bullets %}
+\resumeItemListStart
+{% for bullet in entry.bullets %}
+    \resumeItem{ {{ bullet }} }
+{% endfor %}
+\resumeItemListEnd
+{% endif %}
+{% endfor %}
+\resumeSubHeadingListEnd
+{% endif %}
+
+{% if education %}
+\section{Education}
+\resumeSubHeadingListStart
+{% for entry in education %}
+\resumeSubheading
+    { {{ entry.institution }} }{ {{ entry.location }} }
+    { {{ entry.degree }} }{ {{ entry.dates }} }
+{% if entry.bullets %}
+\resumeItemListStart
+{% for bullet in entry.bullets %}
+    \resumeItem{ {{ bullet }} }
+{% endfor %}
+\resumeItemListEnd
+{% endif %}
+{% endfor %}
+\resumeSubHeadingListEnd
+{% endif %}
+
+{% if certifications %}
+\section{Certifications}
+\vspace{2pt}
+\begin{itemize}[leftmargin=0.12in, label={}, itemsep=2pt, parsep=0pt, topsep=2pt]
+    \small
+{% for item in certifications %}
+    \item \textbf{ {{ item.name }} }{% if item.issuer %}, {{ item.issuer }}{% endif %}{% if item.date %} \hfill \textit{ {{ item.date }} }{% endif %}{% if item.link %} \ \ \href{ {{ item.link }} }{ {{ item.link_label }} }{% endif %}
+{% endfor %}
+\end{itemize}
+{% endif %}
+
+\end{document}
