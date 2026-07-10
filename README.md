@@ -4,10 +4,12 @@ A deterministic-first, truth-grounded AI career SaaS. From a candidate's resume
 and a job description it generates an application kit that stays honest to what
 the candidate has actually done.
 
-> **Status: Phase 0 (foundation).** The engine produces a tailored **resume,
-> cover letter, and application answers** as LaTeX artifacts. Job-fit narrative,
-> interview prep, LinkedIn outreach, authentication, billing, and persistence are
-> **planned** and not yet implemented. See [docs/architecture.md](docs/architecture.md).
+> **Status: Phase 1 (async kit lifecycle).** The engine produces a tailored
+> **resume, cover letter, and application answers** as LaTeX artifacts, and the
+> API now runs generation asynchronously with persistence (PostgreSQL) and a
+> Redis-backed worker. Job-fit narrative, interview prep, LinkedIn outreach,
+> authentication, and billing are **planned** and not yet implemented.
+> See [docs/architecture.md](docs/architecture.md).
 
 ## Why it is different
 
@@ -36,7 +38,8 @@ docs              Architecture documentation + ADRs
 
 - **Python** ≥ 3.11
 - **Node.js** ≥ 20 and **pnpm** (via Corepack: `corepack enable && corepack prepare pnpm@9.15.9 --activate`)
-- **Docker** with Compose (optional; only for the container topology)
+- **Docker** with Compose (for the container topology, and the simplest way to get Postgres + Redis)
+- **PostgreSQL** and **Redis** for the API/worker (provided by `docker compose up db redis`)
 - **Ollama** (optional; the engine degrades to a deterministic path without it)
 
 ## Setup
@@ -58,15 +61,26 @@ pnpm install
 
 ## Run
 
-### API (FastAPI)
+### API (FastAPI) + worker
+
+The API and worker need PostgreSQL and Redis. The simplest way to get both is
+`docker compose up db redis` (or the full stack below). Then:
 
 ```bash
 source .venv/bin/activate
-uvicorn app.main:app --reload --app-dir apps/api      # http://localhost:8000
+export ATS_API_DATABASE_URL="postgresql+asyncpg://ats:ats@localhost:5432/ats_ninja"
+export ATS_API_REDIS_URL="redis://localhost:6379"
+
+(cd apps/api && alembic upgrade head)                 # apply migrations
+uvicorn app.main:app --reload --app-dir apps/api      # API on :8000
+(cd apps/api && arq app.worker.WorkerSettings)        # worker (separate process)
 ```
 
 - Liveness: `GET http://localhost:8000/health`
 - Readiness (reports engine version): `GET http://localhost:8000/api/v1/health`
+- Submit a kit: `POST http://localhost:8000/api/v1/kits` with
+  `{"resume_text": "...", "job_description": "...", "requested_mode": "resume and cover letter"}`
+- Poll a kit: `GET http://localhost:8000/api/v1/kits/{id}`
 - OpenAPI docs: `http://localhost:8000/docs`
 
 ### Web (Next.js)
@@ -92,11 +106,16 @@ print(result.validation_errors)  # [] means every truth-grounding gate passed
 
 ### Containers (requires a running Docker daemon)
 
+The Phase 1 topology is `db` (PostgreSQL), `redis`, a one-shot `migrate`, `api`,
+`worker`, and `web`:
+
 ```bash
 docker compose config     # validate topology (no daemon required)
-docker compose build      # build api + web images
-docker compose up         # api on :8000, web on :3000
+docker compose up --build # db, redis, migrate, api (:8000), worker, web (:3000)
 ```
+
+`migrate` applies Alembic migrations to Postgres and exits; `api` and `worker`
+start once it succeeds.
 
 ## Quality gates
 

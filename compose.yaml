@@ -1,25 +1,74 @@
 # ATS-Ninja-V2 local development topology.
 #
-# Phase 0 runs ONLY services that genuinely exist: the FastAPI backend and the
-# Next.js frontend. PostgreSQL, Redis, and the async worker are deliberately
-# NOT declared here yet — the engineering rule is "do not run unused
-# infrastructure merely for appearance." They will be added in the phase that
-# introduces persistence and background jobs (see docs/architecture.md), slotting
-# in as new services below without reshaping these two.
+# Phase 1 runs the async kit lifecycle: PostgreSQL (persistence), Redis (job
+# broker), a one-shot migration step, the FastAPI API, the arq worker, and the
+# web frontend. Authentication, billing, and product frontend flows are still
+# out of scope.
+#
+# The API image is built once (by the `api` service) and reused by `migrate`
+# and `worker` via the shared image tag.
 name: ats-ninja-v2
 
 services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ats
+      POSTGRES_PASSWORD: ats
+      POSTGRES_DB: ats_ninja
+    ports:
+      - "5432:5432"
+    volumes:
+      - ats_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ats -d ats_ninja"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # One-shot schema migration. Runs to completion, then api/worker start.
+  migrate:
+    image: ats-ninja-v2/api:dev
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      ATS_API_DATABASE_URL: postgresql+asyncpg://ats:ats@db:5432/ats_ninja
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
   api:
     build:
       context: .
       dockerfile: infra/docker/api.Dockerfile
+    image: ats-ninja-v2/api:dev
     environment:
       ATS_API_ENVIRONMENT: development
       ATS_API_CORS_ORIGINS: '["http://localhost:3000"]'
-      # Engine settings (Ollama is optional; the engine degrades deterministically)
+      ATS_API_DATABASE_URL: postgresql+asyncpg://ats:ats@db:5432/ats_ninja
+      ATS_API_REDIS_URL: redis://redis:6379
+      # Ollama is optional; the engine degrades to a deterministic path.
       OLLAMA_BASE_URL: http://host.docker.internal:11434
     ports:
       - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
       test:
         - CMD
@@ -30,6 +79,21 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+  worker:
+    image: ats-ninja-v2/api:dev
+    command: ["arq", "app.worker.WorkerSettings"]
+    environment:
+      ATS_API_DATABASE_URL: postgresql+asyncpg://ats:ats@db:5432/ats_ninja
+      ATS_API_REDIS_URL: redis://redis:6379
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   web:
     build:
@@ -55,7 +119,5 @@ services:
       retries: 3
       start_period: 15s
 
-# Future (later phase) services, intentionally not enabled in Phase 0:
-#   db:      postgres:16-alpine   (persistence: SQLAlchemy 2.x + Alembic)
-#   redis:   redis:7-alpine       (cache + async job broker)
-#   worker:  build api image, run the async worker command against redis + db
+volumes:
+  ats_pgdata:
