@@ -79,14 +79,29 @@ Hard constraints:
 
 ### `apps/api` — owns transport & orchestration
 
-Eventually owns: API contracts, application services, persistence, kit lifecycle,
-authentication, credits, billing integration, and async job orchestration. It
-**orchestrates** the engine; it must not reimplement domain logic.
+Owns: API contracts, application services, persistence, kit lifecycle, and async
+job orchestration. It **orchestrates** the engine; it must not reimplement domain
+logic. Future: authentication, credits, billing integration.
 
 Constraints: no FastAPI framework code leaks into the engine; centralized
-environment-based settings; versioned API prefix. In Phase 0 it exposes only
-health + settings plumbing — **no** auth, Stripe, fake persistence, or fake kit
-endpoints.
+environment-based settings; versioned API prefix. As of Phase 1 it owns the
+async kit lifecycle (persistence + queue + worker) but still has **no** auth,
+Stripe, or product frontend flows.
+
+Persistence & queue discipline:
+
+- Persistence is async SQLAlchemy 2.x + Alembic. Use **portable** column types
+  (`Uuid`, generic `JSON`) so the same models/migration run on PostgreSQL and on
+  the SQLite used by tests. Every schema change ships an Alembic migration.
+- Infrastructure sits behind interfaces. The API depends on the `JobQueue`
+  interface, never a concrete broker; `ArqJobQueue` (Redis) is production,
+  `InlineJobQueue` is for tests. Do not import a broker SDK into request handlers.
+- The kit service is the single code path the API and the worker share; the
+  worker adds no business logic. An engine failure marks the kit `failed` — it
+  must never crash the worker, and truth-critical validation errors are recorded,
+  never swallowed.
+- Tests are hermetic: SQLite + inline queue + `engine_use_llm=False`. No test may
+  require a running PostgreSQL, Redis, or model server.
 
 ### `apps/web` — owns presentation only
 

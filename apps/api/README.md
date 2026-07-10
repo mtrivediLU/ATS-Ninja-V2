@@ -2,31 +2,67 @@
 
 The ATS-Ninja-V2 FastAPI backend.
 
-**Phase 0 scope (implemented):** application factory, environment-based
-settings, a versioned API prefix, `GET /health` (liveness) and
-`GET /api/v1/health` (readiness reporting the engine version), and tests.
+**Phase 1 scope (implemented):** the async **kit lifecycle** — persistence
+(async SQLAlchemy 2.x + Alembic + PostgreSQL), a Redis-backed job queue, a
+separately-runnable worker, and kit endpoints — on top of the Phase 0 health +
+settings plumbing.
 
-**Not yet implemented (future phases):** kit-generation endpoints, authentication,
-credits/billing, persistence (SQLAlchemy 2.x + Alembic + PostgreSQL), Redis, and
-the async worker. The structure is built to adopt these cleanly. No placeholder
-endpoints pretend these exist.
+- `GET /health` — liveness (unversioned, for infra probes)
+- `GET /api/v1/health` — readiness (reports the engine version)
+- `POST /api/v1/kits` — submit resume + JD; persists a pending kit, enqueues
+  generation, returns `202` with the kit
+- `GET /api/v1/kits/{id}` — kit status and, once completed, its result
+- `GET /api/v1/kits?limit=&offset=` — list kits (newest first)
+
+**Not yet implemented (future phases):** authentication, credits/billing,
+PDF-upload ingestion. No placeholder endpoints pretend these exist.
 
 All career business logic lives in `packages/engine` (`ats-engine`); this service
-orchestrates it and owns transport/persistence concerns only.
+persists, queues, and orchestrates it — it owns no domain logic.
+
+## Architecture
+
+```
+POST /kits ──▶ Postgres (Kit: pending) ──▶ Redis (arq) ──▶ 202
+                                              │
+        worker (arq app.worker.WorkerSettings) dequeues
+                                              │
+              run_pipeline (in a thread) ─────▶ Postgres (Kit: completed|failed)
+GET /kits/{id} ◀── current status / result
+```
+
+The API depends only on a `JobQueue` interface (`app.queue`): `ArqJobQueue` in
+production, `InlineJobQueue` (in-process) for tests. The DB session factory lives
+on `app.state`, populated by the lifespan (prod) or the test fixtures.
 
 ## Run locally
 
 ```bash
-# from the repo root, in the shared virtualenv
+# in the shared virtualenv, from the repo root
 pip install -e "packages/engine[dev]"   # engine first
 pip install -e "apps/api[dev]"
 
-uvicorn app.main:app --reload --app-dir apps/api   # http://localhost:8000
+# Requires a reachable PostgreSQL and Redis (see compose.yaml for local ones).
+export ATS_API_DATABASE_URL="postgresql+asyncpg://ats:ats@localhost:5432/ats_ninja"
+export ATS_API_REDIS_URL="redis://localhost:6379"
+
+# Apply migrations, then run the API and the worker (separate processes):
+(cd apps/api && alembic upgrade head)
+uvicorn app.main:app --reload --app-dir apps/api          # API on :8000
+(cd apps/api && arq app.worker.WorkerSettings)            # worker
+
+# Or run the whole topology in containers:
+docker compose up --build                                  # db, redis, migrate, api, worker, web
 ```
 
-- Liveness: `GET http://localhost:8000/health`
-- Readiness: `GET http://localhost:8000/api/v1/health`
-- OpenAPI docs: `http://localhost:8000/docs`
+## Migrations
+
+```bash
+cd apps/api
+alembic upgrade head                 # apply
+alembic revision -m "describe change"  # create a new revision (edit before applying)
+alembic downgrade -1                 # roll back one
+```
 
 ## Quality gates
 
@@ -36,3 +72,7 @@ ruff check apps/api
 ruff format --check apps/api
 mypy --config-file apps/api/pyproject.toml apps/api/app
 ```
+
+Tests are hermetic: they use in-memory SQLite (async) and the in-process queue,
+with the engine forced onto its deterministic path (`engine_use_llm=False`), so
+no PostgreSQL, Redis, or model server is required.

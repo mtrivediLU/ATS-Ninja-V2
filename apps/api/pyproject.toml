@@ -18,12 +18,19 @@ dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.30.0",
     "pydantic-settings>=2.4.0",
+    "sqlalchemy[asyncio]>=2.0.30",
+    "asyncpg>=0.29.0",
+    "alembic>=1.13.0",
+    "arq>=0.26.0",
+    "redis>=5.0.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
     "httpx>=0.27.0",
+    "aiosqlite>=0.20.0",
     "ruff>=0.6.0",
     "mypy>=1.11.0",
 ]
@@ -34,6 +41,7 @@ packages = ["app"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+asyncio_mode = "auto"
 
 [tool.ruff]
 line-length = 120
@@ -46,3 +54,9 @@ ignore = ["E501"]
 [tool.mypy]
 python_version = "3.11"
 strict = true
+plugins = ["pydantic.mypy"]
+
+# Async queue / driver libraries that do not ship type information.
+[[tool.mypy.overrides]]
+module = ["arq", "arq.*"]
+ignore_missing_imports = true

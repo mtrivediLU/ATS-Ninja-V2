@@ -1,6 +1,6 @@
 # ATS-Ninja-V2 — Architecture
 
-Status: **Phase 0 (foundation)**. This document distinguishes what is
+Status: **Phase 1 (async kit lifecycle)**. This document distinguishes what is
 **completed**, what **architecture is established**, and what is **future**
 planned work. It never describes unimplemented functionality as done.
 
@@ -16,14 +16,25 @@ application shells. Three deployable/importable units plus infra and docs:
 │                            apps/web (Next.js)                          │
 │  Presentation only. No business logic. Talks to the API over HTTP.     │
 └───────────────────────────────▲───────────────────────────────────────┘
-                                 │ HTTP (future: kit endpoints)
+                                 │ HTTP
 ┌───────────────────────────────┴───────────────────────────────────────┐
 │                           apps/api (FastAPI)                           │
-│  Transport, settings, health. Future: persistence, auth, billing,      │
-│  kit lifecycle, async job orchestration. Orchestrates the engine.      │
-└───────────────────────────────▲───────────────────────────────────────┘
-                                 │ in-process import (ats_engine)
-┌───────────────────────────────┴───────────────────────────────────────┐
+│  Kit lifecycle endpoints, settings, health. Persistence + job queue.   │
+│  Future: auth, billing. Orchestrates the engine; owns no domain logic. │
+└───┬──────────────────────▲──────────────────────────▲─────────────────┘
+    │ enqueue (Redis)      │ SQLAlchemy (async)        │ in-process import
+    ▼                      ▼                           │  (ats_engine)
+┌─────────────┐   ┌──────────────────┐                 │
+│   Redis     │   │   PostgreSQL     │                 │
+│ (arq broker)│   │  kits table      │                 │
+└──────┬──────┘   └────────▲─────────┘                 │
+       │ consume           │ persist result            │
+┌──────┴────────────────────┴──────┐                   │
+│        apps/api worker            │───────────────────┘
+│  (arq) runs run_pipeline per kit  │  in-process import (ats_engine)
+└───────────────────────────────────┘
+                                 │
+┌────────────────────────────────┴──────────────────────────────────────┐
 │                      packages/engine (ats_engine)                      │
 │  Pure-Python domain core. Deterministic-first, truth-grounded.         │
 │  parsing · evidence · scoring · validation · caching · providers ·     │
@@ -31,6 +42,32 @@ application shells. Three deployable/importable units plus infra and docs:
 │  No web framework. No LLM-vendor SDK. Zero Streamlit imports.          │
 └────────────────────────────────────────────────────────────────────────┘
 ```
+
+### Async kit lifecycle (Phase 1, completed)
+
+The API and a separately-runnable worker share one image and the same kit
+service, but run as independent processes so each scales on its own:
+
+```
+POST /api/v1/kits   → persist Kit(status=pending) in Postgres → enqueue on Redis → 202
+worker (arq)        → dequeue → status=processing → run_pipeline (in a thread)
+                    → persist KitResult + status=completed|failed
+GET  /api/v1/kits/{id} → current status; full result once completed
+```
+
+- **Persistence**: async SQLAlchemy 2.x (`asyncpg`) with an Alembic migration.
+  Column types (`Uuid`, generic `JSON`) are portable, so the same models and
+  migration run on PostgreSQL (prod) and SQLite (tests).
+- **Queue**: the API depends only on a `JobQueue` interface. `ArqJobQueue`
+  (Redis) is used in production; `InlineJobQueue` runs jobs in-process for tests
+  and single-process usage. Infrastructure stays behind an interface, mirroring
+  the engine's provider abstraction.
+- **Worker**: `arq app.worker.WorkerSettings`. The synchronous, potentially
+  CPU/IO-bound `run_pipeline` runs via `asyncio.to_thread` so it never blocks the
+  worker's event loop. An engine crash fails the kit, not the worker.
+- **Truth-grounding is preserved**: the engine's validation gates run inside
+  `run_pipeline`; the result stores `validation_errors` and the truth-critical
+  `fatal_validation_errors` subset. No auth, billing, or PDF upload in this phase.
 
 ### Engine module map (`packages/engine/src/ats_engine`)
 
@@ -146,14 +183,19 @@ Recorded as ADRs under [`docs/adr/`](adr/):
 - [ADR-0002](adr/0002-deterministic-keyword-extraction.md) — Replace scikit-learn TF-IDF with a dependency-light deterministic extractor.
 - [ADR-0003](adr/0003-llm-provider-abstraction.md) — LLM provider abstraction; Ollama over stdlib HTTP; no vendor SDK in the engine.
 - [ADR-0004](adr/0004-defer-binary-pdf-rendering.md) — Defer binary PDF rendering; ship LaTeX artifacts.
+- [ADR-0005](adr/0005-async-kit-lifecycle.md) — Async kit lifecycle: async SQLAlchemy + arq/Redis worker behind a queue interface.
 
 ## 7. Future / planned work (not yet implemented)
 
 - **Engine**: job-fit analysis narrative, interview preparation, LinkedIn
   outreach drafts; a composed `generate_kit` once the underlying capabilities
   exist (no fake facade before then).
-- **API**: kit endpoints, SQLAlchemy 2.x + Alembic + PostgreSQL persistence,
-  Redis, async worker, authentication, credits, Stripe billing.
-- **Web**: authenticated product flows (upload → kit) once the API exposes them.
-- **Infra**: enable `db`, `redis`, and `worker` services in `compose.yaml`;
-  deployment manifests.
+- **API**: authentication, credits, Stripe billing; PDF-upload ingestion;
+  richer kit querying/filtering and result pagination. (Kit endpoints,
+  async SQLAlchemy + Alembic + PostgreSQL persistence, Redis, and the async
+  worker are **done** — Phase 1.)
+- **Web**: authenticated product flows (upload → kit → result) once the API
+  exposes them behind auth.
+- **Infra**: production deployment manifests; managed Postgres/Redis; worker
+  autoscaling. (The local `db`, `redis`, `migrate`, and `worker` services are
+  **enabled** in `compose.yaml` — Phase 1.)
