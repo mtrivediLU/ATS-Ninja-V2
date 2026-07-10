@@ -1,8 +1,14 @@
 # ADR-0005 — Async kit lifecycle: async SQLAlchemy + arq/Redis worker behind a queue interface
 
-- Status: Accepted
+- Status: Superseded by [ADR-0006](0006-replace-arq-with-celery.md) (queue/worker only)
 - Date: 2026-07-10
 - Phase: 1
+
+> **Note:** The async kit lifecycle, async SQLAlchemy/PostgreSQL persistence,
+> Alembic migrations, and the `JobQueue` dispatcher boundary described here are
+> still current. Only the queue/worker *implementation* changed: the arq worker
+> was replaced by **Celery (Redis broker)**. See ADR-0006. References to arq
+> below are historical.
 
 ## Context
 

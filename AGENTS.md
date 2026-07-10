@@ -94,8 +94,11 @@ Persistence & queue discipline:
   (`Uuid`, generic `JSON`) so the same models/migration run on PostgreSQL and on
   the SQLite used by tests. Every schema change ships an Alembic migration.
 - Infrastructure sits behind interfaces. The API depends on the `JobQueue`
-  interface, never a concrete broker; `ArqJobQueue` (Redis) is production,
-  `InlineJobQueue` is for tests. Do not import a broker SDK into request handlers.
+  interface, never a concrete broker; `CeleryJobQueue` (Celery over Redis) is
+  production, `InlineJobQueue` is for tests. Dispatch is by task name — request
+  handlers never import the worker task implementation. Task payloads carry only
+  the kit id; the worker loads all state from PostgreSQL (never the Celery result
+  backend, which is disabled).
 - The kit service is the single code path the API and the worker share; the
   worker adds no business logic. An engine failure marks the kit `failed` — it
   must never crash the worker, and truth-critical validation errors are recorded,
