@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
-from app.queue import JobQueue, get_job_queue
+from app.queue import JobQueue, QueueUnavailableError, get_job_queue
 from app.schemas import KitCreate, KitList, KitRead, KitSummary
 from app.services import create_kit, get_kit, list_kits
 
@@ -26,9 +26,20 @@ QueueDep = Annotated[JobQueue, Depends(get_job_queue)]
 
 @router.post("", response_model=KitRead, status_code=status.HTTP_202_ACCEPTED)
 async def submit_kit(payload: KitCreate, session: SessionDep, queue: QueueDep) -> KitRead:
-    """Create a kit and enqueue its generation. Returns the pending kit (202)."""
+    """Create a kit and enqueue its generation. Returns the pending kit (202).
+
+    The kit is persisted (source of truth) before it is dispatched. If the broker
+    is unreachable, the kit remains ``pending`` and a clean ``503`` is returned
+    (no traceback leaks to the client); it can be re-dispatched later.
+    """
     kit = await create_kit(session, payload)
-    await queue.enqueue_kit(kit.id)
+    try:
+        await queue.enqueue_kit(kit.id)
+    except QueueUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Kit accepted but could not be queued; the broker is unavailable. Try again shortly.",
+        ) from exc
     return KitRead.model_validate(kit)
 
 

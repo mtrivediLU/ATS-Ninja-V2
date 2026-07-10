@@ -35,11 +35,12 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://ats:ats@localhost:5432/ats_ninja"
     database_echo: bool = False
 
-    # Async job queue broker (arq over Redis).
+    # Celery broker (Redis). PostgreSQL — not the Celery result backend — remains
+    # the authoritative store for kit lifecycle, status, results, and failures.
     redis_url: str = "redis://localhost:6379"
 
-    # Bound the number of concurrent kit jobs a single worker will run.
-    worker_max_jobs: int = 4
+    # Number of worker processes a single Celery worker runs (prefork concurrency).
+    worker_concurrency: int = 4
 
     # When True, the engine auto-detects a local LLM (Ollama) to raise quality;
     # it always falls back to the deterministic path. Tests set this False so

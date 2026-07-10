@@ -22,16 +22,16 @@ application shells. Three deployable/importable units plus infra and docs:
 │  Kit lifecycle endpoints, settings, health. Persistence + job queue.   │
 │  Future: auth, billing. Orchestrates the engine; owns no domain logic. │
 └───┬──────────────────────▲──────────────────────────▲─────────────────┘
-    │ enqueue (Redis)      │ SQLAlchemy (async)        │ in-process import
+    │ dispatch (Celery)    │ SQLAlchemy (async)        │ in-process import
     ▼                      ▼                           │  (ats_engine)
 ┌─────────────┐   ┌──────────────────┐                 │
 │   Redis     │   │   PostgreSQL     │                 │
-│ (arq broker)│   │  kits table      │                 │
+│Celery broker│   │  kits table      │                 │
 └──────┬──────┘   └────────▲─────────┘                 │
        │ consume           │ persist result            │
 ┌──────┴────────────────────┴──────┐                   │
-│        apps/api worker            │───────────────────┘
-│  (arq) runs run_pipeline per kit  │  in-process import (ats_engine)
+│    apps/api Celery worker         │───────────────────┘
+│  runs run_pipeline per kit        │  in-process import (ats_engine)
 └───────────────────────────────────┘
                                  │
 ┌────────────────────────────────┴──────────────────────────────────────┐
@@ -49,8 +49,8 @@ The API and a separately-runnable worker share one image and the same kit
 service, but run as independent processes so each scales on its own:
 
 ```
-POST /api/v1/kits   → persist Kit(status=pending) in Postgres → enqueue on Redis → 202
-worker (arq)        → dequeue → status=processing → run_pipeline (in a thread)
+POST /api/v1/kits   → persist Kit(status=pending) in Postgres → dispatch via Celery/Redis → 202
+worker (Celery)     → dequeue → status=processing → run_pipeline (in a thread)
                     → persist KitResult + status=completed|failed
 GET  /api/v1/kits/{id} → current status; full result once completed
 ```
@@ -58,13 +58,19 @@ GET  /api/v1/kits/{id} → current status; full result once completed
 - **Persistence**: async SQLAlchemy 2.x (`asyncpg`) with an Alembic migration.
   Column types (`Uuid`, generic `JSON`) are portable, so the same models and
   migration run on PostgreSQL (prod) and SQLite (tests).
-- **Queue**: the API depends only on a `JobQueue` interface. `ArqJobQueue`
-  (Redis) is used in production; `InlineJobQueue` runs jobs in-process for tests
-  and single-process usage. Infrastructure stays behind an interface, mirroring
-  the engine's provider abstraction.
-- **Worker**: `arq app.worker.WorkerSettings`. The synchronous, potentially
-  CPU/IO-bound `run_pipeline` runs via `asyncio.to_thread` so it never blocks the
-  worker's event loop. An engine crash fails the kit, not the worker.
+- **Queue**: the API depends only on a `JobQueue` interface. `CeleryJobQueue`
+  (Celery over Redis) is used in production and dispatches **by task name** —
+  only the kit id crosses the broker; `InlineJobQueue` runs jobs in-process for
+  tests and single-process usage. Infrastructure stays behind an interface,
+  mirroring the engine's provider abstraction. PostgreSQL (not the Celery result
+  backend, which is disabled) is the single source of truth for kit state.
+- **Worker**: `celery -A app.tasks worker`. The synchronous, potentially
+  CPU/IO-bound `run_pipeline` runs via `asyncio.to_thread` on a per-task event
+  loop so it never blocks. Delivery is at-least-once (`acks_late`,
+  `reject_on_worker_lost`, prefetch 1); a terminal/duplicate guard in
+  `process_kit` protects finished kits, and only classified transient
+  infrastructure failures are retried (bounded, backing off). An engine crash
+  fails the kit, not the worker. See [ADR-0006](adr/0006-replace-arq-with-celery.md).
 - **Truth-grounding is preserved**: the engine's validation gates run inside
   `run_pipeline`; the result stores `validation_errors` and the truth-critical
   `fatal_validation_errors` subset. No auth, billing, or PDF upload in this phase.
@@ -183,7 +189,8 @@ Recorded as ADRs under [`docs/adr/`](adr/):
 - [ADR-0002](adr/0002-deterministic-keyword-extraction.md) — Replace scikit-learn TF-IDF with a dependency-light deterministic extractor.
 - [ADR-0003](adr/0003-llm-provider-abstraction.md) — LLM provider abstraction; Ollama over stdlib HTTP; no vendor SDK in the engine.
 - [ADR-0004](adr/0004-defer-binary-pdf-rendering.md) — Defer binary PDF rendering; ship LaTeX artifacts.
-- [ADR-0005](adr/0005-async-kit-lifecycle.md) — Async kit lifecycle: async SQLAlchemy + arq/Redis worker behind a queue interface.
+- [ADR-0005](adr/0005-async-kit-lifecycle.md) — Async kit lifecycle: async SQLAlchemy + a Redis-backed worker behind a queue interface (queue/worker impl superseded by ADR-0006).
+- [ADR-0006](adr/0006-replace-arq-with-celery.md) — Replace the arq worker with Celery (Redis broker); at-least-once delivery, bounded transient retries, Postgres as source of truth.
 
 ## 7. Future / planned work (not yet implemented)
 

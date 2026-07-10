@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings
 from app.schemas import KitCreate, KitStatus
-from app.services import create_kit, get_kit, process_kit
+from app.services import create_kit, get_kit, mark_kit_failed, process_kit
 
 
 async def test_submit_kit_runs_lifecycle_to_completion(client: httpx.AsyncClient) -> None:
@@ -135,3 +135,70 @@ async def test_process_kit_missing_id_is_noop(
     # Must not raise for an unknown id.
     async with sessionmaker() as session:
         await process_kit(session, uuid.uuid4(), settings)
+
+
+async def test_process_kit_skips_already_terminal_kit(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    settings: Settings,
+) -> None:
+    """Duplicate/terminal protection: a redelivered, already-completed kit is not reprocessed."""
+    async with sessionmaker() as session:
+        kit = await create_kit(session, KitCreate(resume_text=SAMPLE_RESUME, job_description=SAMPLE_JD))
+        kit_id = kit.id
+
+    async with sessionmaker() as session:
+        await process_kit(session, kit_id, settings)
+
+    async with sessionmaker() as session:
+        completed = await get_kit(session, kit_id)
+        assert completed is not None and completed.status == KitStatus.COMPLETED
+        original_result = completed.result
+
+    # Second (duplicate) invocation must be a no-op.
+    async with sessionmaker() as session:
+        await process_kit(session, kit_id, settings)
+
+    async with sessionmaker() as session:
+        again = await get_kit(session, kit_id)
+        assert again is not None
+        assert again.status == KitStatus.COMPLETED
+        assert again.result == original_result
+
+
+async def test_mark_kit_failed_sets_terminal_failure(
+    sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    async with sessionmaker() as session:
+        kit = await create_kit(session, KitCreate(resume_text="x", job_description="y"))
+        kit_id = kit.id
+
+    async with sessionmaker() as session:
+        await mark_kit_failed(session, kit_id, "infrastructure boom")
+
+    async with sessionmaker() as session:
+        failed = await get_kit(session, kit_id)
+        assert failed is not None
+        assert failed.status == KitStatus.FAILED
+        assert failed.error == "infrastructure boom"
+
+
+async def test_mark_kit_failed_is_noop_on_completed_kit(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    settings: Settings,
+) -> None:
+    """A late infra-failure must not overwrite an already-completed kit."""
+    async with sessionmaker() as session:
+        kit = await create_kit(session, KitCreate(resume_text=SAMPLE_RESUME, job_description=SAMPLE_JD))
+        kit_id = kit.id
+
+    async with sessionmaker() as session:
+        await process_kit(session, kit_id, settings)
+
+    async with sessionmaker() as session:
+        await mark_kit_failed(session, kit_id, "should be ignored")
+
+    async with sessionmaker() as session:
+        kit = await get_kit(session, kit_id)
+        assert kit is not None
+        assert kit.status == KitStatus.COMPLETED
+        assert kit.error is None

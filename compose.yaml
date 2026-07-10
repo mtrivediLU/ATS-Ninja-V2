@@ -1,9 +1,8 @@
 # ATS-Ninja-V2 local development topology.
 #
-# Phase 1 runs the async kit lifecycle: PostgreSQL (persistence), Redis (job
-# broker), a one-shot migration step, the FastAPI API, the arq worker, and the
-# web frontend. Authentication, billing, and product frontend flows are still
-# out of scope.
+# Runs the async kit lifecycle: PostgreSQL (persistence), Redis (Celery broker),
+# a one-shot migration step, the FastAPI API, the Celery worker, and the web
+# frontend. Authentication, billing, and product frontend flows are out of scope.
 #
 # The API image is built once (by the `api` service) and reused by `migrate`
 # and `worker` via the shared image tag.
@@ -82,7 +81,7 @@ services:
 
   worker:
     image: ats-ninja-v2/api:dev
-    command: ["arq", "app.worker.WorkerSettings"]
+    command: ["celery", "-A", "app.tasks", "worker", "--loglevel=info", "-Q", "kits"]
     environment:
       ATS_API_DATABASE_URL: postgresql+asyncpg://ats:ats@db:5432/ats_ninja
       ATS_API_REDIS_URL: redis://redis:6379

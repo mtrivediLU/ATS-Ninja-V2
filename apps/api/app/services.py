@@ -65,6 +65,11 @@ async def process_kit(session: AsyncSession, kit_id: UUID, settings: Settings) -
     if kit is None:
         logger.warning("process_kit: kit %s not found", kit_id)
         return
+    if kit.status in (KitStatus.COMPLETED, KitStatus.FAILED):
+        # Duplicate/terminal protection: at-least-once delivery may redeliver a
+        # kit that already reached a terminal state. Never reprocess it.
+        logger.info("process_kit: kit %s already terminal (%s); skipping", kit_id, kit.status)
+        return
 
     kit.status = KitStatus.PROCESSING
     await session.commit()
@@ -102,4 +107,23 @@ async def process_kit(session: AsyncSession, kit_id: UUID, settings: Settings) -
     kit.result = result.model_dump()
     kit.status = KitStatus.COMPLETED
     kit.error = None
+    await session.commit()
+
+
+async def mark_kit_failed(session: AsyncSession, kit_id: UUID, error: str) -> None:
+    """Persist a terminal failure for a kit.
+
+    Used by the worker's infrastructure-failure and retry-exhaustion paths so a
+    kit is never left stuck in ``processing`` when the failure happened outside
+    ``process_kit``'s own engine-failure handling. Best-effort and idempotent:
+    a missing or already-terminal kit is left untouched.
+    """
+    kit = await session.get(Kit, kit_id)
+    if kit is None:
+        logger.warning("mark_kit_failed: kit %s not found", kit_id)
+        return
+    if kit.status in (KitStatus.COMPLETED, KitStatus.FAILED):
+        return
+    kit.status = KitStatus.FAILED
+    kit.error = error
     await session.commit()

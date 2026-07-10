@@ -71,9 +71,9 @@ source .venv/bin/activate
 export ATS_API_DATABASE_URL="postgresql+asyncpg://ats:ats@localhost:5432/ats_ninja"
 export ATS_API_REDIS_URL="redis://localhost:6379"
 
-(cd apps/api && alembic upgrade head)                 # apply migrations
-uvicorn app.main:app --reload --app-dir apps/api      # API on :8000
-(cd apps/api && arq app.worker.WorkerSettings)        # worker (separate process)
+(cd apps/api && alembic upgrade head)                       # apply migrations
+uvicorn app.main:app --reload --app-dir apps/api            # API on :8000
+(cd apps/api && celery -A app.tasks worker -l info -Q kits) # Celery worker (separate process)
 ```
 
 - Liveness: `GET http://localhost:8000/health`
