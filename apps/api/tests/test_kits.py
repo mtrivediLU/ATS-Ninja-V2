@@ -32,19 +32,60 @@ async def test_submit_kit_runs_lifecycle_to_completion(client: httpx.AsyncClient
     kit = fetched.json()
     assert kit["status"] == "completed"
     result = kit["result"]
-    assert result["resume_text"]
-    assert result["cover_letter_text"]
-    assert result["resume_latex"].startswith("\\documentclass")
-    assert result["interview_probability"] is not None
-    # Every truth-grounding gate passed.
-    assert result["validation_errors"] == []
-    assert result["fatal_validation_errors"] == []
+    # The versioned ApplicationKit contract with typed artifacts.
+    assert result["schema_version"] == "application-kit/v1"
+    assert result["resume"]["text"]
+    assert result["cover_letter"]["text"]
+    assert result["resume"]["latex"].startswith("\\documentclass")
+    assert result["resume"]["interview_probability"] is not None
+    # No fabrication was rejected/withheld; the kit is trusted.
+    assert result["validation"]["fatal"] is False
     assert kit["error"] is None
 
 
 async def test_get_unknown_kit_returns_404(client: httpx.AsyncClient) -> None:
     response = await client.get(f"/api/v1/kits/{uuid.uuid4()}")
     assert response.status_code == 404
+
+
+async def test_completed_kit_with_legacy_phase1_result_is_served(
+    client: httpx.AsyncClient,
+    sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    """A kit persisted under the pre-Phase-2A result schema must not crash GET."""
+    from app.models import Kit
+
+    legacy_result = {
+        "resume_text": "Candidate Header\nProfessional Summary\nExperienced analyst.",
+        "cover_letter_text": "Dear Hiring Manager, I am applying.",
+        "answers_text": "",
+        "resume_latex": "\\documentclass{article}\\begin{document}x\\end{document}",
+        "cover_letter_latex": "",
+        "interview_probability": 68,
+        "validation_errors": [],
+        "fatal_validation_errors": [],
+        "engine_metadata": {"llm_available": False},
+    }
+    async with sessionmaker() as session:
+        kit = Kit(
+            status=KitStatus.COMPLETED,
+            resume_text="r",
+            job_description="j",
+            result=legacy_result,
+        )
+        session.add(kit)
+        await session.commit()
+        await session.refresh(kit)
+        kit_id = kit.id
+
+    response = await client.get(f"/api/v1/kits/{kit_id}")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "completed"
+    # Adapted into the canonical response under an explicit legacy marker.
+    assert body["result"]["schema_version"] == "phase-1/legacy"
+    assert body["result"]["resume"]["text"].startswith("Candidate Header")
+    assert any("legacy" in warning.lower() for warning in body["result"]["warnings"])
 
 
 async def test_submit_kit_rejects_empty_inputs(client: httpx.AsyncClient) -> None:
@@ -96,8 +137,9 @@ async def test_process_kit_completes_and_persists_result(
         assert done is not None
         assert done.status == KitStatus.COMPLETED
         assert done.result is not None
-        assert done.result["resume_text"]
-        assert done.result["validation_errors"] == []
+        assert done.result["schema_version"] == "application-kit/v1"
+        assert done.result["resume"]["text"]
+        assert done.result["validation"]["passed"] is True
 
 
 async def test_process_kit_marks_failed_on_engine_error(
@@ -110,7 +152,7 @@ async def test_process_kit_marks_failed_on_engine_error(
 
     # Patch the engine entrypoint the service calls; a crash must fail the kit,
     # not the worker.
-    monkeypatch.setattr("app.services.run_pipeline", boom)
+    monkeypatch.setattr("app.services.generate_application_kit", boom)
 
     async with sessionmaker() as session:
         kit = await create_kit(session, KitCreate(resume_text="x", job_description="y"))

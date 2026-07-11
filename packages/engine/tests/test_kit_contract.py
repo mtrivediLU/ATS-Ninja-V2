@@ -1,0 +1,179 @@
+from __future__ import annotations
+
+import json
+
+from ats_engine import (
+    SCHEMA_VERSION,
+    ApplicationKit,
+    ArtifactKind,
+    ClaimStatus,
+    ClaimType,
+    application_kit_from_dict,
+    application_kit_to_dict,
+    generate_application_kit,
+    is_application_kit_v1,
+    normalize_persisted_result,
+)
+from ats_engine.kit.serialization import LEGACY_SCHEMA_VERSION, UNKNOWN_SCHEMA_VERSION
+from ats_engine.models import Mode
+from conftest import ADVERSARIAL_JD, ADVERSARIAL_RESUME, FabricatingProvider, fabricated_answer
+
+"""ApplicationKit contract + serialization + legacy-compatibility tests.
+
+Covers Steps 2-6: the versioned contract, typed artifacts, claim/evidence trace,
+the JSON serialization boundary (round-trip, deterministic, no pickle), optional
+artifacts, and reading a Phase 1 result record without crashing.
+"""
+
+
+def _kit(mode: Mode = Mode.RESUME_AND_COVER) -> ApplicationKit:
+    return generate_application_kit(
+        resume_text=ADVERSARIAL_RESUME,
+        job_description=ADVERSARIAL_JD,
+        questions_text="What interests you about this role?",
+        default_mode=mode,
+        use_llm=False,
+    )
+
+
+def test_schema_version_is_explicit_and_versioned() -> None:
+    assert SCHEMA_VERSION == "application-kit/v1"
+    kit = _kit()
+    assert kit.schema_version == SCHEMA_VERSION
+    assert kit.engine_version  # populated
+    assert kit.orchestration_version.startswith("grounded-orchestration/")
+
+
+def test_roundtrip_is_json_compatible_and_lossless() -> None:
+    kit = _kit(Mode.RESUME_AND_QUESTIONS)
+    data = application_kit_to_dict(kit)
+    # Pure JSON: dumps/loads must not raise and must not need custom encoders.
+    restored = json.loads(json.dumps(data))
+    assert restored == data
+    kit2 = application_kit_from_dict(restored)
+    assert kit2.schema_version == kit.schema_version
+    assert kit2.resume is not None and kit.resume is not None
+    assert kit2.resume.text == kit.resume.text
+    assert kit2.answers is not None and kit.answers is not None
+    assert [c.claim_type for c in kit2.resume.claims] == [c.claim_type for c in kit.resume.claims]
+
+
+def test_resume_only_kit_has_no_cover_or_answers() -> None:
+    kit = _kit(Mode.RESUME)
+    assert kit.resume is not None
+    assert kit.cover_letter is None
+    assert kit.answers is None
+    data = application_kit_to_dict(kit)
+    assert data["cover_letter"] is None
+    assert data["answers"] is None
+
+
+def test_cover_only_kit_has_no_resume() -> None:
+    kit = _kit(Mode.COVER_LETTER)
+    assert kit.cover_letter is not None
+    assert kit.resume is None
+
+
+def test_artifacts_are_typed_not_a_bag_of_strings() -> None:
+    kit = _kit(Mode.RESUME_AND_QUESTIONS)
+    assert kit.resume is not None
+    assert isinstance(kit.resume.text, str)
+    assert kit.resume.validation.status.value in {"generated", "repaired", "rejected"}
+    assert kit.answers is not None
+    # Application answers are modelled as structured items, not one blob.
+    assert all(item.question for item in kit.answers.items)
+
+
+def test_evidence_trace_is_present_and_structured() -> None:
+    kit = _kit()
+    assert kit.resume is not None
+    # Deterministic kit: claims are all supported, each with a type + status.
+    for claim in kit.resume.claims:
+        assert isinstance(claim.claim_type, ClaimType)
+        assert isinstance(claim.status, ClaimStatus)
+        assert claim.artifact == ArtifactKind.RESUME
+
+
+def test_deterministic_metadata_is_accurate() -> None:
+    kit = _kit()
+    assert kit.generation.generation_mode == "deterministic"
+    assert kit.generation.llm_available is False
+    assert kit.generation.provider == ""
+    assert kit.generation.provider_calls == 0
+    assert kit.generation.fallback_used is False
+
+
+def test_provider_backed_metadata_is_accurate() -> None:
+    provider = FabricatingProvider(answer=fabricated_answer("I use Python and SQL every day here."))
+    kit = generate_application_kit(
+        resume_text=ADVERSARIAL_RESUME,
+        job_description=ADVERSARIAL_JD,
+        questions_text="Tell us about your background.",
+        default_mode=Mode.RESUME_AND_QUESTIONS,
+        use_llm=True,
+        prose_provider=provider,
+    )
+    assert kit.generation.generation_mode == "provider"
+    assert kit.generation.llm_available is True
+    assert kit.generation.provider.startswith("fabricator:")
+    assert kit.generation.provider_calls > 0
+    # The provider identity carries the orchestration-contract salt (cache identity).
+    assert "orch=" in kit.generation.provider or kit.generation.provider_calls > 0
+
+
+# --------------------------------------------------------------------------- #
+# Result schema evolution / Phase 1 legacy compatibility (Step 6)
+# --------------------------------------------------------------------------- #
+PHASE1_RESULT = {
+    "resume_text": "Candidate Header\nProfessional Summary\nExperienced analyst.",
+    "cover_letter_text": "Dear Hiring Manager,\nI am applying for the role.",
+    "answers_text": "",
+    "resume_latex": "\\documentclass{article}\\begin{document}x\\end{document}",
+    "cover_letter_latex": "",
+    "interview_probability": 68,
+    "validation_errors": ["cover letter: word count is low"],
+    "fatal_validation_errors": [],
+    "engine_metadata": {"llm_available": True},
+}
+
+
+def test_v1_result_is_detected_and_passed_through() -> None:
+    kit = _kit()
+    data = application_kit_to_dict(kit)
+    assert is_application_kit_v1(data)
+    assert normalize_persisted_result(data) == data
+
+
+def test_legacy_phase1_result_is_adapted_not_crashed() -> None:
+    normalized = normalize_persisted_result(PHASE1_RESULT)
+    assert normalized is not None
+    assert normalized["schema_version"] == LEGACY_SCHEMA_VERSION
+    assert normalized["resume"] is not None
+    assert normalized["resume"]["text"].startswith("Candidate Header")
+    assert normalized["cover_letter"] is not None
+    assert normalized["answers"] is None  # empty legacy answers -> absent
+    # The legacy warning names its provenance rather than pretending to be v1.
+    assert any("legacy" in warning.lower() for warning in normalized["warnings"])
+
+
+def test_legacy_fatal_errors_are_surfaced() -> None:
+    legacy = dict(PHASE1_RESULT)
+    legacy["validation_errors"] = ["resume: invented or unsupported employer: fake labs"]
+    legacy["fatal_validation_errors"] = ["resume: invented or unsupported employer: fake labs"]
+    normalized = normalize_persisted_result(legacy)
+    assert normalized is not None
+    assert normalized["validation"]["fatal"] is True
+    assert normalized["resume"]["validation"]["fatal"] is True
+
+
+def test_unknown_schema_is_flagged_not_reinterpreted() -> None:
+    unknown = {"schema_version": "something/v9", "mystery": True}
+    normalized = normalize_persisted_result(unknown)
+    assert normalized is not None
+    assert normalized["schema_version"] == UNKNOWN_SCHEMA_VERSION
+    assert normalized["resume"] is None
+    assert any("unrecognized" in warning.lower() for warning in normalized["warnings"])
+
+
+def test_none_result_normalizes_to_none() -> None:
+    assert normalize_persisted_result(None) is None

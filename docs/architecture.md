@@ -1,8 +1,9 @@
 # ATS-Ninja-V2 — Architecture
 
-Status: **Phase 1 (async kit lifecycle)**. This document distinguishes what is
-**completed**, what **architecture is established**, and what is **future**
-planned work. It never describes unimplemented functionality as done.
+Status: **Phase 2A (versioned ApplicationKit + grounded AI orchestration)**. This
+document distinguishes what is **completed**, what **architecture is
+established**, and what is **future** planned work. It never describes
+unimplemented functionality as done.
 
 ---
 
@@ -72,8 +73,66 @@ GET  /api/v1/kits/{id} → current status; full result once completed
   infrastructure failures are retried (bounded, backing off). An engine crash
   fails the kit, not the worker. See [ADR-0006](adr/0006-replace-arq-with-celery.md).
 - **Truth-grounding is preserved**: the engine's validation gates run inside
-  `run_pipeline`; the result stores `validation_errors` and the truth-critical
-  `fatal_validation_errors` subset. No auth, billing, or PDF upload in this phase.
+  `run_pipeline`. As of Phase 2A the worker calls `generate_application_kit`
+  (which wraps `run_pipeline` with the grounding gate) and persists a versioned
+  ApplicationKit. No auth, billing, or PDF upload in this phase.
+
+### ApplicationKit + grounded generation (Phase 2A, completed)
+
+Phase 2A makes truth-grounding an explicit, structured **product contract** and
+guarantees that no fabricated candidate-specific claim reaches the final output.
+
+**Generation audit (why this phase exists).** An audit of the real pipeline found
+that generation-time checks rejected *some* unsupported rewrites (metrics, known
+skills) in favor of deterministic fallbacks, but: (1) application answers received
+almost no claim validation; (2) cover-letter and summary prose had no
+employer/title/novel-skill/certification/degree checks; and (3) when the final
+validators *did* detect a fabrication, the content was flagged as a string but
+**never removed** — and the kit still shipped `completed`. Detection was not
+absence. See [ADR-0009](adr/0009-validation-wrapped-generation.md).
+
+**The grounded orchestrator** (`ats_engine.kit`, called by the worker via the kit
+service) composes the proven engine and adds a truth gate:
+
+```
+generate_application_kit(resume, jd, mode, provider?)
+  → resolve providers (primary / optional fallback / deterministic)   [ADR-0010]
+  → run_pipeline (parse → evidence → plan → AI prose → validate)
+  → build deterministic evidence view of the candidate
+  → GROUND every artifact's prose (summary, bullets, cover letter, answers):
+       extract structured claims → classify support against evidence
+         supported  → keep
+         unsupported→ remove (repair) ; if not removable → reject/withhold  [ADR-0011]
+  → RE-RENDER text + LaTeX from the sanitized plans (clean by construction)
+  → re-run the engine's artifact validators
+  → assemble ApplicationKit (schema application-kit/v1) with a full claim trace
+```
+
+- **Versioned contract** ([ADR-0007](adr/0007-application-kit-contract.md)):
+  `ApplicationKit` (schema `application-kit/v1`) with typed `ResumeArtifact` /
+  `CoverLetterArtifact` / `AnswerArtifact`, a `ValidationSummary`, and
+  persistence-safe `GenerationMetadata`. It models only today's real artifacts.
+- **Claim/evidence trace** ([ADR-0008](adr/0008-claim-evidence-traceability.md)):
+  each candidate-specific claim becomes a `ClaimRecord`
+  (`supported`/`repaired`/`rejected`) with bounded `EvidenceRef`s, so the kit
+  answers *"why was ATS-Ninja allowed to say this about the candidate?"*
+- **Removal, not just detection**
+  ([ADR-0011](adr/0011-repair-vs-rejection-policy.md)): unsupported claims are
+  deterministically excised (sentence for prose, span for bullets) in a single
+  bounded pass; an artifact that cannot be cleaned is withheld and the kit is
+  marked `fatal`.
+- **All artifacts**: the gate runs over the resume, cover letter, **and** answers
+  — cover letters and answers can hallucinate candidate facts too.
+- **Persistence**: no database migration is required — the result stays a JSON
+  column; only its shape changes. A completed kit written under the Phase 1 shape
+  is adapted at the serialization boundary, not crashed
+  ([ADR-0012](adr/0012-result-schema-evolution.md)).
+- **Proof**: an adversarial anti-fabrication suite injects fabricated employers,
+  titles, metrics, dollar values, team sizes, skills, certifications, degrees,
+  tenures, and management claims and asserts each is **absent from the final
+  ApplicationKit**; a quality-evaluation harness (`python -m ats_engine.eval`)
+  reports truth-grounding violations and supported-claim preservation across
+  synthetic cases.
 
 ### Engine module map (`packages/engine/src/ats_engine`)
 
@@ -87,7 +146,9 @@ GET  /api/v1/kits/{id} → current status; full result once completed
 | `validation` | Claim, style, output-format, LaTeX, completeness gates; deterministic style repair; severity classification | Completed |
 | `caching` | Content-hash cache (disk-backed, degrades to no-op) | Completed |
 | `providers` | `LLMProvider` interface + `OllamaProvider` (stdlib HTTP) | Completed |
-| `generation` | Plans + resume/cover-letter/answer generation, LaTeX rendering, pipeline | Completed |
+| `generation` | Plans + resume/cover-letter/answer generation, LaTeX rendering, pipeline, evidence-bound prompt contract | Completed |
+| `kit` | Versioned `ApplicationKit` contract, JSON serialization boundary (+ legacy adapter), grounding gate, provider routing, orchestrator | Completed (Phase 2A) |
+| `eval` | Phase 2A quality-evaluation harness (synthetic cases; `python -m ats_engine.eval`) | Completed (Phase 2A) |
 
 ### Request/data flow (deterministic pipeline)
 
@@ -191,12 +252,20 @@ Recorded as ADRs under [`docs/adr/`](adr/):
 - [ADR-0004](adr/0004-defer-binary-pdf-rendering.md) — Defer binary PDF rendering; ship LaTeX artifacts.
 - [ADR-0005](adr/0005-async-kit-lifecycle.md) — Async kit lifecycle: async SQLAlchemy + a Redis-backed worker behind a queue interface (queue/worker impl superseded by ADR-0006).
 - [ADR-0006](adr/0006-replace-arq-with-celery.md) — Replace the arq worker with Celery (Redis broker); at-least-once delivery, bounded transient retries, Postgres as source of truth.
+- [ADR-0007](adr/0007-application-kit-contract.md) — Versioned ApplicationKit contract with typed artifacts.
+- [ADR-0008](adr/0008-claim-evidence-traceability.md) — Claim/evidence traceability model and privacy trade-off.
+- [ADR-0009](adr/0009-validation-wrapped-generation.md) — Validation-wrapped generation orchestration (the grounding gate).
+- [ADR-0010](adr/0010-provider-routing.md) — Vendor-neutral provider routing (primary / fallback / deterministic).
+- [ADR-0011](adr/0011-repair-vs-rejection-policy.md) — Repair-vs-rejection policy for unsupported claims.
+- [ADR-0012](adr/0012-result-schema-evolution.md) — Result schema evolution and Phase 1 compatibility (no DB migration).
+- [ADR-0013](adr/0013-cache-identity-versioning.md) — Cache identity and contract versioning.
 
 ## 7. Future / planned work (not yet implemented)
 
-- **Engine**: job-fit analysis narrative, interview preparation, LinkedIn
-  outreach drafts; a composed `generate_kit` once the underlying capabilities
-  exist (no fake facade before then).
+- **Engine (Phase 2B)**: job-fit analysis narrative, interview preparation, and
+  LinkedIn outreach drafts — additive optional artifacts on the ApplicationKit
+  contract, not yet implemented (no fake facade before then). Production
+  multi-provider routing/optimization also belongs here.
 - **API**: authentication, credits, Stripe billing; PDF-upload ingestion;
   richer kit querying/filtering and result pagination. (Kit endpoints,
   async SQLAlchemy + Alembic + PostgreSQL persistence, Redis, and the async
