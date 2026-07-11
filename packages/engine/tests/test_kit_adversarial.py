@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from ats_engine import ApplicationKit, ClaimStatus, ClaimType, generate_application_kit
+from ats_engine import ApplicationKit, ArtifactStatus, ClaimStatus, ClaimType, generate_application_kit
 from ats_engine.models import Mode
 from conftest import (
     ADVERSARIAL_JD,
@@ -150,6 +150,10 @@ def test_scenario_10_cover_letter_hallucination_does_not_survive() -> None:
     assert "google" not in text
     assert "chief technology officer" not in text
     assert "rust" not in text
+    assert "google" not in kit.cover_letter.latex.lower()
+    assert "chief technology officer" not in kit.cover_letter.latex.lower()
+    assert "rust" not in kit.cover_letter.latex.lower()
+    assert any(claim.status in (ClaimStatus.REPAIRED, ClaimStatus.REJECTED) for claim in kit.cover_letter.claims)
     # A clean paragraph remains, so the letter is repaired (not merely emptied).
     assert "vantage analytics" in text
 
@@ -158,6 +162,7 @@ def test_scenario_11_application_answer_management_claim_does_not_survive() -> N
     kit = _answers_kit("In that role I managed 50 people across three departments.")
     text = _answers_text(kit)
     assert "50 people" not in text
+    assert all("50 people" not in item.answer.lower() for item in kit.answers.items)
     assert _has_disposed_claim(kit, ClaimType.TEAM_SIZE)
 
 
@@ -224,6 +229,120 @@ def test_step25_all_caps_expertise_does_not_survive() -> None:
 def test_step25_certification_plural_phrasing_does_not_survive() -> None:
     kit = _answers_kit("I completed the CISSP certification during that year of work.")
     assert "cissp" not in _answers_text(kit)
+
+
+# --------------------------------------------------------------------------- #
+# Independent Phase 2A audit: final-output bypass regressions
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    "claim_sentence,forbidden,claim_type",
+    [
+        ("I increased revenue by forty-seven percent in one quarter.", "forty-seven percent", ClaimType.METRIC),
+        ("I saved two million dollars in operating costs.", "two million dollars", ClaimType.MONETARY),
+        ("I led fifteen engineers delivering the platform.", "fifteen engineers", ClaimType.TEAM_SIZE),
+        ("I bring ten years of professional experience.", "ten years", ClaimType.TENURE),
+        ("I increased revenue by 47 per cent in one quarter.", "47 per cent", ClaimType.METRIC),
+        ("I saved USD 2.4m in operating costs.", "usd 2.4m", ClaimType.MONETARY),
+        ("I saved 2.4MM in operating costs.", "2.4mm", ClaimType.MONETARY),
+    ],
+)
+def test_audit_numeric_format_bypasses_do_not_survive_final_kit(
+    claim_sentence: str, forbidden: str, claim_type: ClaimType
+) -> None:
+    kit = _answers_kit(claim_sentence)
+    assert forbidden not in _answers_text(kit)
+    assert _has_disposed_claim(kit, claim_type)
+    assert kit.answers is not None
+    assert kit.answers.validation.status in (ArtifactStatus.REPAIRED, ArtifactStatus.REJECTED)
+
+
+@pytest.mark.parametrize(
+    "claim_sentence,forbidden,claim_type",
+    [
+        ("I built production systems in Rust every day.", "rust", ClaimType.SKILL),
+        ("I built production systems in Rust.", "rust", ClaimType.SKILL),
+        ("I was a founding engineer for the platform.", "founding engineer", ClaimType.TITLE),
+        ("I served as V.P. of Engineering.", "v.p.", ClaimType.TITLE),
+        ("I served as C.T.O. of the company.", "c.t.o.", ClaimType.TITLE),
+        ("I served as Head, Data Engineering.", "head, data engineering", ClaimType.TITLE),
+        ("I managed engineering teams across three departments.", "managed engineering teams", ClaimType.MANAGEMENT),
+        ("I have worked in this field since 2015.", "since 2015", ClaimType.TENURE),
+        ("I delivered the platform for a Fortune 500 banking client.", "fortune 500", ClaimType.EMPLOYER),
+        ("I delivered systems for a FAANG client.", "faang client", ClaimType.EMPLOYER),
+        ("I worked at Globex before this role.", "globex", ClaimType.EMPLOYER),
+        ("I created the Project Phoenix forecasting platform.", "project phoenix", ClaimType.EMPLOYER),
+        ("I won the National Technology Leadership Award.", "leadership award", ClaimType.CERTIFICATION),
+        ("I hold three patents in machine learning.", "three patents", ClaimType.CERTIFICATION),
+        ("I hold active Secret security clearance.", "secret security clearance", ClaimType.CERTIFICATION),
+        ("I published five peer-reviewed papers.", "five peer-reviewed papers", ClaimType.CERTIFICATION),
+    ],
+)
+def test_audit_novel_claim_bypasses_do_not_survive_final_kit(
+    claim_sentence: str, forbidden: str, claim_type: ClaimType
+) -> None:
+    kit = _answers_kit(claim_sentence)
+    assert forbidden not in _answers_text(kit)
+    assert _has_disposed_claim(kit, claim_type)
+    assert kit.answers is not None
+    assert kit.answers.validation.status in (ArtifactStatus.REPAIRED, ArtifactStatus.REJECTED)
+
+
+@pytest.mark.parametrize(
+    "claim_sentence,forbidden,claim_type",
+    [
+        ("I built production systems in R\u200bust.", "rust", ClaimType.SKILL),
+        ("I increased revenue by ４７％.", "47%", ClaimType.METRIC),
+    ],
+)
+def test_audit_unicode_obfuscation_does_not_survive_final_kit(
+    claim_sentence: str, forbidden: str, claim_type: ClaimType
+) -> None:
+    kit = _answers_kit(claim_sentence)
+    assert forbidden not in _answers_text(kit)
+    assert _has_disposed_claim(kit, claim_type)
+
+
+def test_audit_target_company_cannot_be_recast_as_candidate_history() -> None:
+    kit = _answers_kit("I worked at Vantage Analytics before applying for this role.")
+    assert "worked at vantage analytics" not in _answers_text(kit)
+    assert _has_disposed_claim(kit, ClaimType.EMPLOYER)
+
+
+def test_audit_target_role_cannot_be_recast_as_candidate_history() -> None:
+    provider = FabricatingProvider(
+        answer=fabricated_answer("I served as Vice President of Data before applying for this role.")
+    )
+    kit = generate_application_kit(
+        resume_text=ADVERSARIAL_RESUME,
+        job_description=ADVERSARIAL_JD.replace("AI Engineer", "Vice President of Data"),
+        questions_text="Describe your background.",
+        default_mode=Mode.RESUME_AND_QUESTIONS,
+        use_llm=True,
+        prose_provider=provider,
+    )
+    assert "vice president" not in _answers_text(kit)
+    assert _has_disposed_claim(kit, ClaimType.TITLE)
+
+
+def test_audit_resume_summary_bypass_is_absent_from_text_and_latex() -> None:
+    summary = (
+        "I was a founding engineer for an enterprise platform. "
+        "I focus on clear communication, careful delivery, maintainable systems, and honest scope. "
+        "I work closely with stakeholders and document decisions so teams can build on the work with confidence."
+    )
+    provider = FabricatingProvider(summary=summary)
+    kit = generate_application_kit(
+        resume_text=ADVERSARIAL_RESUME,
+        job_description=ADVERSARIAL_JD,
+        default_mode=Mode.RESUME,
+        use_llm=True,
+        prose_provider=provider,
+    )
+    assert kit.resume is not None
+    assert "founding engineer" not in kit.resume.text.lower()
+    assert "founding engineer" not in kit.resume.latex.lower()
+    assert _has_disposed_claim(kit, ClaimType.TITLE)
+    assert kit.resume.validation.status in (ArtifactStatus.REPAIRED, ArtifactStatus.REJECTED)
 
 
 # --------------------------------------------------------------------------- #

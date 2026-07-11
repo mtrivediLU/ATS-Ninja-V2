@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 
 from ats_engine.kit.contract import (
@@ -116,13 +117,16 @@ _EMPLOYER_CONTEXT = re.compile(
 # the candidate's real role unless the resume shows it); ambiguous senior titles
 # (director/head/principal/...) are flagged only in an explicit self-claim.
 _EXEC_TITLE = re.compile(
-    r"\b(chief\s+[a-z]+\s+officer|chief\s+[a-z]+|c[etfoi]o|vice\s+president|vp|founder|co-founder)\b",
+    r"\b(chief\s+[a-z]+\s+officer|chief\s+[a-z]+|c\.?\s*[etfoi]\.?\s*o\.?|vice\s+president|"
+    r"v\.?\s*p\.?|founder|co-founder|"
+    r"founding\s+(?:engineer|developer|architect|designer))\b",
     re.IGNORECASE,
 )
 _SELF_TITLE = re.compile(
     r"\b(?:as|became|promoted\s+to|served\s+as|worked\s+as|role\s+as|title\s+(?:of|was)|position\s+of|i\s+was|i\s+am)\s+"
     r"(?:an?|the)?\s*"
-    r"((?:director|head\s+of|principal|staff\s+engineer|senior\s+director|managing\s+director|executive)[a-z ]{0,35})",
+    r"((?:director|head(?:\s+of|,)?|principal|staff\s+engineer|senior\s+director|managing\s+director|executive)"
+    r"[a-z, ]{0,35})",
     re.IGNORECASE,
 )
 
@@ -237,13 +241,55 @@ _DEGREE_PATTERN = re.compile(
 # "47 percent" (vs "47%"), "2.4 million dollars" (vs "$2.4M"). Catching these is
 # what closes the "47 percent" / "$2.4 million" adversarial bypasses (ADR-0011).
 _EXTRA_METRIC_PATTERN = re.compile(
-    r"\b\d+(?:\.\d+)?\s*(?:percent|percentage\s+points?|pct)\b"
-    r"|(?:\$\s*)?\b\d[\d,]*(?:\.\d+)?\s*(?:million|billion|thousand|trillion|k|m|bn|b)?\s*"
-    r"(?:dollars|usd|cad|eur|euros|pounds|gbp)\b",
+    r"\b\d+(?:\.\d+)?\s*(?:percent|per\s+cent|percentage\s+points?|pct)\b"
+    r"|\b(?:usd|cad|eur|gbp)\s*\$?\s*\d[\d,]*(?:\.\d+)?\s*(?:thousand|million|billion|trillion|k|m|mm|bn|b)?\b"
+    r"|(?:\$\s*)?\b\d[\d,]*(?:\.\d+)?\s*(?:million|billion|thousand|trillion|k|m|mm|bn|b)?\s*"
+    r"(?:dollars|usd|cad|eur|euros|pounds|gbp)\b"
+    r"|\b\d[\d,]*(?:\.\d+)?\s*(?:mm|bn)\b",
     flags=re.IGNORECASE,
 )
 
-_TENURE_PATTERN = re.compile(r"\b(\d{1,2})\s*\+?\s*(?:years?|yrs?)\b", re.IGNORECASE)
+_NUMBER_WORD_ATOM = (
+    r"(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|"
+    r"sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|"
+    r"hundred|thousand|million|billion)"
+)
+_NUMBER_WORDS = rf"{_NUMBER_WORD_ATOM}(?:[ -]+(?:and[ -]+)?{_NUMBER_WORD_ATOM})*"
+_SPELLED_METRIC_PATTERN = re.compile(
+    rf"\b{_NUMBER_WORDS}\s+(?:percent|per\s+cent|percentage\s+points?)\b"
+    rf"|\b{_NUMBER_WORDS}\s+(?:dollars|usd|cad|euros?|pounds|gbp)\b"
+    rf"|\b{_NUMBER_WORDS}\s+(?:engineers?|people|employees|staff|reports)\b",
+    re.IGNORECASE,
+)
+
+_TENURE_PATTERN = re.compile(
+    rf"\b(?P<years>\d{{1,2}}|{_NUMBER_WORDS})\s*\+?\s*(?:years?|yrs?)\b"
+    r"|\b(?P<since>since\s+(?:19|20)\d{2})\b"
+    r"|\b(?P<decade>(?:over\s+the\s+past|for\s+over\s+a|more\s+than\s+a|a)\s+decade)\b",
+    re.IGNORECASE,
+)
+
+_MANAGEMENT_PATTERN = re.compile(
+    r"\b((?:managed|supervised|co-led|helped\s+lead|led|oversaw|owned)\s+"
+    r"(?:[a-z-]+\s+){0,5}(?:teams?|engineers?|employees|people|staff|reports|departments?|divisions?|"
+    r"organizations?|org|roadmaps?|portfolios?))\b",
+    re.IGNORECASE,
+)
+
+_CLIENT_OR_PROJECT_PATTERN = re.compile(
+    r"\b((?:fortune\s+\d{3}|faang|big\s+tech|government|federal|provincial|state|municipal|banking|financial|hospital|"
+    r"healthcare)\s+(?:[a-z]+\s+)?client)\b"
+    r"|\b(project\s+[A-Z][A-Za-z0-9_-]+)\b",
+    re.IGNORECASE,
+)
+
+_OTHER_CREDENTIAL_PATTERN = re.compile(
+    rf"\b((?:[A-Z][A-Za-z-]+\s+){{1,5}}Award)\b"
+    rf"|\b((?:\d+|{_NUMBER_WORDS})\s+patents?)\b"
+    rf"|\b((?:\d+|{_NUMBER_WORDS})\s+(?:peer-reviewed\s+)?(?:papers?|publications?))\b"
+    r"|\b((?:(?:active|current)\s+)?(?:top\s+secret|secret|confidential)\s+security\s+clearance)\b",
+    re.IGNORECASE,
+)
 
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 
@@ -254,9 +300,11 @@ class EvidenceContext:
 
     evidence_text: str  # word-normalized candidate evidence for term membership
     evidence_metric: str  # metric-normalized candidate evidence for metric membership
-    allowed_orgs: frozenset[str]  # candidate employers + schools + target company
+    allowed_orgs: frozenset[str]  # candidate employers + schools
+    target_org: str  # target company, allowed only as targeting (never history)
     real_title_tokens: frozenset[str]
-    allowed_title_tokens: frozenset[str]  # real titles + target-role tokens
+    allowed_title_tokens: frozenset[str]  # candidate titles only
+    target_title_tokens: frozenset[str]  # target role, allowed only as targeting
     skills: frozenset[str]
     max_degree_level: int
     career_years: int
@@ -308,9 +356,72 @@ def _word_normalize(text: str) -> str:
 
 def _metric_normalize(text: str) -> str:
     lowered = (text or "").lower().replace(",", "")
-    lowered = lowered.replace("percent", "%")
+    lowered = lowered.replace("per cent", "%").replace("percent", "%")
+    word_match = re.match(
+        rf"^({_NUMBER_WORDS})(?=\s+(?:%|dollars|usd|cad|euros?|pounds|gbp|years?|yrs?|engineers?|people|employees|staff|reports|patents?))",
+        lowered,
+    )
+    if word_match:
+        value = _parse_number_words(word_match.group(1))
+        if value is not None:
+            lowered = str(value) + lowered[word_match.end() :]
     lowered = lowered.replace("million", "m").replace("billion", "b").replace("thousand", "k")
     return re.sub(r"\s+", "", lowered)
+
+
+_SMALL_NUMBER_WORDS: dict[str, int] = {
+    "zero": 0,
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+    "thirteen": 13,
+    "fourteen": 14,
+    "fifteen": 15,
+    "sixteen": 16,
+    "seventeen": 17,
+    "eighteen": 18,
+    "nineteen": 19,
+    "twenty": 20,
+    "thirty": 30,
+    "forty": 40,
+    "fifty": 50,
+    "sixty": 60,
+    "seventy": 70,
+    "eighty": 80,
+    "ninety": 90,
+}
+
+
+def _parse_number_words(text: str) -> int | None:
+    """Parse the bounded English number grammar used by claim extractors."""
+    tokens = re.findall(r"[a-z]+", text.lower().replace("-", " "))
+    if not tokens:
+        return None
+    total = 0
+    current = 0
+    for token in tokens:
+        if token == "and":
+            continue
+        if token in _SMALL_NUMBER_WORDS:
+            current += _SMALL_NUMBER_WORDS[token]
+        elif token == "hundred":
+            current = max(1, current) * 100
+        elif token in {"thousand", "million", "billion"}:
+            scale = {"thousand": 1_000, "million": 1_000_000, "billion": 1_000_000_000}[token]
+            total += max(1, current) * scale
+            current = 0
+        else:
+            return None
+    return total + current
 
 
 def _degree_level(text: str) -> int:
@@ -357,8 +468,9 @@ def build_evidence_context(profile: Profile, jd_profile: JDProfile) -> EvidenceC
 
     allowed_orgs = {_word_normalize(experience.company) for experience in profile.experiences if experience.company}
     allowed_orgs |= {_word_normalize(education.institution) for education in profile.education if education.institution}
-    if jd_profile.company and jd_profile.company != "Target Company":
-        allowed_orgs.add(_word_normalize(jd_profile.company))
+    target_org = (
+        _word_normalize(jd_profile.company) if jd_profile.company and jd_profile.company != "Target Company" else ""
+    )
 
     real_title_tokens: set[str] = set()
     for experience in profile.experiences:
@@ -366,8 +478,9 @@ def build_evidence_context(profile: Profile, jd_profile: JDProfile) -> EvidenceC
     for role in profile.role_identities:
         real_title_tokens |= _title_tokens(role)
     allowed_title_tokens = set(real_title_tokens)
-    if jd_profile.title and jd_profile.title != "Target Role":
-        allowed_title_tokens |= _title_tokens(jd_profile.title)
+    target_title_tokens = (
+        _title_tokens(jd_profile.title) if jd_profile.title and jd_profile.title != "Target Role" else set()
+    )
 
     skills: set[str] = set()
     for tier in (profile.tier_a, profile.tier_b, profile.tier_c):
@@ -381,8 +494,10 @@ def build_evidence_context(profile: Profile, jd_profile: JDProfile) -> EvidenceC
         evidence_text=evidence_text,
         evidence_metric=evidence_metric,
         allowed_orgs=frozenset(org for org in allowed_orgs if org),
+        target_org=target_org,
         real_title_tokens=frozenset(real_title_tokens),
         allowed_title_tokens=frozenset(allowed_title_tokens),
+        target_title_tokens=frozenset(target_title_tokens),
         skills=frozenset(skill for skill in skills if skill),
         max_degree_level=max_degree_level,
         career_years=_career_years(profile),
@@ -397,16 +512,22 @@ def _term_present(term: str, haystack: str) -> bool:
     term = term.strip().lower()
     if not term:
         return False
-    return bool(re.search(rf"(?<![\w+#.-]){re.escape(term)}(?![\w+#.-])", haystack))
+    return bool(re.search(rf"(?<![\w+#]){re.escape(term)}(?![\w+#])", haystack))
 
 
-def _org_allowed(org: str, context: EvidenceContext) -> bool:
+def _org_allowed(org: str, context: EvidenceContext, *, candidate_history: bool) -> bool:
     normalized = _word_normalize(org)
     if not normalized:
         return True
     if _term_present(normalized, context.evidence_text):
         return True
-    return any(normalized in allowed or allowed in normalized for allowed in context.allowed_orgs)
+    if any(normalized in allowed or allowed in normalized for allowed in context.allowed_orgs):
+        return True
+    return (
+        not candidate_history
+        and bool(context.target_org)
+        and (normalized in context.target_org or context.target_org in normalized)
+    )
 
 
 def _bounded(text: str, limit: int) -> str:
@@ -424,7 +545,7 @@ def _evidence_ref(locator: str, value: str) -> EvidenceRef:
 def _extract_metrics(text: str, context: EvidenceContext) -> list[_RawClaim]:
     claims: list[_RawClaim] = []
     seen: list[tuple[int, int]] = []
-    for pattern in (HIGH_RISK_METRIC_PATTERN, _EXTRA_METRIC_PATTERN):
+    for pattern in (HIGH_RISK_METRIC_PATTERN, _EXTRA_METRIC_PATTERN, _SPELLED_METRIC_PATTERN):
         for match in pattern.finditer(text):
             span = (match.start(), match.end())
             if any(span[0] < end and start < span[1] for start, end in seen):
@@ -451,7 +572,7 @@ def _extract_metrics(text: str, context: EvidenceContext) -> list[_RawClaim]:
 
 def _metric_type(raw: str) -> ClaimType:
     lowered = raw.lower()
-    if "$" in lowered or re.search(r"dollars|usd|cad|eur|euros|pounds|gbp", lowered):
+    if "$" in lowered or re.search(r"dollars|usd|cad|eur|euros|pounds|gbp|\d(?:\.\d+)?\s*(?:mm|bn)\b", lowered):
         return ClaimType.MONETARY
     if re.search(r"engineers?|people|employees|staff|reports|team\s+of", lowered):
         return ClaimType.TEAM_SIZE
@@ -466,17 +587,20 @@ def _extract_employers(text: str, context: EvidenceContext) -> list[_RawClaim]:
         org = match.group(1)
         if _word_normalize(org) in _SOFT_ORG_WORDS:
             continue
-        if not (_word_normalize(org) in _KNOWN_EMPLOYERS or _looks_like_org(org)):
+        candidate_history = _candidate_history_near(text, (match.start(1), match.end(1)))
+        if not (_word_normalize(org) in _KNOWN_EMPLOYERS or _looks_like_org(org) or candidate_history):
             continue
         span = (match.start(1), match.end(1))
         seen.add(span)
-        claims.append(_employer_claim(org, span, context))
+        claims.append(_employer_claim(org, span, context, candidate_history=candidate_history))
 
     for match in _ORG_SUFFIX_PATTERN.finditer(text):
         span = (match.start(), match.end())
         if span in seen:
             continue
-        claims.append(_employer_claim(match.group(0), span, context))
+        claims.append(
+            _employer_claim(match.group(0), span, context, candidate_history=_candidate_history_near(text, span))
+        )
 
     for token in _KNOWN_EMPLOYERS:
         for match in re.finditer(rf"(?<![\w])({re.escape(token)})(?![\w])", text, flags=re.IGNORECASE):
@@ -484,7 +608,9 @@ def _extract_employers(text: str, context: EvidenceContext) -> list[_RawClaim]:
             if any(s <= span[0] < e for s, e in seen):
                 continue
             seen.add(span)
-            claims.append(_employer_claim(match.group(1), span, context))
+            claims.append(
+                _employer_claim(match.group(1), span, context, candidate_history=_candidate_history_near(text, span))
+            )
 
     return claims
 
@@ -497,8 +623,34 @@ def _looks_like_org(org: str) -> bool:
     return any(lowered.endswith(suffix) or f" {suffix}" in f" {lowered}" for suffix in _ORG_SUFFIXES)
 
 
-def _employer_claim(org: str, span: tuple[int, int], context: EvidenceContext) -> _RawClaim:
-    supported = _org_allowed(org, context)
+def _candidate_history_near(
+    text: str,
+    span: tuple[int, int],
+    *,
+    identity_language: bool = False,
+) -> bool:
+    window = text[max(0, span[0] - 70) : min(len(text), span[1] + 70)]
+    history = bool(
+        re.search(
+            r"\b(?:worked|employed|joined|served|built|led|managed|delivered|consulted|promoted|became|career|"
+            r"experience)\b",
+            window,
+            re.IGNORECASE,
+        )
+    )
+    if identity_language:
+        history = history or bool(re.search(r"\bi\s+(?:am|was)\b", window, re.IGNORECASE))
+    return history
+
+
+def _employer_claim(
+    org: str,
+    span: tuple[int, int],
+    context: EvidenceContext,
+    *,
+    candidate_history: bool,
+) -> _RawClaim:
+    supported = _org_allowed(org, context, candidate_history=candidate_history)
     return _RawClaim(
         claim_type=ClaimType.EMPLOYER,
         text=org.strip(),
@@ -517,24 +669,46 @@ def _extract_titles(text: str, context: EvidenceContext) -> list[_RawClaim]:
     for match in _EXEC_TITLE.finditer(text):
         span = (match.start(1), match.end(1))
         seen.add(span)
-        claims.append(_title_claim(match.group(1), span, context))
+        claims.append(
+            _title_claim(
+                match.group(1),
+                span,
+                context,
+                candidate_history=_candidate_history_near(text, span, identity_language=True),
+            )
+        )
 
     for match in _SELF_TITLE.finditer(text):
         span = (match.start(1), match.end(1))
         if any(s <= span[0] < e for s, e in seen):
             continue
-        claims.append(_title_claim(match.group(1), span, context))
+        claims.append(
+            _title_claim(
+                match.group(1),
+                span,
+                context,
+                candidate_history=_candidate_history_near(text, span, identity_language=True),
+            )
+        )
 
     return claims
 
 
-def _title_claim(title: str, span: tuple[int, int], context: EvidenceContext) -> _RawClaim:
+def _title_claim(
+    title: str,
+    span: tuple[int, int],
+    context: EvidenceContext,
+    *,
+    candidate_history: bool,
+) -> _RawClaim:
     # Support hinges on the *seniority* head token (director/chief/vp/head/...),
     # NOT on shared domain words: "Director of Data Engineering" must not count as
     # supported merely because the candidate is a "Data Analyst" (both say "data").
     normalized = _word_normalize(title)
     head = normalized.split()[0] if normalized else ""
     supported = head in context.allowed_title_tokens or _term_present(normalized, context.evidence_text)
+    if not supported and not candidate_history:
+        supported = head in context.target_title_tokens
     return _RawClaim(
         claim_type=ClaimType.TITLE,
         text=title.strip(),
@@ -548,6 +722,7 @@ def _title_claim(title: str, span: tuple[int, int], context: EvidenceContext) ->
 
 def _extract_skills(text: str, context: EvidenceContext) -> list[_RawClaim]:
     claims: list[_RawClaim] = []
+    seen: list[tuple[int, int]] = []
     for match in _SKILL_CLAIM.finditer(text):
         phrase = match.group(1).strip()
         head = phrase.split()[0] if phrase else ""
@@ -557,6 +732,7 @@ def _extract_skills(text: str, context: EvidenceContext) -> list[_RawClaim]:
         is_named_tech = head[:1].isupper() or normalized in _KNOWN_TECH or bool(re.search(r"[+#0-9]", head))
         supported = normalized in context.skills or _term_present(normalized, context.evidence_text)
         if supported:
+            seen.append((match.start(1), match.end(1)))
             claims.append(
                 _RawClaim(
                     claim_type=ClaimType.SKILL,
@@ -569,6 +745,7 @@ def _extract_skills(text: str, context: EvidenceContext) -> list[_RawClaim]:
                 )
             )
         elif is_named_tech:
+            seen.append((match.start(1), match.end(1)))
             claims.append(
                 _RawClaim(
                     claim_type=ClaimType.SKILL,
@@ -577,6 +754,32 @@ def _extract_skills(text: str, context: EvidenceContext) -> list[_RawClaim]:
                     end=match.end(1),
                     supported=False,
                     reason="claimed skill/expertise absent from candidate evidence",
+                )
+            )
+
+    # Expertise qualifiers are not required for a candidate-specific skill
+    # claim: "I built production systems in Rust" is just as factual as "I am
+    # an expert in Rust". Catch named technologies anywhere in generated prose,
+    # except the highly ambiguous word "go" unless the explicit skill pattern
+    # above already identified it.
+    for tech in sorted(_KNOWN_TECH - {"go"}, key=len, reverse=True):
+        for match in re.finditer(rf"(?<![\w+#]){re.escape(tech)}(?![\w+#])", text, re.IGNORECASE):
+            span = (match.start(), match.end())
+            if any(start <= span[0] < end for start, end in seen):
+                continue
+            raw = match.group(0)
+            supported = _term_present(tech, context.evidence_text)
+            claims.append(
+                _RawClaim(
+                    claim_type=ClaimType.SKILL,
+                    text=raw,
+                    start=span[0],
+                    end=span[1],
+                    supported=supported,
+                    reason="skill present in candidate evidence"
+                    if supported
+                    else "claimed skill absent from candidate evidence",
+                    evidence=[_evidence_ref("skills", raw)] if supported else [],
                 )
             )
     return claims
@@ -629,11 +832,23 @@ def _extract_degrees(text: str, context: EvidenceContext) -> list[_RawClaim]:
 def _extract_tenure(text: str, context: EvidenceContext) -> list[_RawClaim]:
     claims: list[_RawClaim] = []
     for match in _TENURE_PATTERN.finditer(text):
-        years = int(match.group(1))
         raw = match.group(0).strip()
-        in_evidence = _metric_normalize(raw) in context.evidence_metric
+        years_text = match.group("years")
+        since_text = match.group("since")
+        decade_text = match.group("decade")
+        if years_text:
+            years = int(years_text) if years_text.isdigit() else (_parse_number_words(years_text) or 0)
+        elif since_text:
+            from datetime import datetime
+
+            years = datetime.now().year - int(re.search(r"\d{4}", since_text).group(0))  # type: ignore[union-attr]
+        elif decade_text:
+            years = 10
+        else:
+            years = 0
+        in_evidence = _word_normalize(raw) in context.evidence_text or _metric_normalize(raw) in context.evidence_metric
         # Allow up to the candidate's real career span (+1 year of rounding).
-        supported = in_evidence or (context.career_years > 0 and years <= context.career_years + 1)
+        supported = years > 0 and (in_evidence or (context.career_years > 0 and years <= context.career_years + 1))
         claims.append(
             _RawClaim(
                 claim_type=ClaimType.TENURE,
@@ -648,6 +863,70 @@ def _extract_tenure(text: str, context: EvidenceContext) -> list[_RawClaim]:
     return claims
 
 
+def _extract_management(text: str, context: EvidenceContext) -> list[_RawClaim]:
+    claims: list[_RawClaim] = []
+    for match in _MANAGEMENT_PATTERN.finditer(text):
+        raw = match.group(1).strip()
+        supported = _term_present(_word_normalize(raw), context.evidence_text)
+        claims.append(
+            _RawClaim(
+                claim_type=ClaimType.MANAGEMENT,
+                text=raw,
+                start=match.start(1),
+                end=match.end(1),
+                supported=supported,
+                reason="management claim present in candidate evidence"
+                if supported
+                else "management claim absent from candidate evidence",
+                evidence=[_evidence_ref("experience", raw)] if supported else [],
+            )
+        )
+    return claims
+
+
+def _extract_clients_and_projects(text: str, context: EvidenceContext) -> list[_RawClaim]:
+    claims: list[_RawClaim] = []
+    for match in _CLIENT_OR_PROJECT_PATTERN.finditer(text):
+        raw = next(group for group in match.groups() if group is not None).strip()
+        supported = _term_present(_word_normalize(raw), context.evidence_text)
+        claims.append(
+            _RawClaim(
+                claim_type=ClaimType.EMPLOYER,
+                text=raw,
+                start=match.start(),
+                end=match.end(),
+                supported=supported,
+                reason="client/project identity present in candidate evidence"
+                if supported
+                else "client/project identity absent from candidate evidence",
+                evidence=[_evidence_ref("experience", raw)] if supported else [],
+            )
+        )
+    return claims
+
+
+def _extract_other_credentials(text: str, context: EvidenceContext) -> list[_RawClaim]:
+    """Catch award, patent, and clearance credentials outside cert syntax."""
+    claims: list[_RawClaim] = []
+    for match in _OTHER_CREDENTIAL_PATTERN.finditer(text):
+        raw = next(group for group in match.groups() if group is not None).strip()
+        supported = _term_present(_word_normalize(raw), context.evidence_text)
+        claims.append(
+            _RawClaim(
+                claim_type=ClaimType.CERTIFICATION,
+                text=raw,
+                start=match.start(),
+                end=match.end(),
+                supported=supported,
+                reason="credential present in candidate evidence"
+                if supported
+                else "credential absent from candidate evidence",
+                evidence=[_evidence_ref("certification", raw)] if supported else [],
+            )
+        )
+    return claims
+
+
 def _extract_claims(text: str, context: EvidenceContext) -> list[_RawClaim]:
     claims: list[_RawClaim] = []
     claims.extend(_extract_metrics(text, context))
@@ -657,6 +936,9 @@ def _extract_claims(text: str, context: EvidenceContext) -> list[_RawClaim]:
     claims.extend(_extract_certifications(text, context))
     claims.extend(_extract_degrees(text, context))
     claims.extend(_extract_tenure(text, context))
+    claims.extend(_extract_management(text, context))
+    claims.extend(_extract_clients_and_projects(text, context))
+    claims.extend(_extract_other_credentials(text, context))
     return sorted(claims, key=lambda claim: claim.start)
 
 
@@ -716,6 +998,12 @@ def ground_text(
     place (candidate-authored resume bullets, where dropping the whole line would
     corrupt completeness accounting).
     """
+    # Canonicalize compatibility characters (e.g. full-width ４７％) and strip
+    # invisible formatting controls before computing offsets. Otherwise a model
+    # can split a sensitive token with a zero-width character and evade every
+    # word-boundary extractor while the rendered output still reads identically.
+    text = unicodedata.normalize("NFKC", text)
+    text = "".join(character for character in text if unicodedata.category(character) != "Cf")
     if not text.strip():
         return GroundingOutcome(clean_text=text, claims=[])
 
