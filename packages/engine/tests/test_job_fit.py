@@ -10,9 +10,13 @@ from ats_engine import (
     RequirementClassification,
     application_kit_from_dict,
     application_kit_to_dict,
+    build_profile,
     generate_application_kit,
+    run_pipeline,
 )
+from ats_engine.job_fit import build_job_fit_artifact
 from ats_engine.job_fit.policy import fit_band_for_score, requirement_coverage_score
+from ats_engine.kit.grounding import build_evidence_context
 from ats_engine.models import EvidenceItem
 from ats_engine.providers import LLMProvider
 from conftest import ADVERSARIAL_JD, ADVERSARIAL_RESUME
@@ -195,3 +199,57 @@ def test_mixed_provider_paragraph_preserves_supported_fact_and_removes_fabricati
     assert "Python" in kit.job_fit.summary
     assert "47%" not in kit.job_fit.summary
     assert kit.job_fit.validation.status.value == "repaired"
+
+
+def test_exact_58_score_and_real_adjacent_working_gap_rungs_cannot_be_upgraded() -> None:
+    resume = (
+        "Morgan Lee\nTECHNICAL SKILLS\nKubernetes\nPROFESSIONAL EXPERIENCE\n"
+        "Harbor Data Toronto, ON\nAnalytics Engineer 2021 - 2025\n"
+        "- Built Python and SQL pipelines.\n- Delivered Tableau dashboards.\n"
+    )
+    jd = (
+        "Job Title: Platform Director\nCompany: Summit Systems\nRequired qualifications:\n"
+        "- Python\n- SQL\n- Power BI\n- Kubernetes\n- Rust\n"
+        "The team uses Python, SQL, Power BI, Kubernetes, and Rust."
+    )
+    result = run_pipeline(resume_text=resume, job_description=jd, default_mode=Mode.RESUME, use_llm=False)
+    assert result.resume_plan is not None
+    result.resume_plan.evidence = [
+        EvidenceItem("Python", "required", "A", "Python", "", "", ""),
+        EvidenceItem("SQL", "required", "A", "SQL", "", "", ""),
+        EvidenceItem("Power BI", "required", "adjacency", "Data visualization (Tableau)", "", "", ""),
+        EvidenceItem("Kubernetes", "required", "C", "Kubernetes", "", "", ""),
+        EvidenceItem("Rust", "required", "missing", "", "", "", ""),
+    ]
+    profile = build_profile(resume)
+    context = build_evidence_context(profile, result.jd_profile)
+    provider = JobFitProvider(
+        "Requirement coverage: 95.00%. Fit band: strong. "
+        "Power BI is proven expertise. The candidate has five years of production Kubernetes experience. "
+        "Rust is a proven strength and there are no meaningful gaps."
+    )
+    artifact = build_job_fit_artifact(
+        plan=result.resume_plan,
+        profile=profile,
+        jd_profile=result.jd_profile,
+        resume_text=resume,
+        job_description=jd,
+        context=context,
+        provider=provider,
+    )
+
+    assert artifact.requirement_coverage_score == 58.0
+    assert artifact.fit_band is FitBand.PARTIAL
+    assert artifact.adjacent_capabilities == ["Power BI"]
+    assert artifact.working_knowledge == ["Kubernetes"]
+    assert artifact.genuine_gaps == ["Rust"]
+    assert artifact.must_have_gaps == ["Rust"]
+    assert "95.00%" not in artifact.summary
+    assert "Power BI is proven expertise" not in artifact.summary
+    assert "five years of production Kubernetes" not in artifact.summary
+    assert "Rust is a proven strength" not in artifact.summary
+    assert "no meaningful gaps" not in artifact.summary
+    assert "Requirement coverage: 58.00%" in artifact.summary
+    assert "Must-have gaps: Rust" in artifact.summary
+    assert artifact.validation.status.value == "repaired"
+    assert artifact.consistency.passed
