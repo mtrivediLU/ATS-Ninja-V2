@@ -201,6 +201,21 @@ def _merge_jd_profile(heuristic: JDProfile, llm_data: dict[str, object]) -> JDPr
                 return cleaned[:18]
         return fallback
 
+    def merged_list(key: str, authoritative: list[str], *, limit: int) -> list[str]:
+        """Keep deterministic section membership as a provider-proof floor."""
+        values = list(authoritative) + list_field(key, [])
+        merged: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            normalized = value.casefold().strip()
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                merged.append(value)
+        return merged[:limit]
+
+    def requirement_key(value: str) -> str:
+        return re.sub(r"^[\s\-*•]+", "", value.casefold()).strip()
+
     work_mode = text_field("work_mode", heuristic.work_mode).lower()
     if work_mode not in {"remote", "hybrid", "on-site", "onsite", "relocation", "unknown"}:
         work_mode = heuristic.work_mode
@@ -211,15 +226,22 @@ def _merge_jd_profile(heuristic: JDProfile, llm_data: dict[str, object]) -> JDPr
     if ats_platform not in {"workday", "greenhouse", "lever", "ashby", "icims", "bamboohr", "unknown"}:
         ats_platform = heuristic.ats_platform
 
+    required = merged_list("required_qualifications", heuristic.required_qualifications, limit=8)
+    required_normalized = {requirement_key(value) for value in required}
+    preferred = [
+        value
+        for value in merged_list("preferred_qualifications", heuristic.preferred_qualifications, limit=16)
+        if requirement_key(value) not in required_normalized
+    ][:8]
     return JDProfile(
         title=text_field("title", heuristic.title),
         company=text_field("company", heuristic.company),
         work_mode=work_mode,
         location=text_field("location", heuristic.location),
-        required_qualifications=list_field("required_qualifications", heuristic.required_qualifications)[:8],
-        preferred_qualifications=list_field("preferred_qualifications", heuristic.preferred_qualifications)[:8],
-        responsibilities=list_field("responsibilities", heuristic.responsibilities)[:5],
-        technical_keywords=list_field("technical_keywords", heuristic.technical_keywords)[:18],
+        required_qualifications=required,
+        preferred_qualifications=preferred,
+        responsibilities=merged_list("responsibilities", heuristic.responsibilities, limit=5),
+        technical_keywords=merged_list("technical_keywords", heuristic.technical_keywords, limit=18),
         domain=text_field("domain", heuristic.domain),
         ats_platform=ats_platform,
     )

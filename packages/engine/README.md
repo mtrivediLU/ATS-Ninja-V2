@@ -23,7 +23,8 @@ to a local Ollama server over stdlib HTTP.
 | `ats_engine.providers` | `LLMProvider` interface + Ollama adapter |
 | `ats_engine.generation` | Plans + resume/cover-letter/answer generation + pipeline |
 | `ats_engine.job_fit` | Deterministic requirement coverage, fit bands, narrative consistency |
-| `ats_engine.kit` | ApplicationKit v2, JobFitArtifact, grounding, serialization compatibility |
+| `ats_engine.interview_prep` | Grounded questions, STAR integrity, gap guidance, provider consistency |
+| `ats_engine.kit` | ApplicationKit v3, typed artifacts, grounding, serialization compatibility |
 
 ## Core principles
 
@@ -67,7 +68,10 @@ result = generate_application_kit(
 print(result.resume.text)
 print(result.job_fit.fit_band)
 print(result.job_fit.genuine_gaps)
+print(result.interview_prep.questions)
+print(result.interview_prep.star_stories)
 ```
 
-ApplicationKit v2 adds the grounded JobFitArtifact. Interview preparation and
-LinkedIn outreach remain future capabilities; no placeholder models them.
+ApplicationKit v3 adds the grounded InterviewPrepArtifact. JobFit and interview
+preparation are independently selectable. LinkedIn outreach remains a future
+capability; no placeholder models it.

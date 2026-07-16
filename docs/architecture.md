@@ -1,6 +1,6 @@
 # ATS-Ninja-V2 — Architecture
 
-Status: **Phase 2B1 (grounded JobFitArtifact)**. This
+Status: **Phase 2B2 (grounded InterviewPrepArtifact)**. This
 document distinguishes what is **completed**, what **architecture is
 established**, and what is **future** planned work. It never describes
 unimplemented functionality as done.
@@ -105,11 +105,11 @@ generate_application_kit(resume, jd, mode, provider?)
          unsupported→ remove (repair) ; if not removable → reject/withhold  [ADR-0011]
   → RE-RENDER text + LaTeX from the sanitized plans (clean by construction)
   → re-run the engine's artifact validators
-  → assemble ApplicationKit (schema application-kit/v2) with a full claim trace
+  → assemble ApplicationKit (schema application-kit/v3) with a full claim trace
 ```
 
 - **Versioned contract** ([ADR-0007](adr/0007-application-kit-contract.md)):
-  `ApplicationKit` (schema `application-kit/v2`) with typed `ResumeArtifact` /
+  `ApplicationKit` (schema `application-kit/v3`) with typed `ResumeArtifact` /
   `CoverLetterArtifact` / `AnswerArtifact`, a `ValidationSummary`, and
   persistence-safe `GenerationMetadata`. It models only today's real artifacts.
 - **Claim/evidence trace** ([ADR-0008](adr/0008-claim-evidence-traceability.md)):
@@ -150,6 +150,7 @@ generate_application_kit(resume, jd, mode, provider?)
 | `kit` | Versioned `ApplicationKit` contract, JSON serialization boundary (+ legacy adapter), grounding gate, provider routing, orchestrator | Completed (Phase 2A) |
 | `eval` | Phase 2A quality-evaluation harness (synthetic cases; `python -m ats_engine.eval`) | Completed (Phase 2A) |
 | `job_fit` | Deterministic requirement assessment, fit policy, bounded narrative, consistency validation | Completed (Phase 2B1) |
+| `interview_prep` | Deterministic questions/answer guides, single-context STAR policy, honest gaps, bounded narrative validation | Completed (Phase 2B2) |
 
 ### Grounded JobFitArtifact (Phase 2B1, completed)
 
@@ -171,6 +172,29 @@ contradictory narrative with the deterministic narrative and records the
 violation. V1 and Phase 1 JSON results remain readable; unknown schemas remain
 unknown. Migration 0002 persists only the request option—the artifact remains in
 the existing PostgreSQL JSON result column. See [ADR-0014](adr/0014-application-kit-v2-job-fit.md).
+
+### Grounded InterviewPrepArtifact (Phase 2B2, completed)
+
+ApplicationKit v3 adds optional typed `interview_prep`, default-on through the
+persisted `include_interview_prep=true` request option. It is independently
+selectable from JobFit: when interview preparation is requested without a
+persisted JobFitArtifact, the engine calculates one internal deterministic fit
+assessment and does not duplicate or expose it.
+
+Questions, answer guides, focus areas, study topics, gap handling, positioning,
+and interviewer questions come from the candidate Profile, JDProfile, evidence
+matrix, and authoritative JobFit classifications. A provider may rewrite only a
+bounded strategy summary. Candidate grounding, interview consistency, STAR
+integrity, and gap checks run before a single deterministic fallback pass.
+
+Every STAR candidate is built from exactly one professional or education source
+bullet. A story is `complete` only when that bullet explicitly provides
+Situation, Task, Action, and Result; otherwise the artifact labels the outline
+`incomplete` and names its missing components. Metrics/results remain on the
+same bullet, education stays education, and contribution/support wording is not
+upgraded to ownership. Migration 0003 stores only the reproducibility option;
+v2, v1, and Phase 1 results remain readable while unknown schemas remain
+uninterpreted. See [ADR-0015](adr/0015-application-kit-v3-interview-prep.md).
 
 ### Request/data flow (deterministic pipeline)
 

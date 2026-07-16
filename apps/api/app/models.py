@@ -33,6 +33,7 @@ class Kit(Base):
     requested_mode: Mapped[str] = mapped_column(String(64), default="", nullable=False)
     questions_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
     include_job_fit: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
+    include_interview_prep: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
 
     # Output (serialized KitResult) and failure detail.
     result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)

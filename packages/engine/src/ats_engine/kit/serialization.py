@@ -4,6 +4,7 @@ from typing import Any
 
 from ats_engine.kit.contract import (
     APPLICATION_KIT_V1,
+    APPLICATION_KIT_V2,
     SCHEMA_VERSION,
     AnswerArtifact,
     AnswerItem,
@@ -18,13 +19,25 @@ from ats_engine.kit.contract import (
     CoverLetterArtifact,
     EvidenceRef,
     FitBand,
+    GapHandlingGuide,
     GenerationMetadata,
+    InterviewAnswerGuide,
+    InterviewerQuestion,
+    InterviewFocusArea,
+    InterviewPrepArtifact,
+    InterviewPriority,
+    InterviewQuestion,
+    InterviewQuestionCategory,
     JobFitArtifact,
     PositioningRecommendation,
     RequirementAssessment,
     RequirementClassification,
     RequirementRisk,
     ResumeArtifact,
+    StarCompleteness,
+    StarSourceType,
+    StarStoryCandidate,
+    TechnicalStudyTopic,
     ValidationSummary,
 )
 
@@ -65,6 +78,7 @@ def application_kit_to_dict(kit: ApplicationKit) -> dict[str, Any]:
         "cover_letter": (_cover_letter_to_dict(kit.cover_letter) if kit.cover_letter is not None else None),
         "answers": _answers_to_dict(kit.answers) if kit.answers is not None else None,
         "job_fit": _job_fit_to_dict(kit.job_fit) if kit.job_fit is not None else None,
+        "interview_prep": (_interview_prep_to_dict(kit.interview_prep) if kit.interview_prep is not None else None),
         "warnings": list(kit.warnings),
     }
 
@@ -170,6 +184,106 @@ def _job_fit_to_dict(job_fit: JobFitArtifact) -> dict[str, Any]:
     }
 
 
+def _answer_guide_to_dict(guide: InterviewAnswerGuide) -> dict[str, Any]:
+    return {
+        "key_points": list(guide.key_points),
+        "statements_to_avoid": list(guide.statements_to_avoid),
+        "suggested_answer": guide.suggested_answer,
+        "honest_gap_language": guide.honest_gap_language,
+        "evidence": [_evidence_to_dict(ref) for ref in guide.evidence],
+    }
+
+
+def _interview_prep_to_dict(artifact: InterviewPrepArtifact) -> dict[str, Any]:
+    return {
+        "strategy_summary": artifact.strategy_summary,
+        "focus_areas": [
+            {
+                "requirement_id": item.requirement_id,
+                "topic": item.topic,
+                "classification": item.classification.value,
+                "priority": item.priority.value,
+                "guidance": item.guidance,
+                "evidence": [_evidence_to_dict(ref) for ref in item.evidence],
+            }
+            for item in artifact.focus_areas
+        ],
+        "questions": [
+            {
+                "id": item.id,
+                "category": item.category.value,
+                "question": item.question,
+                "rationale": item.rationale,
+                "related_requirement_ids": list(item.related_requirement_ids),
+                "priority": item.priority.value,
+                "answer_guide": _answer_guide_to_dict(item.answer_guide),
+                "evidence": [_evidence_to_dict(ref) for ref in item.evidence],
+                "gap_relevance": item.gap_relevance,
+                "validation": _artifact_validation_to_dict(item.validation),
+            }
+            for item in artifact.questions
+        ],
+        "star_stories": [
+            {
+                "id": item.id,
+                "source_type": item.source_type.value,
+                "employer_or_institution": item.employer_or_institution,
+                "title_or_degree": item.title_or_degree,
+                "situation": item.situation,
+                "task": item.task,
+                "action": item.action,
+                "result": item.result,
+                "completeness": item.completeness.value,
+                "missing_components": list(item.missing_components),
+                "safe_usage_guidance": item.safe_usage_guidance,
+                "evidence": [_evidence_to_dict(ref) for ref in item.evidence],
+                "validation": _artifact_validation_to_dict(item.validation),
+            }
+            for item in artifact.star_stories
+        ],
+        "technical_study_topics": [
+            {
+                "requirement_id": item.requirement_id,
+                "topic": item.topic,
+                "reason": item.reason,
+                "boundary": item.boundary,
+                "priority": item.priority.value,
+            }
+            for item in artifact.technical_study_topics
+        ],
+        "gap_handling": [
+            {
+                "requirement_id": item.requirement_id,
+                "requirement": item.requirement,
+                "classification": item.classification.value,
+                "must_have": item.must_have,
+                "guidance": item.guidance,
+                "what_to_avoid": list(item.what_to_avoid),
+                "evidence": [_evidence_to_dict(ref) for ref in item.evidence],
+            }
+            for item in artifact.gap_handling
+        ],
+        "positioning_recommendations": [
+            {"requirement_id": item.requirement_id, "text": item.text} for item in artifact.positioning_recommendations
+        ],
+        "interviewer_questions": [
+            {"id": item.id, "question": item.question, "rationale": item.rationale, "source": item.source}
+            for item in artifact.interviewer_questions
+        ],
+        "validation": _artifact_validation_to_dict(artifact.validation),
+        "consistency": {
+            "passed": artifact.consistency.passed,
+            "errors": list(artifact.consistency.errors),
+            "repaired_violations": list(artifact.consistency.repaired_violations),
+        },
+        "generation": _generation_to_dict(artifact.generation),
+        "claims": [_claim_to_dict(claim) for claim in artifact.claims],
+        "evidence": [_evidence_to_dict(ref) for ref in artifact.evidence],
+        "warnings": list(artifact.warnings),
+        "withheld": artifact.withheld,
+    }
+
+
 def _generation_to_dict(meta: GenerationMetadata) -> dict[str, Any]:
     return {
         "generation_mode": meta.generation_mode,
@@ -209,6 +323,7 @@ def application_kit_from_dict(data: dict[str, Any]) -> ApplicationKit:
         cover_letter=_cover_letter_from_dict(data.get("cover_letter")),
         answers=_answers_from_dict(data.get("answers")),
         job_fit=_job_fit_from_dict(data.get("job_fit")),
+        interview_prep=_interview_prep_from_dict(data.get("interview_prep")),
         warnings=[str(item) for item in data.get("warnings") or []],
     )
 
@@ -335,6 +450,117 @@ def _job_fit_from_dict(raw: dict[str, Any] | None) -> JobFitArtifact | None:
     )
 
 
+def _answer_guide_from_dict(raw: dict[str, Any]) -> InterviewAnswerGuide:
+    return InterviewAnswerGuide(
+        key_points=[str(item) for item in raw.get("key_points") or []],
+        statements_to_avoid=[str(item) for item in raw.get("statements_to_avoid") or []],
+        suggested_answer=str(raw.get("suggested_answer", "")),
+        honest_gap_language=str(raw.get("honest_gap_language", "")),
+        evidence=[_evidence_from_dict(ref) for ref in raw.get("evidence") or []],
+    )
+
+
+def _interview_prep_from_dict(raw: dict[str, Any] | None) -> InterviewPrepArtifact | None:
+    if raw is None:
+        return None
+    consistency = raw.get("consistency") or {}
+    return InterviewPrepArtifact(
+        strategy_summary=str(raw.get("strategy_summary", "")),
+        focus_areas=[
+            InterviewFocusArea(
+                requirement_id=str(item.get("requirement_id", "")),
+                topic=str(item.get("topic", "")),
+                classification=RequirementClassification(str(item.get("classification", "genuine_gap"))),
+                priority=InterviewPriority(str(item.get("priority", "medium"))),
+                guidance=str(item.get("guidance", "")),
+                evidence=[_evidence_from_dict(ref) for ref in item.get("evidence") or []],
+            )
+            for item in raw.get("focus_areas") or []
+        ],
+        questions=[
+            InterviewQuestion(
+                id=str(item.get("id", "")),
+                category=InterviewQuestionCategory(str(item.get("category", "role_specific"))),
+                question=str(item.get("question", "")),
+                rationale=str(item.get("rationale", "")),
+                related_requirement_ids=[str(value) for value in item.get("related_requirement_ids") or []],
+                priority=InterviewPriority(str(item.get("priority", "medium"))),
+                answer_guide=_answer_guide_from_dict(item.get("answer_guide") or {}),
+                evidence=[_evidence_from_dict(ref) for ref in item.get("evidence") or []],
+                gap_relevance=str(item.get("gap_relevance", "")),
+                validation=_artifact_validation_from_dict(item.get("validation") or {}),
+            )
+            for item in raw.get("questions") or []
+        ],
+        star_stories=[
+            StarStoryCandidate(
+                id=str(item.get("id", "")),
+                source_type=StarSourceType(str(item.get("source_type", "professional"))),
+                employer_or_institution=str(item.get("employer_or_institution", "")),
+                title_or_degree=str(item.get("title_or_degree", "")),
+                situation=str(item.get("situation", "")),
+                task=str(item.get("task", "")),
+                action=str(item.get("action", "")),
+                result=str(item.get("result", "")),
+                completeness=StarCompleteness(str(item.get("completeness", "incomplete"))),
+                missing_components=[str(value) for value in item.get("missing_components") or []],
+                safe_usage_guidance=str(item.get("safe_usage_guidance", "")),
+                evidence=[_evidence_from_dict(ref) for ref in item.get("evidence") or []],
+                validation=_artifact_validation_from_dict(item.get("validation") or {}),
+            )
+            for item in raw.get("star_stories") or []
+        ],
+        technical_study_topics=[
+            TechnicalStudyTopic(
+                requirement_id=str(item.get("requirement_id", "")),
+                topic=str(item.get("topic", "")),
+                reason=str(item.get("reason", "")),
+                boundary=str(item.get("boundary", "")),
+                priority=InterviewPriority(str(item.get("priority", "medium"))),
+            )
+            for item in raw.get("technical_study_topics") or []
+        ],
+        gap_handling=[
+            GapHandlingGuide(
+                requirement_id=str(item.get("requirement_id", "")),
+                requirement=str(item.get("requirement", "")),
+                classification=RequirementClassification(str(item.get("classification", "genuine_gap"))),
+                must_have=bool(item.get("must_have", False)),
+                guidance=str(item.get("guidance", "")),
+                what_to_avoid=[str(value) for value in item.get("what_to_avoid") or []],
+                evidence=[_evidence_from_dict(ref) for ref in item.get("evidence") or []],
+            )
+            for item in raw.get("gap_handling") or []
+        ],
+        positioning_recommendations=[
+            PositioningRecommendation(
+                requirement_id=str(item.get("requirement_id", "")), text=str(item.get("text", ""))
+            )
+            for item in raw.get("positioning_recommendations") or []
+        ],
+        interviewer_questions=[
+            InterviewerQuestion(
+                id=str(item.get("id", "")),
+                question=str(item.get("question", "")),
+                rationale=str(item.get("rationale", "")),
+                source=str(item.get("source", "")),
+            )
+            for item in raw.get("interviewer_questions") or []
+        ],
+        validation=_artifact_validation_from_dict(raw.get("validation") or {}),
+        consistency=ConsistencyValidation(
+            passed=bool(consistency.get("passed", False)),
+            errors=[str(item) for item in consistency.get("errors") or []],
+            repaired_violations=[str(item) for item in consistency.get("repaired_violations") or []],
+        ),
+        generation=_generation_from_dict(raw.get("generation") or {}),
+        claims=[_claim_from_dict(item) for item in raw.get("claims") or []],
+        evidence=[_evidence_from_dict(item) for item in raw.get("evidence") or []],
+        warnings=[str(item) for item in raw.get("warnings") or []],
+        withheld=bool(raw.get("withheld", False)),
+    )
+
+
 def _generation_from_dict(raw: dict[str, Any]) -> GenerationMetadata:
     return GenerationMetadata(
         generation_mode=str(raw.get("generation_mode", "deterministic")),
@@ -369,6 +595,11 @@ def is_application_kit_v1(raw: dict[str, Any]) -> bool:
 
 def is_application_kit_v2(raw: dict[str, Any]) -> bool:
     """True when a persisted result is a v2 ApplicationKit."""
+    return str(raw.get("schema_version", "")) == APPLICATION_KIT_V2
+
+
+def is_application_kit_v3(raw: dict[str, Any]) -> bool:
+    """True when a persisted result is a v3 ApplicationKit."""
     return str(raw.get("schema_version", "")) == SCHEMA_VERSION
 
 
@@ -462,6 +693,7 @@ def adapt_legacy_result(raw: dict[str, Any]) -> dict[str, Any]:
         "cover_letter": cover,
         "answers": answers,
         "job_fit": None,
+        "interview_prep": None,
         "warnings": ["Served from a legacy Phase 1 result record (pre-ApplicationKit)."],
     }
 
@@ -475,11 +707,16 @@ def normalize_persisted_result(raw: dict[str, Any] | None) -> dict[str, Any] | N
     """
     if raw is None:
         return None
-    if is_application_kit_v2(raw):
+    if is_application_kit_v3(raw):
         return raw
+    if is_application_kit_v2(raw):
+        normalized = dict(raw)
+        normalized.setdefault("interview_prep", None)
+        return normalized
     if is_application_kit_v1(raw):
         normalized = dict(raw)
         normalized.setdefault("job_fit", None)
+        normalized.setdefault("interview_prep", None)
         return normalized
     if _looks_like_phase1_result(raw):
         return adapt_legacy_result(raw)
@@ -509,5 +746,6 @@ def normalize_persisted_result(raw: dict[str, Any] | None) -> dict[str, Any] | N
         "cover_letter": None,
         "answers": None,
         "job_fit": None,
+        "interview_prep": None,
         "warnings": ["Unrecognized result schema; not interpreted."],
     }

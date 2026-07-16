@@ -19,12 +19,11 @@ and a job description it generates a complete **application kit**:
 - LinkedIn networking / outreach drafts
 - downloadable application artifacts
 
-Today the engine produces the tailored **resume, cover letter, and application
-answers** and assembles them into a versioned, truth-grounded **ApplicationKit**
-(`application-kit/v1`, see `ats_engine.kit`). Job-fit narrative, interview prep,
-and LinkedIn outreach are **future (Phase 2B+)** capabilities and are not yet
-implemented. Never describe an unimplemented feature as done, and never add
-ApplicationKit fields for those future artifacts before they exist.
+Today the engine produces the tailored **resume, cover letter, application
+answers, job-fit analysis, and interview preparation** and assembles them into a
+versioned, truth-grounded **ApplicationKit** (`application-kit/v3`, see
+`ats_engine.kit`). LinkedIn outreach remains a future capability and is not yet
+implemented. Never describe an unimplemented feature as done.
 
 ## 2. The core principle: deterministic-first, truth-grounded generation
 
@@ -58,6 +57,11 @@ This is the product's differentiator and the most important rule in this repo.
 - **Never silently swallow a validation failure.** Surface it; classify it
   (see `ats_engine.validation.severity`); block delivery when it is truth-critical
   or structural.
+- **STAR stories are single-context evidence products.** Never blend employers,
+  roles, or education into one event. Never infer a project, action, result,
+  metric, client, team size, or leadership from a skill. Mark a STAR candidate
+  complete only when all material fields are explicitly evidenced by the same
+  source context; an incomplete truthful outline is preferable to fabrication.
 
 ## 3. Architecture boundaries
 

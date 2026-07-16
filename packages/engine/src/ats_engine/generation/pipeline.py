@@ -42,10 +42,9 @@ hardcoded personal data is involved. When a provider is available it raises
 generation quality; when it is not, every step falls back to deterministic,
 validator-checked logic so the pipeline keeps working.
 
-Note (Phase 0 scope): this produces a tailored resume, cover letter, and
-application answers. The broader "application kit" (job-fit analysis narrative,
-interview prep, LinkedIn outreach) is future work and is intentionally NOT
-implemented here — no ``generate_kit`` facade fabricates those artifacts.
+This lower-level pipeline produces the resume, cover letter, and application
+answers. The grounded ApplicationKit orchestrator composes its result with
+JobFit and InterviewPrep artifacts; LinkedIn outreach remains future work.
 """
 
 

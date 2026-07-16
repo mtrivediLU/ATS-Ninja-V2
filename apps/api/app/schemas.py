@@ -46,6 +46,10 @@ class KitCreate(BaseModel):
         default=True,
         description="Generate the grounded JobFitArtifact (enabled by default).",
     )
+    include_interview_prep: bool = Field(
+        default=True,
+        description="Generate the grounded InterviewPrepArtifact (enabled by default).",
+    )
 
 
 class EvidenceRefResponse(BaseModel):
@@ -185,6 +189,97 @@ class JobFitArtifactResponse(BaseModel):
     withheld: bool = False
 
 
+class InterviewFocusAreaResponse(BaseModel):
+    requirement_id: str = ""
+    topic: str = ""
+    classification: str = "genuine_gap"
+    priority: str = "medium"
+    guidance: str = ""
+    evidence: list[EvidenceRefResponse] = Field(default_factory=list)
+
+
+class InterviewAnswerGuideResponse(BaseModel):
+    key_points: list[str] = Field(default_factory=list)
+    statements_to_avoid: list[str] = Field(default_factory=list)
+    suggested_answer: str = ""
+    honest_gap_language: str = ""
+    evidence: list[EvidenceRefResponse] = Field(default_factory=list)
+
+
+class InterviewQuestionResponse(BaseModel):
+    id: str = ""
+    category: str = "role_specific"
+    question: str = ""
+    rationale: str = ""
+    related_requirement_ids: list[str] = Field(default_factory=list)
+    priority: str = "medium"
+    answer_guide: InterviewAnswerGuideResponse = Field(default_factory=InterviewAnswerGuideResponse)
+    evidence: list[EvidenceRefResponse] = Field(default_factory=list)
+    gap_relevance: str = ""
+    validation: ArtifactValidationResponse = Field(default_factory=ArtifactValidationResponse)
+
+
+class StarStoryResponse(BaseModel):
+    id: str = ""
+    source_type: str = "professional"
+    employer_or_institution: str = ""
+    title_or_degree: str = ""
+    situation: str = ""
+    task: str = ""
+    action: str = ""
+    result: str = ""
+    completeness: str = "incomplete"
+    missing_components: list[str] = Field(default_factory=list)
+    safe_usage_guidance: str = ""
+    evidence: list[EvidenceRefResponse] = Field(default_factory=list)
+    validation: ArtifactValidationResponse = Field(default_factory=ArtifactValidationResponse)
+
+
+class TechnicalStudyTopicResponse(BaseModel):
+    requirement_id: str = ""
+    topic: str = ""
+    reason: str = ""
+    boundary: str = ""
+    priority: str = "medium"
+
+
+class GapHandlingGuideResponse(BaseModel):
+    requirement_id: str = ""
+    requirement: str = ""
+    classification: str = "genuine_gap"
+    must_have: bool = False
+    guidance: str = ""
+    what_to_avoid: list[str] = Field(default_factory=list)
+    evidence: list[EvidenceRefResponse] = Field(default_factory=list)
+
+
+class InterviewerQuestionResponse(BaseModel):
+    id: str = ""
+    question: str = ""
+    rationale: str = ""
+    source: str = ""
+
+
+class InterviewPrepArtifactResponse(BaseModel):
+    """Structured, deterministic-authoritative interview preparation."""
+
+    strategy_summary: str = ""
+    focus_areas: list[InterviewFocusAreaResponse] = Field(default_factory=list)
+    questions: list[InterviewQuestionResponse] = Field(default_factory=list)
+    star_stories: list[StarStoryResponse] = Field(default_factory=list)
+    technical_study_topics: list[TechnicalStudyTopicResponse] = Field(default_factory=list)
+    gap_handling: list[GapHandlingGuideResponse] = Field(default_factory=list)
+    positioning_recommendations: list[PositioningRecommendationResponse] = Field(default_factory=list)
+    interviewer_questions: list[InterviewerQuestionResponse] = Field(default_factory=list)
+    validation: ArtifactValidationResponse = Field(default_factory=ArtifactValidationResponse)
+    consistency: ConsistencyValidationResponse = Field(default_factory=ConsistencyValidationResponse)
+    generation: GenerationMetadataResponse = Field(default_factory=GenerationMetadataResponse)
+    claims: list[ClaimResponse] = Field(default_factory=list)
+    evidence: list[EvidenceRefResponse] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    withheld: bool = False
+
+
 class ApplicationKitResponse(BaseModel):
     """The versioned, truth-grounded application kit as returned by the API."""
 
@@ -199,6 +294,7 @@ class ApplicationKitResponse(BaseModel):
     cover_letter: CoverLetterArtifactResponse | None = None
     answers: AnswerArtifactResponse | None = None
     job_fit: JobFitArtifactResponse | None = None
+    interview_prep: InterviewPrepArtifactResponse | None = None
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -211,6 +307,7 @@ class KitRead(BaseModel):
     status: KitStatus
     requested_mode: str
     include_job_fit: bool = True
+    include_interview_prep: bool = True
     result: ApplicationKitResponse | None = None
     error: str | None = None
     created_at: datetime

@@ -9,7 +9,7 @@ This module is the engine's *public, persistable* representation of a generated
 application kit. It is deliberately:
 
 - **Versioned.** ``SCHEMA_VERSION`` is an explicit, human-readable string
-  (``application-kit/v1``) so a stored kit always declares which contract it was
+  (currently ``application-kit/v3``) so a stored kit always declares which contract it was
   written under. A bare integer with ambiguous meaning is intentionally avoided.
 - **Truthful by construction.** Every candidate-specific claim the AI produced is
   represented as a :class:`ClaimRecord` with an explicit :class:`ClaimStatus` and
@@ -19,21 +19,23 @@ application kit. It is deliberately:
   nested dataclasses — no engine-internal implementation objects, no pickled
   state (see :mod:`ats_engine.kit.serialization`).
 
-Scope note (Phase 2B1): the modelled artifacts are a tailored resume, cover
-letter, application answers, and an optional grounded job-fit assessment.
-Interview preparation and LinkedIn outreach remain intentionally absent.
+Scope note (Phase 2B2): the modelled artifacts are a tailored resume, cover
+letter, application answers, an optional grounded job-fit assessment, and an
+optional grounded interview-preparation artifact. LinkedIn outreach remains
+intentionally absent.
 """
 
 # Explicit, self-describing contract identifiers. Bump these when the shape or
 # meaning of the persisted contract changes; the value is stored on every kit.
 APPLICATION_KIT_V1 = "application-kit/v1"
-SCHEMA_VERSION = "application-kit/v2"
+APPLICATION_KIT_V2 = "application-kit/v2"
+SCHEMA_VERSION = "application-kit/v3"
 
 # The orchestration contract version identifies the grounded-generation behavior
 # (claim extraction + repair/rejection policy). It participates in cache identity
 # (see ADR-0013) so a change in grounding behavior never reuses prose produced by
 # an older contract.
-ORCHESTRATION_VERSION = "grounded-orchestration/v2"
+ORCHESTRATION_VERSION = "grounded-orchestration/v3"
 
 # Bound every evidence excerpt so the trace never becomes a second copy of the
 # candidate's resume (privacy: see ADR-0008).
@@ -48,6 +50,41 @@ class ArtifactKind(StrEnum):
     COVER_LETTER = "cover_letter"
     ANSWERS = "answers"
     JOB_FIT = "job_fit"
+    INTERVIEW_PREP = "interview_prep"
+
+
+class InterviewQuestionCategory(StrEnum):
+    """Deterministic category for a question to prepare for."""
+
+    MOTIVATION = "motivation"
+    BEHAVIORAL = "behavioral"
+    TECHNICAL = "technical"
+    ROLE_SPECIFIC = "role_specific"
+    STAKEHOLDER = "stakeholder"
+    PROBLEM_SOLVING = "problem_solving"
+    GAP_CLARIFICATION = "gap_clarification"
+
+
+class InterviewPriority(StrEnum):
+    """Rule-derived preparation priority; never a probability."""
+
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
+class StarCompleteness(StrEnum):
+    """Whether every material STAR field has direct source evidence."""
+
+    COMPLETE = "complete"
+    INCOMPLETE = "incomplete"
+
+
+class StarSourceType(StrEnum):
+    """Source context that a STAR candidate must remain within."""
+
+    PROFESSIONAL = "professional"
+    EDUCATION = "education"
 
 
 class FitBand(StrEnum):
@@ -267,6 +304,119 @@ class JobFitArtifact:
 
 
 @dataclass(slots=True)
+class InterviewFocusArea:
+    """One requirement-derived topic the candidate should prepare."""
+
+    requirement_id: str
+    topic: str
+    classification: RequirementClassification
+    priority: InterviewPriority
+    guidance: str
+    evidence: list[EvidenceRef] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class InterviewAnswerGuide:
+    """Grounded outline for answering one likely interview question."""
+
+    key_points: list[str]
+    statements_to_avoid: list[str]
+    suggested_answer: str
+    honest_gap_language: str = ""
+    evidence: list[EvidenceRef] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class InterviewQuestion:
+    """A deterministic question-to-prepare contract."""
+
+    id: str
+    category: InterviewQuestionCategory
+    question: str
+    rationale: str
+    related_requirement_ids: list[str]
+    priority: InterviewPriority
+    answer_guide: InterviewAnswerGuide
+    evidence: list[EvidenceRef] = field(default_factory=list)
+    gap_relevance: str = ""
+    validation: ArtifactValidation = field(default_factory=lambda: ArtifactValidation(status=ArtifactStatus.GENERATED))
+
+
+@dataclass(slots=True)
+class StarStoryCandidate:
+    """One single-context, evidence-bounded STAR outline."""
+
+    id: str
+    source_type: StarSourceType
+    employer_or_institution: str
+    title_or_degree: str
+    situation: str
+    task: str
+    action: str
+    result: str
+    completeness: StarCompleteness
+    missing_components: list[str]
+    safe_usage_guidance: str
+    evidence: list[EvidenceRef] = field(default_factory=list)
+    validation: ArtifactValidation = field(default_factory=lambda: ArtifactValidation(status=ArtifactStatus.GENERATED))
+
+
+@dataclass(slots=True)
+class TechnicalStudyTopic:
+    """A JD topic to study, explicitly not a candidate-experience claim."""
+
+    requirement_id: str
+    topic: str
+    reason: str
+    boundary: str
+    priority: InterviewPriority
+
+
+@dataclass(slots=True)
+class GapHandlingGuide:
+    """Honest guidance for discussing a genuine or bounded capability gap."""
+
+    requirement_id: str
+    requirement: str
+    classification: RequirementClassification
+    must_have: bool
+    guidance: str
+    what_to_avoid: list[str]
+    evidence: list[EvidenceRef] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class InterviewerQuestion:
+    """A neutral question based only on the supplied JD or missing role detail."""
+
+    id: str
+    question: str
+    rationale: str
+    source: str
+
+
+@dataclass(slots=True)
+class InterviewPrepArtifact:
+    """Structured, truth-grounded interview preparation."""
+
+    strategy_summary: str
+    focus_areas: list[InterviewFocusArea]
+    questions: list[InterviewQuestion]
+    star_stories: list[StarStoryCandidate]
+    technical_study_topics: list[TechnicalStudyTopic]
+    gap_handling: list[GapHandlingGuide]
+    positioning_recommendations: list[PositioningRecommendation]
+    interviewer_questions: list[InterviewerQuestion]
+    validation: ArtifactValidation
+    consistency: ConsistencyValidation
+    generation: GenerationMetadata
+    claims: list[ClaimRecord] = field(default_factory=list)
+    evidence: list[EvidenceRef] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    withheld: bool = False
+
+
+@dataclass(slots=True)
 class ValidationSummary:
     """Kit-wide validation roll-up.
 
@@ -316,12 +466,13 @@ class ApplicationKit:
     cover_letter: CoverLetterArtifact | None = None
     answers: AnswerArtifact | None = None
     job_fit: JobFitArtifact | None = None
+    interview_prep: InterviewPrepArtifact | None = None
     warnings: list[str] = field(default_factory=list)
 
     def all_claims(self) -> list[ClaimRecord]:
         """Every claim record across all artifacts (the full grounding trace)."""
         claims: list[ClaimRecord] = []
-        for artifact in (self.resume, self.cover_letter, self.answers, self.job_fit):
+        for artifact in (self.resume, self.cover_letter, self.answers, self.job_fit, self.interview_prep):
             if artifact is not None:
                 claims.extend(artifact.claims)
         return claims

@@ -1,6 +1,6 @@
 """The versioned ApplicationKit contract and grounded generation orchestration.
 
-Public surface for Phase 2A. Callers (the API service, the worker, tests) should
+Public surface through Phase 2B2. Callers (the API service, the worker, tests) should
 import from here rather than from private submodules.
 
 - :func:`generate_application_kit` — the single orchestration entry point.
@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from ats_engine.kit.contract import (
     APPLICATION_KIT_V1,
+    APPLICATION_KIT_V2,
     ORCHESTRATION_VERSION,
     SCHEMA_VERSION,
     AnswerArtifact,
@@ -29,13 +30,25 @@ from ats_engine.kit.contract import (
     CoverLetterArtifact,
     EvidenceRef,
     FitBand,
+    GapHandlingGuide,
     GenerationMetadata,
+    InterviewAnswerGuide,
+    InterviewerQuestion,
+    InterviewFocusArea,
+    InterviewPrepArtifact,
+    InterviewPriority,
+    InterviewQuestion,
+    InterviewQuestionCategory,
     JobFitArtifact,
     PositioningRecommendation,
     RequirementAssessment,
     RequirementClassification,
     RequirementRisk,
     ResumeArtifact,
+    StarCompleteness,
+    StarSourceType,
+    StarStoryCandidate,
+    TechnicalStudyTopic,
     ValidationSummary,
 )
 from ats_engine.kit.orchestrator import generate_application_kit
@@ -45,12 +58,14 @@ from ats_engine.kit.serialization import (
     application_kit_to_dict,
     is_application_kit_v1,
     is_application_kit_v2,
+    is_application_kit_v3,
     normalize_persisted_result,
 )
 
 __all__ = [
     "ORCHESTRATION_VERSION",
     "APPLICATION_KIT_V1",
+    "APPLICATION_KIT_V2",
     "SCHEMA_VERSION",
     "LEGACY_SCHEMA_VERSION",
     "AnswerArtifact",
@@ -65,6 +80,14 @@ __all__ = [
     "CoverLetterArtifact",
     "EvidenceRef",
     "GenerationMetadata",
+    "GapHandlingGuide",
+    "InterviewAnswerGuide",
+    "InterviewFocusArea",
+    "InterviewPrepArtifact",
+    "InterviewPriority",
+    "InterviewQuestion",
+    "InterviewQuestionCategory",
+    "InterviewerQuestion",
     "ConsistencyValidation",
     "FitBand",
     "JobFitArtifact",
@@ -73,11 +96,16 @@ __all__ = [
     "RequirementClassification",
     "RequirementRisk",
     "ResumeArtifact",
+    "StarCompleteness",
+    "StarSourceType",
+    "StarStoryCandidate",
+    "TechnicalStudyTopic",
     "ValidationSummary",
     "generate_application_kit",
     "application_kit_from_dict",
     "application_kit_to_dict",
     "is_application_kit_v1",
     "is_application_kit_v2",
+    "is_application_kit_v3",
     "normalize_persisted_result",
 ]
