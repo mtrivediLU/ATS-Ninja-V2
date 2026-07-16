@@ -4,6 +4,7 @@ import re
 
 from ats_engine.evidence.adjacency import find_category
 from ats_engine.models import EvidenceItem, JDProfile, Profile
+from ats_engine.parsing.resume import term_in_text_affirmative
 
 """The evidence matrix and gap ladder.
 
@@ -137,9 +138,10 @@ def _tier_lookup(normalized_keyword: str, profile: Profile) -> tuple[str, str]:
     # The deterministic resume parser intentionally keeps the skills section
     # lightweight, so backstop Tier A directly from parsed experience bullets.
     # This is evidence, not inference: the exact JD term must be present in a
-    # candidate-authored bullet.
+    # candidate-authored bullet, in an AFFIRMATIVE clause — "I have no Kubernetes
+    # experience" or "currently exploring Rust" must never count as proof.
     for experience in profile.experiences:
-        if any(_term_in_text(normalized_keyword, bullet) for bullet in experience.bullets):
+        if any(term_in_text_affirmative(normalized_keyword, bullet) for bullet in experience.bullets):
             return "A", normalized_keyword
     return "", ""
 
@@ -157,7 +159,11 @@ def _adjacency_lookup(normalized_keyword: str, profile: Profile) -> str:
             continue
         if tool in candidate_evidence:
             return f"{label} ({candidate_evidence[tool]})"
-        if any(_term_in_text(tool, bullet) for experience in profile.experiences for bullet in experience.bullets):
+        if any(
+            term_in_text_affirmative(tool, bullet)
+            for experience in profile.experiences
+            for bullet in experience.bullets
+        ):
             return f"{label} ({tool})"
     return ""
 
@@ -171,7 +177,3 @@ def _term_matches(term: str, keyword: str) -> bool:
         re.search(rf"(?<![\w+#.-]){re.escape(term)}(?![\w+#.-])", keyword)
         or re.search(rf"(?<![\w+#.-]){re.escape(keyword)}(?![\w+#.-])", term)
     )
-
-
-def _term_in_text(term: str, text: str) -> bool:
-    return bool(re.search(rf"(?<![\w+#.-]){re.escape(term)}(?![\w+#.-])", text, flags=re.IGNORECASE))
