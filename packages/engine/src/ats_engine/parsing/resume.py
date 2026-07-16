@@ -308,9 +308,9 @@ def _tier_skills(
         normalized = skill.lower().strip()
         if not normalized:
             continue
-        if term_in_text(normalized, bullet_text):
+        if term_in_text_affirmative(normalized, bullet_text):
             tier_a[normalized] = skill
-        elif term_in_text(normalized, summary_lower):
+        elif term_in_text_affirmative(normalized, summary_lower):
             tier_b[normalized] = skill
         else:
             tier_c[normalized] = skill
@@ -349,6 +349,41 @@ def term_in_text(term: str, text: str) -> bool:
     if not term or not text:
         return False
     return bool(re.search(rf"(?<![\w+#.-]){re.escape(term)}(?![\w+#.-])", text))
+
+
+# A bare word-boundary match cannot distinguish "Built systems using Kubernetes"
+# from "I have no Kubernetes experience" or "currently exploring Rust" — both
+# contain the term but assert the OPPOSITE, or a non-current capability. Every
+# caller that treats a term's presence in candidate-authored text as *proof* of
+# a skill (evidence tiering) must use the affirmative-clause-aware check below
+# instead of a raw substring/word-boundary test.
+_NEGATION_OR_ASPIRATION = re.compile(
+    r"\b(?:no|not|never|without|lack(?:s|ing)?|isn.t|wasn.t|aren.t|weren.t|doesn.t|don.t|didn.t|"
+    r"haven.t|hasn.t|hadn.t|"
+    r"currently\s+(?:exploring|learning|studying)|exploring|learning|studying|"
+    r"planning\s+to|hop(?:e|ing)\s+to|aspir(?:e|ing)\s+to|interested\s+in|considering|"
+    r"want(?:s|ing)?\s+to|would\s+like\s+to|looking\s+to|not\s+yet|in\s+progress)\b",
+    re.IGNORECASE,
+)
+
+
+def term_in_text_affirmative(term: str, text: str) -> bool:
+    """True when ``term`` appears in an affirmative clause of ``text``.
+
+    Evidence tiering must never treat a negated ("no Kubernetes experience") or
+    aspirational ("currently exploring Rust", "interested in AWS certification")
+    mention as proof of a candidate skill. The check is clause-scoped (split on
+    sentence/semicolon boundaries) so a negation elsewhere in a multi-clause
+    bullet does not suppress genuine evidence in another clause of the same line.
+
+    Case-insensitive regardless of caller normalization, matching the
+    case-insensitive behavior callers have always relied on for this check.
+    """
+    lowered_term = (term or "").lower()
+    for clause in re.split(r"[.!?;\n]+", (text or "").lower()):
+        if term_in_text(lowered_term, clause) and not _NEGATION_OR_ASPIRATION.search(clause):
+            return True
+    return False
 
 
 def _normalize(text: str) -> str:

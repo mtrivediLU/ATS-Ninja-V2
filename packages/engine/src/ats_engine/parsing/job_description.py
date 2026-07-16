@@ -157,7 +157,13 @@ def _parse_jd_heuristic(job_description: str, profile: Profile) -> JDProfile:
     title = _extract_title(text, lines)
     company = _extract_company(text, lines)
     required = _extract_section_items(
-        lines, ["required", "requirements", "qualifications", "must have", "what we are looking for"]
+        lines,
+        ["required", "requirements", "qualifications", "must have", "what we are looking for"],
+        # "qualifications" alone would otherwise also match a "Preferred
+        # qualifications:" heading, absorbing the preferred section's bullets
+        # into the required list. A stop heading always ends the section, even
+        # though it shares a word with a start heading.
+        stop_headings=["preferred", "nice to have", "bonus"],
     )
     preferred = _extract_section_items(lines, ["preferred", "nice to have", "bonus"])
     responsibilities = _extract_section_items(
@@ -294,11 +300,16 @@ def _extract_company(text: str, lines: list[str]) -> str:
     return ""
 
 
-def _extract_section_items(lines: list[str], headings: list[str]) -> list[str]:
+def _extract_section_items(lines: list[str], headings: list[str], stop_headings: list[str] | None = None) -> list[str]:
     items: list[str] = []
     active = False
     for line in lines:
         lowered = line.lower().strip(":")
+        # A stop heading always ends the section first, even if the same line
+        # also happens to contain one of our own (generic) start headings.
+        if active and stop_headings and any(stop in lowered for stop in stop_headings) and len(line) < 80:
+            active = False
+            continue
         if any(heading in lowered for heading in headings) and len(line) < 80:
             active = True
             continue
