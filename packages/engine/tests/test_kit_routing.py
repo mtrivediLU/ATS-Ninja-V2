@@ -174,7 +174,7 @@ def test_counting_provider_identity_carries_contract_salt() -> None:
     wrapped = CountingProvider(_Fixed("x", identity="ollama:llama3.2"), stats)
     assert wrapped.identity.startswith("ollama:llama3.2")
     assert "orch=" in wrapped.identity
-    assert "application-kit/v2" in wrapped.identity
+    assert "application-kit/v3" in wrapped.identity
 
 
 def test_cache_key_changes_with_contract_and_provider_but_hides_raw_text() -> None:

@@ -33,11 +33,15 @@ async def test_submit_kit_runs_lifecycle_to_completion(client: httpx.AsyncClient
     assert kit["status"] == "completed"
     result = kit["result"]
     # The versioned ApplicationKit contract with typed artifacts.
-    assert result["schema_version"] == "application-kit/v2"
+    assert result["schema_version"] == "application-kit/v3"
     assert result["job_fit"] is not None
     assert result["job_fit"]["requirements"]
     assert result["job_fit"]["consistency"]["passed"] is True
     assert kit["include_job_fit"] is True
+    assert kit["include_interview_prep"] is True
+    assert result["interview_prep"] is not None
+    assert result["interview_prep"]["questions"]
+    assert result["interview_prep"]["consistency"]["passed"] is True
     assert result["resume"]["text"]
     assert result["cover_letter"]["text"]
     assert result["resume"]["latex"].startswith("\\documentclass")
@@ -97,6 +101,28 @@ async def test_submit_kit_rejects_empty_inputs(client: httpx.AsyncClient) -> Non
     assert response.status_code == 422
 
 
+async def test_openapi_exposes_interview_prep_request_and_typed_response(client: httpx.AsyncClient) -> None:
+    response = await client.get("/openapi.json")
+    assert response.status_code == 200
+    schemas = response.json()["components"]["schemas"]
+    create_properties = schemas["KitCreate"]["properties"]
+    assert create_properties["include_interview_prep"]["default"] is True
+    assert "InterviewPrepArtifactResponse" in schemas
+    prep_properties = schemas["InterviewPrepArtifactResponse"]["properties"]
+    assert {
+        "strategy_summary",
+        "focus_areas",
+        "questions",
+        "star_stories",
+        "technical_study_topics",
+        "gap_handling",
+        "interviewer_questions",
+        "validation",
+        "consistency",
+        "claims",
+    } <= prep_properties.keys()
+
+
 async def test_submit_kit_can_persistently_disable_job_fit(client: httpx.AsyncClient) -> None:
     response = await client.post(
         "/api/v1/kits",
@@ -110,8 +136,31 @@ async def test_submit_kit_can_persistently_disable_job_fit(client: httpx.AsyncCl
     fetched = await client.get(f"/api/v1/kits/{response.json()['id']}")
     body = fetched.json()
     assert body["include_job_fit"] is False
-    assert body["result"]["schema_version"] == "application-kit/v2"
+    assert body["result"]["schema_version"] == "application-kit/v3"
     assert body["result"]["job_fit"] is None
+    assert body["include_interview_prep"] is True
+    assert body["result"]["interview_prep"] is not None
+
+
+async def test_submit_kit_can_persistently_disable_interview_prep_independently(
+    client: httpx.AsyncClient,
+) -> None:
+    response = await client.post(
+        "/api/v1/kits",
+        json={
+            "resume_text": SAMPLE_RESUME,
+            "job_description": SAMPLE_JD,
+            "include_job_fit": True,
+            "include_interview_prep": False,
+        },
+    )
+    assert response.status_code == 202
+    fetched = await client.get(f"/api/v1/kits/{response.json()['id']}")
+    body = fetched.json()
+    assert body["include_job_fit"] is True
+    assert body["include_interview_prep"] is False
+    assert body["result"]["job_fit"] is not None
+    assert body["result"]["interview_prep"] is None
 
 
 async def test_list_kits_paginates(client: httpx.AsyncClient) -> None:
@@ -158,8 +207,9 @@ async def test_process_kit_completes_and_persists_result(
         assert done is not None
         assert done.status == KitStatus.COMPLETED
         assert done.result is not None
-        assert done.result["schema_version"] == "application-kit/v2"
+        assert done.result["schema_version"] == "application-kit/v3"
         assert done.result["job_fit"] is not None
+        assert done.result["interview_prep"] is not None
         assert done.result["resume"]["text"]
         assert done.result["validation"]["passed"] is True
 

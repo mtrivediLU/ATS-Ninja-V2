@@ -26,6 +26,11 @@ def test_every_eval_case_produces_a_versioned_kit_with_requested_artifacts() -> 
         assert result.job_fit_present, result.name
         assert result.job_fit_consistent, result.name
         assert result.missing_job_fit_expectations == [], result.name
+        assert result.interview_prep_present, result.name
+        assert result.interview_prep_consistent, result.name
+        assert result.interview_star_integrity, result.name
+        assert result.interview_gap_visibility, result.name
+        assert result.interview_truth_violations == [], result.name
 
 
 def test_cases_cover_the_intended_scenarios() -> None:
@@ -39,6 +44,8 @@ def test_cases_cover_the_intended_scenarios() -> None:
         "metric-rich",
         "working-knowledge",
         "must-have-gap",
+        "complete-star-evidence",
+        "incomplete-star-evidence",
     } <= names
 
 

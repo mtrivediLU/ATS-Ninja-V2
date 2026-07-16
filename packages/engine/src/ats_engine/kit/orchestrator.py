@@ -13,6 +13,7 @@ from ats_engine.generation.resume import (
     generate_resume_latex,
     generate_resume_text,
 )
+from ats_engine.interview_prep import build_interview_prep_artifact
 from ats_engine.job_fit import build_job_fit_artifact
 from ats_engine.kit.contract import (
     ORCHESTRATION_VERSION,
@@ -26,6 +27,7 @@ from ats_engine.kit.contract import (
     ClaimRecord,
     CoverLetterArtifact,
     GenerationMetadata,
+    InterviewPrepArtifact,
     JobFitArtifact,
     ResumeArtifact,
     ValidationSummary,
@@ -78,6 +80,7 @@ def generate_application_kit(
     prose_provider: LLMProvider | None = None,
     fallback_provider: LLMProvider | None = None,
     include_job_fit: bool = True,
+    include_interview_prep: bool = True,
 ) -> ApplicationKit:
     """Generate a truth-grounded, versioned ApplicationKit."""
     resolved_settings = settings or EngineSettings.from_env()
@@ -155,25 +158,37 @@ def generate_application_kit(
         else None
     )
 
-    job_fit_artifact = None
-    if include_job_fit and result.resume_plan is not None:
-        job_fit_artifact = build_job_fit_artifact(
+    job_fit_assessment = None
+    if (include_job_fit or include_interview_prep) and result.resume_plan is not None:
+        job_fit_assessment = build_job_fit_artifact(
             plan=result.resume_plan,
             profile=profile,
             jd_profile=result.jd_profile,
             resume_text=resume_text,
             job_description=job_description,
             context=context,
+            provider=resolved.prose if include_job_fit else None,
+        )
+    job_fit_artifact = job_fit_assessment if include_job_fit else None
+    interview_prep_artifact = None
+    if include_interview_prep and job_fit_assessment is not None:
+        interview_prep_artifact = build_interview_prep_artifact(
+            profile=profile,
+            jd_profile=result.jd_profile,
+            job_fit=job_fit_assessment,
+            context=context,
             provider=resolved.prose,
         )
 
     validation = _kit_validation(
         result.validation_errors,
-        [resume_artifact, cover_artifact, answers_artifact, job_fit_artifact],
+        [resume_artifact, cover_artifact, answers_artifact, job_fit_artifact, interview_prep_artifact],
     )
     generation = _generation_metadata(resolved)
     if job_fit_artifact is not None:
         job_fit_artifact.generation = generation
+    if interview_prep_artifact is not None:
+        interview_prep_artifact.generation = generation
 
     from ats_engine import __version__ as engine_version
 
@@ -189,6 +204,7 @@ def generate_application_kit(
         cover_letter=cover_artifact,
         answers=answers_artifact,
         job_fit=job_fit_artifact,
+        interview_prep=interview_prep_artifact,
     )
 
 
@@ -410,7 +426,9 @@ def _build_answers_artifact(
 
 def _kit_validation(
     errors: list[str],
-    artifacts: list[ResumeArtifact | CoverLetterArtifact | AnswerArtifact | JobFitArtifact | None],
+    artifacts: list[
+        ResumeArtifact | CoverLetterArtifact | AnswerArtifact | JobFitArtifact | InterviewPrepArtifact | None
+    ],
 ) -> ValidationSummary:
     fatal_errors, warnings = partition_validation_errors(errors)
     fatal = any(artifact is not None and artifact.validation.fatal for artifact in artifacts)

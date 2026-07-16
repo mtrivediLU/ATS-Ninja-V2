@@ -2,8 +2,8 @@
 
 The ATS-Ninja-V2 FastAPI backend.
 
-**Current scope:** the async **kit lifecycle** plus ApplicationKit v2 and the
-default-on grounded JobFitArtifact — persistence
+**Current scope:** the async **kit lifecycle** plus ApplicationKit v3 and the
+default-on grounded JobFitArtifact and InterviewPrepArtifact — persistence
 (async SQLAlchemy 2.x + Alembic + PostgreSQL), a Redis-backed job queue, a
 separately-runnable worker, and kit endpoints — on top of the Phase 0 health +
 settings plumbing.
@@ -17,6 +17,11 @@ settings plumbing.
 
 **Not yet implemented (future phases):** authentication, credits/billing,
 PDF-upload ingestion. No placeholder endpoints pretend these exist.
+
+Creation accepts independent, persisted `include_job_fit` and
+`include_interview_prep` booleans (both default `true`). Interview preparation
+may use an internal deterministic fit assessment even when JobFit persistence is
+disabled; completed results remain in PostgreSQL's existing JSON result column.
 
 All career business logic lives in `packages/engine` (`ats-engine`); this service
 persists, queues, and orchestrates it — it owns no domain logic.
