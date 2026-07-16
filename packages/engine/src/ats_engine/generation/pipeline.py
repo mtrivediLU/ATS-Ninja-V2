@@ -44,7 +44,7 @@ validator-checked logic so the pipeline keeps working.
 
 This lower-level pipeline produces the resume, cover letter, and application
 answers. The grounded ApplicationKit orchestrator composes its result with
-JobFit and InterviewPrep artifacts; LinkedIn outreach remains future work.
+JobFit, InterviewPrep, and LinkedInOutreach artifacts.
 """
 
 

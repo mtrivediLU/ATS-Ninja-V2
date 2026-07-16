@@ -1,6 +1,6 @@
 """The versioned ApplicationKit contract and grounded generation orchestration.
 
-Public surface through Phase 2B2. Callers (the API service, the worker, tests) should
+Public surface through Phase 2B3. Callers (the API service, the worker, tests) should
 import from here rather than from private submodules.
 
 - :func:`generate_application_kit` — the single orchestration entry point.
@@ -15,6 +15,7 @@ from __future__ import annotations
 from ats_engine.kit.contract import (
     APPLICATION_KIT_V1,
     APPLICATION_KIT_V2,
+    APPLICATION_KIT_V3,
     ORCHESTRATION_VERSION,
     SCHEMA_VERSION,
     AnswerArtifact,
@@ -40,7 +41,16 @@ from ats_engine.kit.contract import (
     InterviewQuestion,
     InterviewQuestionCategory,
     JobFitArtifact,
+    LinkedInOutreachArtifact,
+    OutreachAudience,
+    OutreachContext,
+    OutreachContextKind,
+    OutreachContextRef,
+    OutreachDraft,
+    OutreachFormat,
+    OutreachIntent,
     PositioningRecommendation,
+    RelationshipValidation,
     RequirementAssessment,
     RequirementClassification,
     RequirementRisk,
@@ -59,6 +69,7 @@ from ats_engine.kit.serialization import (
     is_application_kit_v1,
     is_application_kit_v2,
     is_application_kit_v3,
+    is_application_kit_v4,
     normalize_persisted_result,
 )
 
@@ -66,6 +77,7 @@ __all__ = [
     "ORCHESTRATION_VERSION",
     "APPLICATION_KIT_V1",
     "APPLICATION_KIT_V2",
+    "APPLICATION_KIT_V3",
     "SCHEMA_VERSION",
     "LEGACY_SCHEMA_VERSION",
     "AnswerArtifact",
@@ -91,10 +103,19 @@ __all__ = [
     "ConsistencyValidation",
     "FitBand",
     "JobFitArtifact",
+    "LinkedInOutreachArtifact",
+    "OutreachAudience",
+    "OutreachContext",
+    "OutreachContextKind",
+    "OutreachContextRef",
+    "OutreachDraft",
+    "OutreachFormat",
+    "OutreachIntent",
     "PositioningRecommendation",
     "RequirementAssessment",
     "RequirementClassification",
     "RequirementRisk",
+    "RelationshipValidation",
     "ResumeArtifact",
     "StarCompleteness",
     "StarSourceType",
@@ -107,5 +128,6 @@ __all__ = [
     "is_application_kit_v1",
     "is_application_kit_v2",
     "is_application_kit_v3",
+    "is_application_kit_v4",
     "normalize_persisted_result",
 ]

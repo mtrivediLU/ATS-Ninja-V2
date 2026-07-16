@@ -5,6 +5,7 @@ from typing import Any
 from ats_engine.kit.contract import (
     APPLICATION_KIT_V1,
     APPLICATION_KIT_V2,
+    APPLICATION_KIT_V3,
     SCHEMA_VERSION,
     AnswerArtifact,
     AnswerItem,
@@ -29,7 +30,15 @@ from ats_engine.kit.contract import (
     InterviewQuestion,
     InterviewQuestionCategory,
     JobFitArtifact,
+    LinkedInOutreachArtifact,
+    OutreachAudience,
+    OutreachContextKind,
+    OutreachContextRef,
+    OutreachDraft,
+    OutreachFormat,
+    OutreachIntent,
     PositioningRecommendation,
+    RelationshipValidation,
     RequirementAssessment,
     RequirementClassification,
     RequirementRisk,
@@ -79,6 +88,9 @@ def application_kit_to_dict(kit: ApplicationKit) -> dict[str, Any]:
         "answers": _answers_to_dict(kit.answers) if kit.answers is not None else None,
         "job_fit": _job_fit_to_dict(kit.job_fit) if kit.job_fit is not None else None,
         "interview_prep": (_interview_prep_to_dict(kit.interview_prep) if kit.interview_prep is not None else None),
+        "linkedin_outreach": (
+            _linkedin_outreach_to_dict(kit.linkedin_outreach) if kit.linkedin_outreach is not None else None
+        ),
         "warnings": list(kit.warnings),
     }
 
@@ -284,6 +296,55 @@ def _interview_prep_to_dict(artifact: InterviewPrepArtifact) -> dict[str, Any]:
     }
 
 
+def _context_ref_to_dict(ref: OutreachContextRef) -> dict[str, Any]:
+    return {"kind": ref.kind.value, "field": ref.field, "excerpt": ref.excerpt}
+
+
+def _outreach_draft_to_dict(draft: OutreachDraft) -> dict[str, Any]:
+    return {
+        "id": draft.id,
+        "audience": draft.audience.value,
+        "intent": draft.intent.value,
+        "format": draft.format.value,
+        "text": draft.text,
+        "character_count": draft.character_count,
+        "character_limit": draft.character_limit,
+        "target_company": draft.target_company,
+        "target_role": draft.target_role,
+        "personalization_fields": list(draft.personalization_fields),
+        "call_to_action": draft.call_to_action,
+        "evidence": [_evidence_to_dict(ref) for ref in draft.evidence],
+        "target_context": [_context_ref_to_dict(ref) for ref in draft.target_context],
+        "relationship_context": [_context_ref_to_dict(ref) for ref in draft.relationship_context],
+        "validation": _artifact_validation_to_dict(draft.validation),
+    }
+
+
+def _linkedin_outreach_to_dict(artifact: LinkedInOutreachArtifact) -> dict[str, Any]:
+    return {
+        "strategy_summary": artifact.strategy_summary,
+        "drafts": [_outreach_draft_to_dict(draft) for draft in artifact.drafts],
+        "validation": _artifact_validation_to_dict(artifact.validation),
+        "consistency": {
+            "passed": artifact.consistency.passed,
+            "errors": list(artifact.consistency.errors),
+            "repaired_violations": list(artifact.consistency.repaired_violations),
+        },
+        "relationship_validation": {
+            "passed": artifact.relationship_validation.passed,
+            "errors": list(artifact.relationship_validation.errors),
+            "repaired_violations": list(artifact.relationship_validation.repaired_violations),
+        },
+        "generation": _generation_to_dict(artifact.generation),
+        "claims": [_claim_to_dict(claim) for claim in artifact.claims],
+        "evidence": [_evidence_to_dict(ref) for ref in artifact.evidence],
+        "target_context": [_context_ref_to_dict(ref) for ref in artifact.target_context],
+        "relationship_context": [_context_ref_to_dict(ref) for ref in artifact.relationship_context],
+        "warnings": list(artifact.warnings),
+        "withheld": artifact.withheld,
+    }
+
+
 def _generation_to_dict(meta: GenerationMetadata) -> dict[str, Any]:
     return {
         "generation_mode": meta.generation_mode,
@@ -324,6 +385,7 @@ def application_kit_from_dict(data: dict[str, Any]) -> ApplicationKit:
         answers=_answers_from_dict(data.get("answers")),
         job_fit=_job_fit_from_dict(data.get("job_fit")),
         interview_prep=_interview_prep_from_dict(data.get("interview_prep")),
+        linkedin_outreach=_linkedin_outreach_from_dict(data.get("linkedin_outreach")),
         warnings=[str(item) for item in data.get("warnings") or []],
     )
 
@@ -561,6 +623,63 @@ def _interview_prep_from_dict(raw: dict[str, Any] | None) -> InterviewPrepArtifa
     )
 
 
+def _context_ref_from_dict(raw: dict[str, Any]) -> OutreachContextRef:
+    return OutreachContextRef(
+        kind=OutreachContextKind(str(raw.get("kind", OutreachContextKind.TARGET_JOB.value))),
+        field=str(raw.get("field", "")),
+        excerpt=str(raw.get("excerpt", "")),
+    )
+
+
+def _outreach_draft_from_dict(raw: dict[str, Any]) -> OutreachDraft:
+    return OutreachDraft(
+        id=str(raw.get("id", "")),
+        audience=OutreachAudience(str(raw.get("audience", OutreachAudience.RECRUITER.value))),
+        intent=OutreachIntent(str(raw.get("intent", OutreachIntent.CONNECT.value))),
+        format=OutreachFormat(str(raw.get("format", OutreachFormat.CONNECTION_NOTE.value))),
+        text=str(raw.get("text", "")),
+        character_count=int(raw.get("character_count", 0)),
+        character_limit=int(raw.get("character_limit", 0)),
+        target_company=str(raw.get("target_company", "")),
+        target_role=str(raw.get("target_role", "")),
+        personalization_fields=[str(item) for item in raw.get("personalization_fields") or []],
+        call_to_action=str(raw.get("call_to_action", "")),
+        evidence=[_evidence_from_dict(ref) for ref in raw.get("evidence") or []],
+        target_context=[_context_ref_from_dict(ref) for ref in raw.get("target_context") or []],
+        relationship_context=[_context_ref_from_dict(ref) for ref in raw.get("relationship_context") or []],
+        validation=_artifact_validation_from_dict(raw.get("validation") or {}),
+    )
+
+
+def _linkedin_outreach_from_dict(raw: dict[str, Any] | None) -> LinkedInOutreachArtifact | None:
+    if raw is None:
+        return None
+    consistency = raw.get("consistency") or {}
+    relationship = raw.get("relationship_validation") or {}
+    return LinkedInOutreachArtifact(
+        strategy_summary=str(raw.get("strategy_summary", "")),
+        drafts=[_outreach_draft_from_dict(item) for item in raw.get("drafts") or []],
+        validation=_artifact_validation_from_dict(raw.get("validation") or {}),
+        consistency=ConsistencyValidation(
+            passed=bool(consistency.get("passed", False)),
+            errors=[str(item) for item in consistency.get("errors") or []],
+            repaired_violations=[str(item) for item in consistency.get("repaired_violations") or []],
+        ),
+        relationship_validation=RelationshipValidation(
+            passed=bool(relationship.get("passed", False)),
+            errors=[str(item) for item in relationship.get("errors") or []],
+            repaired_violations=[str(item) for item in relationship.get("repaired_violations") or []],
+        ),
+        generation=_generation_from_dict(raw.get("generation") or {}),
+        claims=[_claim_from_dict(item) for item in raw.get("claims") or []],
+        evidence=[_evidence_from_dict(item) for item in raw.get("evidence") or []],
+        target_context=[_context_ref_from_dict(item) for item in raw.get("target_context") or []],
+        relationship_context=[_context_ref_from_dict(item) for item in raw.get("relationship_context") or []],
+        warnings=[str(item) for item in raw.get("warnings") or []],
+        withheld=bool(raw.get("withheld", False)),
+    )
+
+
 def _generation_from_dict(raw: dict[str, Any]) -> GenerationMetadata:
     return GenerationMetadata(
         generation_mode=str(raw.get("generation_mode", "deterministic")),
@@ -600,6 +719,11 @@ def is_application_kit_v2(raw: dict[str, Any]) -> bool:
 
 def is_application_kit_v3(raw: dict[str, Any]) -> bool:
     """True when a persisted result is a v3 ApplicationKit."""
+    return str(raw.get("schema_version", "")) == APPLICATION_KIT_V3
+
+
+def is_application_kit_v4(raw: dict[str, Any]) -> bool:
+    """True when a persisted result is a v4 ApplicationKit."""
     return str(raw.get("schema_version", "")) == SCHEMA_VERSION
 
 
@@ -694,6 +818,7 @@ def adapt_legacy_result(raw: dict[str, Any]) -> dict[str, Any]:
         "answers": answers,
         "job_fit": None,
         "interview_prep": None,
+        "linkedin_outreach": None,
         "warnings": ["Served from a legacy Phase 1 result record (pre-ApplicationKit)."],
     }
 
@@ -707,16 +832,22 @@ def normalize_persisted_result(raw: dict[str, Any] | None) -> dict[str, Any] | N
     """
     if raw is None:
         return None
-    if is_application_kit_v3(raw):
+    if is_application_kit_v4(raw):
         return raw
+    if is_application_kit_v3(raw):
+        normalized = dict(raw)
+        normalized.setdefault("linkedin_outreach", None)
+        return normalized
     if is_application_kit_v2(raw):
         normalized = dict(raw)
         normalized.setdefault("interview_prep", None)
+        normalized.setdefault("linkedin_outreach", None)
         return normalized
     if is_application_kit_v1(raw):
         normalized = dict(raw)
         normalized.setdefault("job_fit", None)
         normalized.setdefault("interview_prep", None)
+        normalized.setdefault("linkedin_outreach", None)
         return normalized
     if _looks_like_phase1_result(raw):
         return adapt_legacy_result(raw)
@@ -747,5 +878,6 @@ def normalize_persisted_result(raw: dict[str, Any] | None) -> dict[str, Any] | N
         "answers": None,
         "job_fit": None,
         "interview_prep": None,
+        "linkedin_outreach": None,
         "warnings": ["Unrecognized result schema; not interpreted."],
     }

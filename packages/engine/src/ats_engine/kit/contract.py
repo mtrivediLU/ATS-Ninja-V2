@@ -9,7 +9,7 @@ This module is the engine's *public, persistable* representation of a generated
 application kit. It is deliberately:
 
 - **Versioned.** ``SCHEMA_VERSION`` is an explicit, human-readable string
-  (currently ``application-kit/v3``) so a stored kit always declares which contract it was
+  (currently ``application-kit/v4``) so a stored kit always declares which contract it was
   written under. A bare integer with ambiguous meaning is intentionally avoided.
 - **Truthful by construction.** Every candidate-specific claim the AI produced is
   represented as a :class:`ClaimRecord` with an explicit :class:`ClaimStatus` and
@@ -19,23 +19,25 @@ application kit. It is deliberately:
   nested dataclasses — no engine-internal implementation objects, no pickled
   state (see :mod:`ats_engine.kit.serialization`).
 
-Scope note (Phase 2B2): the modelled artifacts are a tailored resume, cover
+Scope note (Phase 2B3): the modelled artifacts are a tailored resume, cover
 letter, application answers, an optional grounded job-fit assessment, and an
-optional grounded interview-preparation artifact. LinkedIn outreach remains
-intentionally absent.
+optional grounded interview-preparation artifact, plus optional grounded
+LinkedIn outreach drafts. Draft generation never sends messages or accesses an
+external platform.
 """
 
 # Explicit, self-describing contract identifiers. Bump these when the shape or
 # meaning of the persisted contract changes; the value is stored on every kit.
 APPLICATION_KIT_V1 = "application-kit/v1"
 APPLICATION_KIT_V2 = "application-kit/v2"
-SCHEMA_VERSION = "application-kit/v3"
+APPLICATION_KIT_V3 = "application-kit/v3"
+SCHEMA_VERSION = "application-kit/v4"
 
 # The orchestration contract version identifies the grounded-generation behavior
 # (claim extraction + repair/rejection policy). It participates in cache identity
 # (see ADR-0013) so a change in grounding behavior never reuses prose produced by
 # an older contract.
-ORCHESTRATION_VERSION = "grounded-orchestration/v3"
+ORCHESTRATION_VERSION = "grounded-orchestration/v4"
 
 # Bound every evidence excerpt so the trace never becomes a second copy of the
 # candidate's resume (privacy: see ADR-0008).
@@ -51,6 +53,47 @@ class ArtifactKind(StrEnum):
     ANSWERS = "answers"
     JOB_FIT = "job_fit"
     INTERVIEW_PREP = "interview_prep"
+    LINKEDIN_OUTREACH = "linkedin_outreach"
+
+
+class OutreachAudience(StrEnum):
+    """Recipient class explicitly selected or supplied by the user."""
+
+    RECRUITER = "recruiter"
+    HIRING_MANAGER = "hiring_manager"
+    EMPLOYEE = "employee"
+    TEAMMATE = "teammate"
+    ALUMNI = "alumni"
+    PROFESSIONAL_CONTACT = "professional_contact"
+
+
+class OutreachIntent(StrEnum):
+    """User-requested purpose for an outreach draft."""
+
+    CONNECT = "connect"
+    DIRECT_MESSAGE = "direct_message"
+    FOLLOW_UP = "follow_up"
+    INFORMATIONAL = "informational"
+    REFERRAL_REQUEST = "referral_request"
+    SHARED_AFFILIATION = "shared_affiliation"
+
+
+class OutreachFormat(StrEnum):
+    """Product format whose centrally configured length policy applies."""
+
+    CONNECTION_NOTE = "connection_note"
+    DIRECT_MESSAGE = "direct_message"
+    FOLLOW_UP = "follow_up"
+    REFERRAL_REQUEST = "referral_request"
+
+
+class OutreachContextKind(StrEnum):
+    """Privilege boundary for a fact used in outreach."""
+
+    CANDIDATE_EVIDENCE = "candidate_evidence"
+    TARGET_JOB = "target_job"
+    RECIPIENT = "recipient"
+    RELATIONSHIP = "relationship"
 
 
 class InterviewQuestionCategory(StrEnum):
@@ -417,6 +460,88 @@ class InterviewPrepArtifact:
 
 
 @dataclass(slots=True)
+class OutreachContext:
+    """Optional, user-supplied personalization facts.
+
+    None of these values are candidate evidence. Relationship and action fields
+    authorize only the exact relationship/action they describe.
+    """
+
+    recipient_name: str = ""
+    recipient_title: str = ""
+    recipient_company: str = ""
+    audience: OutreachAudience | None = None
+    requested_intent: OutreachIntent | None = None
+    has_applied: bool | None = None
+    application_date: str = ""
+    application_status: str = ""
+    referral_contact_name: str = ""
+    shared_affiliation: str = ""
+    mutual_connection: str = ""
+    prior_meeting: str = ""
+    prior_conversation: str = ""
+    personalization_note: str = ""
+    portfolio_url: str = ""
+
+
+@dataclass(slots=True)
+class OutreachContextRef:
+    """Bounded trace to a target, recipient, or relationship input."""
+
+    kind: OutreachContextKind
+    field: str
+    excerpt: str
+
+
+@dataclass(slots=True)
+class OutreachDraft:
+    """One concise LinkedIn outreach draft; never a sent-message record."""
+
+    id: str
+    audience: OutreachAudience
+    intent: OutreachIntent
+    format: OutreachFormat
+    text: str
+    character_count: int
+    character_limit: int
+    target_company: str
+    target_role: str
+    personalization_fields: list[str]
+    call_to_action: str
+    evidence: list[EvidenceRef] = field(default_factory=list)
+    target_context: list[OutreachContextRef] = field(default_factory=list)
+    relationship_context: list[OutreachContextRef] = field(default_factory=list)
+    validation: ArtifactValidation = field(default_factory=lambda: ArtifactValidation(status=ArtifactStatus.GENERATED))
+
+
+@dataclass(slots=True)
+class RelationshipValidation:
+    """Grounding result for recipient, relationship, and user-action claims."""
+
+    passed: bool
+    errors: list[str] = field(default_factory=list)
+    repaired_violations: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class LinkedInOutreachArtifact:
+    """Structured, truth-grounded LinkedIn draft collection."""
+
+    strategy_summary: str
+    drafts: list[OutreachDraft]
+    validation: ArtifactValidation
+    consistency: ConsistencyValidation
+    relationship_validation: RelationshipValidation
+    generation: GenerationMetadata
+    claims: list[ClaimRecord] = field(default_factory=list)
+    evidence: list[EvidenceRef] = field(default_factory=list)
+    target_context: list[OutreachContextRef] = field(default_factory=list)
+    relationship_context: list[OutreachContextRef] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    withheld: bool = False
+
+
+@dataclass(slots=True)
 class ValidationSummary:
     """Kit-wide validation roll-up.
 
@@ -467,12 +592,20 @@ class ApplicationKit:
     answers: AnswerArtifact | None = None
     job_fit: JobFitArtifact | None = None
     interview_prep: InterviewPrepArtifact | None = None
+    linkedin_outreach: LinkedInOutreachArtifact | None = None
     warnings: list[str] = field(default_factory=list)
 
     def all_claims(self) -> list[ClaimRecord]:
         """Every claim record across all artifacts (the full grounding trace)."""
         claims: list[ClaimRecord] = []
-        for artifact in (self.resume, self.cover_letter, self.answers, self.job_fit, self.interview_prep):
+        for artifact in (
+            self.resume,
+            self.cover_letter,
+            self.answers,
+            self.job_fit,
+            self.interview_prep,
+            self.linkedin_outreach,
+        ):
             if artifact is not None:
                 claims.extend(artifact.claims)
         return claims

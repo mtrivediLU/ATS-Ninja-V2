@@ -1,6 +1,6 @@
 # ATS-Ninja-V2 — Architecture
 
-Status: **Phase 2B2 (grounded InterviewPrepArtifact)**. This
+Status: **Phase 2B3 (grounded LinkedInOutreachArtifact)**. This
 document distinguishes what is **completed**, what **architecture is
 established**, and what is **future** planned work. It never describes
 unimplemented functionality as done.
@@ -105,11 +105,11 @@ generate_application_kit(resume, jd, mode, provider?)
          unsupported→ remove (repair) ; if not removable → reject/withhold  [ADR-0011]
   → RE-RENDER text + LaTeX from the sanitized plans (clean by construction)
   → re-run the engine's artifact validators
-  → assemble ApplicationKit (schema application-kit/v3) with a full claim trace
+  → assemble ApplicationKit (schema application-kit/v4) with a full claim trace
 ```
 
 - **Versioned contract** ([ADR-0007](adr/0007-application-kit-contract.md)):
-  `ApplicationKit` (schema `application-kit/v3`) with typed `ResumeArtifact` /
+  `ApplicationKit` (schema `application-kit/v4`) with typed `ResumeArtifact` /
   `CoverLetterArtifact` / `AnswerArtifact`, a `ValidationSummary`, and
   persistence-safe `GenerationMetadata`. It models only today's real artifacts.
 - **Claim/evidence trace** ([ADR-0008](adr/0008-claim-evidence-traceability.md)):
@@ -151,6 +151,7 @@ generate_application_kit(resume, jd, mode, provider?)
 | `eval` | Phase 2A quality-evaluation harness (synthetic cases; `python -m ats_engine.eval`) | Completed (Phase 2A) |
 | `job_fit` | Deterministic requirement assessment, fit policy, bounded narrative, consistency validation | Completed (Phase 2B1) |
 | `interview_prep` | Deterministic questions/answer guides, single-context STAR policy, honest gaps, bounded narrative validation | Completed (Phase 2B2) |
+| `linkedin_outreach` | Deterministic concise drafts, evidence-class separation, relationship/action grounding, length validation | Completed (Phase 2B3) |
 
 ### Grounded JobFitArtifact (Phase 2B1, completed)
 
@@ -195,6 +196,26 @@ same bullet, education stays education, and contribution/support wording is not
 upgraded to ownership. Migration 0003 stores only the reproducibility option;
 v2, v1, and Phase 1 results remain readable while unknown schemas remain
 uninterpreted. See [ADR-0015](adr/0015-application-kit-v3-interview-prep.md).
+
+### Grounded LinkedInOutreachArtifact (Phase 2B3, completed)
+
+ApplicationKit v4 adds optional typed `linkedin_outreach`, default-on through
+persisted `include_linkedin_outreach=true`. Optional bounded `outreach_context`
+stores only explicit recipient, application, referral, or shared-context facts
+needed to reproduce drafts. Outreach remains independently selectable; the
+engine may calculate internal fit data without persisting JobFit or InterviewPrep.
+
+Drafts distinguish candidate evidence, JD target context, recipient facts, and
+relationship/action facts. Exact typed target and personalization values are
+validated by their own provenance gates and never promoted to candidate
+evidence. Unsupported relationships, application status, recipient/company
+facts, links, attachments, classification upgrades, and complete-alignment
+claims are repaired to a deterministic fallback or withheld. Central product
+limits govern connection notes, direct messages, follow-ups, and referral
+requests without claiming they are current LinkedIn platform limits. Providers
+may improve only the bounded strategy summary. The product neither accesses
+LinkedIn nor sends messages. See
+[ADR-0016](adr/0016-application-kit-v4-linkedin-outreach.md).
 
 ### Request/data flow (deterministic pipeline)
 
@@ -305,13 +326,14 @@ Recorded as ADRs under [`docs/adr/`](adr/):
 - [ADR-0011](adr/0011-repair-vs-rejection-policy.md) — Repair-vs-rejection policy for unsupported claims.
 - [ADR-0012](adr/0012-result-schema-evolution.md) — Result schema evolution and Phase 1 compatibility (no DB migration).
 - [ADR-0013](adr/0013-cache-identity-versioning.md) — Cache identity and contract versioning.
+- [ADR-0014](adr/0014-application-kit-v2-job-fit.md) — ApplicationKit v2 and grounded JobFitArtifact.
+- [ADR-0015](adr/0015-application-kit-v3-interview-prep.md) — ApplicationKit v3 and grounded InterviewPrepArtifact.
+- [ADR-0016](adr/0016-application-kit-v4-linkedin-outreach.md) — ApplicationKit v4 and grounded LinkedInOutreachArtifact.
 
 ## 7. Future / planned work (not yet implemented)
 
-- **Engine (Phase 2B)**: job-fit analysis narrative, interview preparation, and
-  LinkedIn outreach drafts — additive optional artifacts on the ApplicationKit
-  contract, not yet implemented (no fake facade before then). Production
-  multi-provider routing/optimization also belongs here.
+- **Engine**: production multi-provider routing/optimization and future product
+  intelligence beyond the completed Phase 2 artifacts.
 - **API**: authentication, credits, Stripe billing; PDF-upload ingestion;
   richer kit querying/filtering and result pagination. (Kit endpoints,
   async SQLAlchemy + Alembic + PostgreSQL persistence, Redis, and the async

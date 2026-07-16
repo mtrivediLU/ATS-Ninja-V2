@@ -4,7 +4,13 @@ import asyncio
 import logging
 from uuid import UUID
 
-from ats_engine import application_kit_to_dict, generate_application_kit
+from ats_engine import (
+    OutreachAudience,
+    OutreachContext,
+    OutreachIntent,
+    application_kit_to_dict,
+    generate_application_kit,
+)
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -43,6 +49,12 @@ async def create_kit(session: AsyncSession, payload: KitCreate) -> Kit:
         questions_text=payload.questions_text,
         include_job_fit=payload.include_job_fit,
         include_interview_prep=payload.include_interview_prep,
+        include_linkedin_outreach=payload.include_linkedin_outreach,
+        outreach_context=(
+            payload.outreach_context.model_dump(mode="json", exclude_none=True, exclude_defaults=True)
+            if payload.outreach_context
+            else None
+        ),
     )
     session.add(kit)
     await session.commit()
@@ -100,6 +112,8 @@ async def process_kit(session: AsyncSession, kit_id: UUID, settings: Settings) -
             use_llm=settings.engine_use_llm,
             include_job_fit=kit.include_job_fit,
             include_interview_prep=kit.include_interview_prep,
+            include_linkedin_outreach=kit.include_linkedin_outreach,
+            outreach_context=_outreach_context(kit.outreach_context),
         )
     except Exception as exc:  # noqa: BLE001 - any engine failure marks the kit failed, not the worker.
         # Log only the exception type (no message/traceback) so candidate-derived
@@ -115,6 +129,33 @@ async def process_kit(session: AsyncSession, kit_id: UUID, settings: Settings) -
     kit.status = KitStatus.COMPLETED
     kit.error = None
     await session.commit()
+
+
+def _outreach_context(raw: dict[str, object] | None) -> OutreachContext | None:
+    """Translate persisted transport values into the engine's typed context."""
+    if not raw:
+        return None
+    audience_raw = str(raw.get("audience", ""))
+    intent_raw = str(raw.get("requested_intent", ""))
+    applied_raw = raw.get("has_applied")
+    has_applied = applied_raw if isinstance(applied_raw, bool) else None
+    return OutreachContext(
+        recipient_name=str(raw.get("recipient_name", "")),
+        recipient_title=str(raw.get("recipient_title", "")),
+        recipient_company=str(raw.get("recipient_company", "")),
+        audience=OutreachAudience(audience_raw) if audience_raw else None,
+        requested_intent=OutreachIntent(intent_raw) if intent_raw else None,
+        has_applied=has_applied,
+        application_date=str(raw.get("application_date", "")),
+        application_status=str(raw.get("application_status", "")),
+        referral_contact_name=str(raw.get("referral_contact_name", "")),
+        shared_affiliation=str(raw.get("shared_affiliation", "")),
+        mutual_connection=str(raw.get("mutual_connection", "")),
+        prior_meeting=str(raw.get("prior_meeting", "")),
+        prior_conversation=str(raw.get("prior_conversation", "")),
+        personalization_note=str(raw.get("personalization_note", "")),
+        portfolio_url=str(raw.get("portfolio_url", "")),
+    )
 
 
 async def mark_kit_failed(session: AsyncSession, kit_id: UUID, error: str) -> None:

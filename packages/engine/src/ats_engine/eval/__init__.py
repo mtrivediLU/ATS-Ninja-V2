@@ -1,14 +1,23 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 
-from ats_engine.kit import SCHEMA_VERSION, ApplicationKit, generate_application_kit
+from ats_engine.kit import (
+    SCHEMA_VERSION,
+    ApplicationKit,
+    OutreachAudience,
+    OutreachContext,
+    OutreachIntent,
+    generate_application_kit,
+)
 from ats_engine.models import Mode
+from ats_engine.providers import LLMProvider
 
-"""Grounding, JobFit, and InterviewPrep quality-evaluation harness.
+"""Grounding, JobFit, InterviewPrep, and LinkedIn outreach evaluation.
 
 A small, maintainable set of synthetic candidate/JD cases that measure the
-*properties that matter* for Phase 2B2 rather than an opaque "AI quality score":
+*properties that matter* for Phase 2B3 rather than an opaque "AI quality score":
 
 - **truth-grounding violations** — any forbidden (never-in-evidence) value that
   reached a final artifact (must be zero);
@@ -42,6 +51,11 @@ class EvalCase:
     expect_must_have_gaps: list[str] = field(default_factory=list)
     expect_complete_star: bool = False
     expect_incomplete_star: bool = False
+    outreach_context: OutreachContext | None = None
+    expect_outreach_drafts: list[str] = field(default_factory=list)
+    expect_outreach_present: list[str] = field(default_factory=list)
+    outreach_forbidden: list[str] = field(default_factory=list)
+    outreach_provider_response: str = ""
 
 
 @dataclass(slots=True)
@@ -61,6 +75,13 @@ class CaseResult:
     interview_star_integrity: bool
     interview_gap_visibility: bool
     interview_truth_violations: list[str]
+    outreach_present: bool
+    outreach_consistent: bool
+    outreach_relationship_integrity: bool
+    outreach_length_compliant: bool
+    outreach_call_to_action: bool
+    missing_outreach_expectations: list[str]
+    outreach_truth_violations: list[str]
 
     @property
     def passed(self) -> bool:
@@ -77,7 +98,29 @@ class CaseResult:
             and self.interview_star_integrity
             and self.interview_gap_visibility
             and not self.interview_truth_violations
+            and self.outreach_present
+            and self.outreach_consistent
+            and self.outreach_relationship_integrity
+            and self.outreach_length_compliant
+            and self.outreach_call_to_action
+            and not self.missing_outreach_expectations
+            and not self.outreach_truth_violations
         )
+
+
+class _OutreachEvalProvider(LLMProvider):
+    """Controlled provider used only for deterministic adversarial eval cases."""
+
+    def __init__(self, response: str) -> None:
+        self._response = response
+
+    @property
+    def identity(self) -> str:
+        digest = hashlib.sha256(self._response.encode()).hexdigest()[:12]
+        return f"eval-outreach-provider:{digest}"
+
+    def complete(self, prompt: str) -> str:
+        return self._response if "LINKEDIN OUTREACH STRATEGY" in prompt else ""
 
 
 def _artifact_texts(kit: ApplicationKit) -> str:
@@ -106,11 +149,14 @@ def _requested_artifact_present(kit: ApplicationKit) -> bool:
 
 def run_case(case: EvalCase) -> CaseResult:
     """Generate a deterministic kit for one case and evaluate its properties."""
+    provider = _OutreachEvalProvider(case.outreach_provider_response) if case.outreach_provider_response else None
     kit = generate_application_kit(
         resume_text=case.resume,
         job_description=case.jd,
         default_mode=case.mode,
-        use_llm=False,
+        use_llm=provider is not None,
+        prose_provider=provider,
+        outreach_context=case.outreach_context,
     )
     text = _artifact_texts(kit)
     preserved = [fact for fact in case.expect_present if fact.lower() in text]
@@ -156,6 +202,23 @@ def run_case(case: EvalCase) -> CaseResult:
         interview_truth_violations = [
             claim.text for claim in interview.claims if claim.status.value == "supported" and not claim.evidence
         ]
+    outreach = kit.linkedin_outreach
+    outreach_text = ""
+    missing_outreach: list[str] = []
+    outreach_truth_violations: list[str] = []
+    if outreach is not None:
+        outreach_text = "\n".join([outreach.strategy_summary] + [draft.text for draft in outreach.drafts]).casefold()
+        draft_ids = {draft.id for draft in outreach.drafts}
+        missing_outreach.extend(f"draft:{value}" for value in case.expect_outreach_drafts if value not in draft_ids)
+        missing_outreach.extend(
+            f"content:{value}" for value in case.expect_outreach_present if value.casefold() not in outreach_text
+        )
+        outreach_truth_violations.extend(
+            value for value in case.outreach_forbidden if value.casefold() in outreach_text
+        )
+        outreach_truth_violations.extend(
+            claim.text for claim in outreach.claims if claim.status.value == "supported" and not claim.evidence
+        )
     return CaseResult(
         name=case.name,
         schema_ok=kit.schema_version == SCHEMA_VERSION,
@@ -172,6 +235,19 @@ def run_case(case: EvalCase) -> CaseResult:
         interview_star_integrity=star_integrity,
         interview_gap_visibility=gap_visibility,
         interview_truth_violations=interview_truth_violations,
+        outreach_present=outreach is not None,
+        outreach_consistent=bool(outreach and outreach.consistency.passed and not outreach.withheld),
+        outreach_relationship_integrity=bool(outreach and outreach.relationship_validation.passed),
+        outreach_length_compliant=bool(
+            outreach and all(draft.character_count <= draft.character_limit for draft in outreach.drafts)
+        ),
+        outreach_call_to_action=bool(
+            outreach
+            and outreach.drafts
+            and all(draft.call_to_action and draft.call_to_action in draft.text for draft in outreach.drafts)
+        ),
+        missing_outreach_expectations=missing_outreach,
+        outreach_truth_violations=outreach_truth_violations,
     )
 
 
@@ -180,7 +256,7 @@ def run_all() -> list[CaseResult]:
 
 
 def format_report(results: list[CaseResult]) -> str:
-    lines = ["Phase 2B2 grounding + JobFit + InterviewPrep evaluation", "=" * 55]
+    lines = ["Phase 2B3 grounded product-intelligence evaluation", "=" * 54]
     for result in results:
         status = "PASS" if result.passed else "FAIL"
         lines.append(
@@ -189,7 +265,9 @@ def format_report(results: list[CaseResult]) -> str:
             f"violations {len(result.truth_violations)}, "
             f"fit_consistent={result.job_fit_consistent}, "
             f"interview_consistent={result.interview_prep_consistent}, "
-            f"star_integrity={result.interview_star_integrity}, fatal={result.validation_fatal}"
+            f"star_integrity={result.interview_star_integrity}, "
+            f"outreach_consistent={result.outreach_consistent}, "
+            f"relationship_integrity={result.outreach_relationship_integrity}, fatal={result.validation_fatal}"
         )
         if result.truth_violations:
             lines.append(f"    truth-grounding violations: {result.truth_violations}")
@@ -199,8 +277,15 @@ def format_report(results: list[CaseResult]) -> str:
             lines.append(f"    missing JobFit expectations: {result.missing_job_fit_expectations}")
         if result.interview_truth_violations:
             lines.append(f"    interview truth violations: {result.interview_truth_violations}")
+        if result.missing_outreach_expectations:
+            lines.append(f"    missing outreach expectations: {result.missing_outreach_expectations}")
+        if result.outreach_truth_violations:
+            lines.append(f"    outreach truth violations: {result.outreach_truth_violations}")
     passed = sum(1 for result in results if result.passed)
-    total_violations = sum(len(result.truth_violations) for result in results)
+    total_violations = sum(
+        len(result.truth_violations) + len(result.interview_truth_violations) + len(result.outreach_truth_violations)
+        for result in results
+    )
     lines.append("-" * 32)
     lines.append(f"{passed}/{len(results)} cases passed; {total_violations} total truth-grounding violations")
     return "\n".join(lines)
@@ -247,6 +332,8 @@ CASES: list[EvalCase] = [
         expect_present=["Meridian Data", "Python", "SQL", "35%", "Bachelor"],
         forbidden=["Google", "PhD", "Rust"],
         expect_job_fit_strengths=["python", "sql", "postgresql", "etl", "tableau"],
+        expect_outreach_drafts=["recruiter-connection"],
+        expect_outreach_present=["dashboards", "data engineer", "vantage"],
     ),
     EvalCase(
         name="partially-aligned",
@@ -258,6 +345,7 @@ CASES: list[EvalCase] = [
         expect_job_fit_strengths=["python", "sql"],
         expect_job_fit_gaps=["rust", "kubernetes"],
         expect_must_have_gaps=["rust", "kubernetes"],
+        outreach_forbidden=["perfect fit", "meet every requirement"],
     ),
     EvalCase(
         name="genuine-gaps",
@@ -275,6 +363,7 @@ CASES: list[EvalCase] = [
         mode=Mode.RESUME,
         expect_present=["Tableau"],  # real adjacent tool
         forbidden=["expert in Power BI", "Snowflake certified"],
+        expect_outreach_present=["adjacent to snowflake"],
     ),
     EvalCase(
         name="sparse-resume",
@@ -304,6 +393,7 @@ CASES: list[EvalCase] = [
         ),
         mode=Mode.RESUME,
         expect_present=["Working knowledge", "Kubernetes"],
+        expect_outreach_present=["working knowledge of kubernetes"],
     ),
     EvalCase(
         name="must-have-gap",
@@ -316,6 +406,7 @@ CASES: list[EvalCase] = [
         expect_job_fit_gaps=["kubernetes", "rust"],
         expect_must_have_gaps=["kubernetes", "rust"],
         forbidden=["Kubernetes expert", "Rust expert"],
+        outreach_forbidden=["perfect fit", "ideal fit", "meet every requirement"],
     ),
     EvalCase(
         name="complete-star-evidence",
@@ -338,5 +429,72 @@ CASES: list[EvalCase] = [
         mode=Mode.RESUME,
         expect_present=["Python", "SQL"],
         expect_incomplete_star=True,
+    ),
+    EvalCase(
+        name="generic-recruiter-outreach",
+        resume=_STRONG_RESUME,
+        jd=_STRONG_JD,
+        mode=Mode.RESUME,
+        expect_outreach_drafts=["recruiter-connection", "targeted-direct-message"],
+        expect_outreach_present=["data engineer", "vantage", "dashboards"],
+        outreach_forbidden=["we met", "mutual connection", "i applied"],
+    ),
+    EvalCase(
+        name="hiring-manager-outreach",
+        resume=_STRONG_RESUME,
+        jd=_STRONG_JD,
+        mode=Mode.RESUME,
+        outreach_context=OutreachContext(
+            recipient_name="Avery Chen",
+            recipient_title="Engineering Manager",
+            recipient_company="Vantage",
+            audience=OutreachAudience.HIRING_MANAGER,
+        ),
+        expect_outreach_present=["avery chen", "engineering manager", "vantage"],
+    ),
+    EvalCase(
+        name="applied-follow-up",
+        resume=_STRONG_RESUME,
+        jd=_STRONG_JD,
+        mode=Mode.RESUME,
+        outreach_context=OutreachContext(
+            audience=OutreachAudience.RECRUITER,
+            requested_intent=OutreachIntent.FOLLOW_UP,
+            has_applied=True,
+            application_date="2026-07-16",
+        ),
+        expect_outreach_drafts=["post-application-follow-up"],
+        expect_outreach_present=["i applied", "2026-07-16"],
+    ),
+    EvalCase(
+        name="genuine-referral-context",
+        resume=_STRONG_RESUME,
+        jd=_STRONG_JD,
+        mode=Mode.RESUME,
+        outreach_context=OutreachContext(
+            audience=OutreachAudience.EMPLOYEE,
+            requested_intent=OutreachIntent.REFERRAL_REQUEST,
+            referral_contact_name="Taylor Morgan",
+        ),
+        expect_outreach_drafts=["referral-request"],
+        expect_outreach_present=["taylor morgan recommended i contact you"],
+    ),
+    EvalCase(
+        name="mixed-provider-outreach-attack",
+        resume=_STRONG_RESUME,
+        jd=_STRONG_JD,
+        mode=Mode.RESUME,
+        outreach_provider_response="My Python work is relevant, and I led 20 engineers at Google after a referral.",
+        expect_outreach_present=["dashboards", "vantage"],
+        outreach_forbidden=["google", "20 engineers", "after a referral"],
+    ),
+    EvalCase(
+        name="outreach-length-boundary",
+        resume=_STRONG_RESUME,
+        jd=_STRONG_JD,
+        mode=Mode.RESUME,
+        outreach_provider_response="Use supported Python experience. " + "concise " * 100,
+        expect_outreach_present=["dashboards", "vantage"],
+        outreach_forbidden=["concise concise concise concise concise"],
     ),
 ]

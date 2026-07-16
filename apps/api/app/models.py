@@ -34,6 +34,10 @@ class Kit(Base):
     questions_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
     include_job_fit: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
     include_interview_prep: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
+    include_linkedin_outreach: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true", nullable=False
+    )
+    outreach_context: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
     # Output (serialized KitResult) and failure detail.
     result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
