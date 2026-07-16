@@ -156,6 +156,13 @@ pnpm --filter @ats-ninja/web typecheck
 pnpm --filter @ats-ninja/web build
 ```
 
+> The canonical type-check gate is the `mypy --config-file …` form shown above.
+> Each package's config scopes `ignore_missing_imports` to the few stub-less
+> third-party libs (`diskcache`, `pdfplumber`, `celery`) while keeping all
+> first-party code `strict`. A bare `mypy --strict packages/engine/src` from the
+> repo root bypasses that config and reports false `import-untyped` errors — use
+> the config-file form. See AGENTS.md §11.
+
 ## Security & privacy
 
 Never commit real API keys, credentials, `.env` files, private resumes /

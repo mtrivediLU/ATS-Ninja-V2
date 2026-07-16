@@ -225,6 +225,20 @@ pnpm --filter @ats-ninja/web build
 docker compose config
 ```
 
+**Canonical mypy commands.** The type-check gate is `mypy --config-file
+<package>/pyproject.toml <package>/src` (or, equivalently, running `mypy` from
+inside the package directory). This form is canonical because each package's
+`[tool.mypy]` config holds the **scoped** `ignore_missing_imports` overrides for
+the few third-party libraries that ship no type stubs (`diskcache` and
+`pdfplumber` for the engine; `celery` for the API). First-party ATS-Ninja code is
+always under full `strict = true`.
+
+Do **not** rely on a bare `mypy --strict packages/engine/src` run from the
+repository root: without `--config-file` it does not discover the per-package
+config, so it reports false `import-untyped` errors for those stub-less
+third-party libraries. That is a working-directory artifact, not a first-party
+typing failure — always use the config-file form above.
+
 Do not mark a task complete while a required gate is failing. If a genuine
 pre-existing behavior cannot be migrated safely, document it accurately instead
 of hiding the failure.

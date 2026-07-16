@@ -117,8 +117,12 @@ _EMPLOYER_CONTEXT = re.compile(
 # the candidate's real role unless the resume shows it); ambiguous senior titles
 # (director/head/principal/...) are flagged only in an explicit self-claim.
 _EXEC_TITLE = re.compile(
-    r"\b(chief\s+[a-z]+\s+officer|chief\s+[a-z]+|c\.?\s*[etfoi]\.?\s*o\.?|vice\s+president|"
-    r"v\.?\s*p\.?|founder|co-founder|"
+    # Compact ("cto", "vp") or dotted ("c.t.o.", "v.p.") forms only. A bare
+    # space-separated skeleton ("c t o") is intentionally NOT matched: it collides
+    # with ordinary prose like "Plan C to organize" and would delete truthful
+    # sentences. See the audit-remediation over-removal fix.
+    r"\b(chief\s+[a-z]+\s+officer|chief\s+[a-z]+|c[etfoi]o|c\.\s*[etfoi]\.\s*o\.?|vice\s+president|"
+    r"vp|v\.\s*p\.?|founder|co-founder|"
     r"founding\s+(?:engineer|developer|architect|designer))\b",
     re.IGNORECASE,
 )
@@ -291,7 +295,18 @@ _OTHER_CREDENTIAL_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+# Clause segmentation for prose repair: keep a supported clause even when it
+# shares a sentence with a fabricated one (see _repair_prose).
+_SEGMENT_BOUNDARY_AFTER = re.compile(r"(?:[.!?]+[\"')\]]*\s+|;\s+)")
+_CLAUSE_CONNECTOR = re.compile(
+    r",\s+(?:and|but|so|yet|while|whereas|although|though|plus|then|which|where)\s+",
+    re.IGNORECASE,
+)
+_LEADING_CONNECTOR = re.compile(
+    r"^\s*[,;:]?\s*(?:and|but|so|yet|while|whereas|although|though|plus|then|which|where)\s+",
+    re.IGNORECASE,
+)
+_TRAILING_CONNECTOR = re.compile(r"[\s,;:]+(?:and|but|so|yet|or|plus)\s*$", re.IGNORECASE)
 
 
 @dataclass(slots=True)
@@ -422,6 +437,23 @@ def _parse_number_words(text: str) -> int | None:
         else:
             return None
     return total + current
+
+
+_NUMBER_WORDS_RE = re.compile(_NUMBER_WORDS, re.IGNORECASE)
+
+
+def _words_to_digits(text: str) -> str:
+    """Rewrite spelled-out numbers to digits so "four" matches evidence's "4".
+
+    Used only for *support* matching (never for detection), so a real management
+    or team claim paraphrased with number words is not wrongly removed.
+    """
+
+    def _replace(match: re.Match[str]) -> str:
+        value = _parse_number_words(match.group(0))
+        return str(value) if value is not None else match.group(0)
+
+    return _NUMBER_WORDS_RE.sub(_replace, text)
 
 
 def _degree_level(text: str) -> int:
@@ -585,10 +617,18 @@ def _extract_employers(text: str, context: EvidenceContext) -> list[_RawClaim]:
 
     for match in _EMPLOYER_CONTEXT.finditer(text):
         org = match.group(1)
-        if _word_normalize(org) in _SOFT_ORG_WORDS:
+        normalized_org = _word_normalize(org)
+        if normalized_org in _SOFT_ORG_WORDS:
+            continue
+        # A generic internal function/department named after a preposition
+        # ("worked with Finance and Operations") is not an employer-identity
+        # claim, so it must not be flagged as a fabricated employer merely
+        # because history language sits nearby. Real, evidence-backed departments
+        # still pass the support test; unknown ones are simply not employers.
+        if normalized_org in _NON_EMPLOYER_WORDS or normalized_org.split(" ")[0] in _NON_EMPLOYER_WORDS:
             continue
         candidate_history = _candidate_history_near(text, (match.start(1), match.end(1)))
-        if not (_word_normalize(org) in _KNOWN_EMPLOYERS or _looks_like_org(org) or candidate_history):
+        if not (normalized_org in _KNOWN_EMPLOYERS or _looks_like_org(org) or candidate_history):
             continue
         span = (match.start(1), match.end(1))
         seen.add(span)
@@ -616,6 +656,42 @@ def _extract_employers(text: str, context: EvidenceContext) -> list[_RawClaim]:
 
 
 _SOFT_ORG_WORDS: frozenset[str] = frozenset({"the", "a", "an", "our", "your", "their", "this", "that", "them", "us"})
+
+# Generic internal functions/departments — not employer identities. Capitalized
+# in prose ("worked with Finance"), they would otherwise be misread as fabricated
+# employers by the history-language branch above.
+_NON_EMPLOYER_WORDS: frozenset[str] = frozenset(
+    {
+        "finance",
+        "operations",
+        "marketing",
+        "sales",
+        "engineering",
+        "legal",
+        "hr",
+        "it",
+        "product",
+        "design",
+        "research",
+        "development",
+        "support",
+        "security",
+        "compliance",
+        "procurement",
+        "logistics",
+        "administration",
+        "accounting",
+        "qa",
+        "production",
+        "management",
+        "leadership",
+        "stakeholders",
+        "customers",
+        "clients",
+        "vendors",
+        "partners",
+    }
+)
 
 
 def _looks_like_org(org: str) -> bool:
@@ -867,7 +943,10 @@ def _extract_management(text: str, context: EvidenceContext) -> list[_RawClaim]:
     claims: list[_RawClaim] = []
     for match in _MANAGEMENT_PATTERN.finditer(text):
         raw = match.group(1).strip()
-        supported = _term_present(_word_normalize(raw), context.evidence_text)
+        normalized = _word_normalize(raw)
+        supported = _term_present(normalized, context.evidence_text) or _term_present(
+            _words_to_digits(normalized), _words_to_digits(context.evidence_text)
+        )
         claims.append(
             _RawClaim(
                 claim_type=ClaimType.MANAGEMENT,
@@ -946,16 +1025,33 @@ def _extract_claims(text: str, context: EvidenceContext) -> list[_RawClaim]:
 # Repair
 # --------------------------------------------------------------------------- #
 def _repair_prose(text: str, spans: list[tuple[int, int]]) -> str:
-    """Remove whole sentences that overlap any unsupported span."""
+    """Remove the smallest safe unit that carries an unsupported claim.
+
+    Prose is split into *clauses* (sentences, then clause boundaries such as ";"
+    and ", and/but/while/..."), and only the clauses overlapping an unsupported
+    span are dropped. This preserves a supported clause that shares a sentence
+    with a fabricated one ("At Northstar I used Python..., and at Google I wrote
+    Rust...") instead of deleting the whole sentence. Anything a clause split
+    cannot cleanly excise is still caught by the re-verification in
+    ``ground_text`` (which escalates a residual to a fatal rejection), so this can
+    only preserve more truthful content, never let a fabrication survive.
+    """
     if not spans:
         return text
-    sentences = _split_sentences(text)
     kept: list[str] = []
-    for sentence_text, start, end in sentences:
+    for segment_text, start, end in _segment_spans(text):
         if any(span_start < end and start < span_end for span_start, span_end in spans):
             continue
-        kept.append(sentence_text)
-    return re.sub(r"\s+", " ", " ".join(kept)).strip()
+        cleaned = _clean_segment(segment_text)
+        if cleaned:
+            kept.append(cleaned)
+    result = re.sub(r"\s+([.,;:%])", r"\1", " ".join(kept))
+    result = re.sub(r"\s{2,}", " ", result).strip()
+    if result and result[0].islower():
+        result = result[0].upper() + result[1:]
+    if result and result[-1] not in ".!?":
+        result += "."
+    return result
 
 
 def _repair_spans(text: str, spans: list[tuple[int, int]]) -> str:
@@ -969,18 +1065,34 @@ def _repair_spans(text: str, spans: list[tuple[int, int]]) -> str:
     return re.sub(r"\s{2,}", " ", result).strip(" ,;-").strip()
 
 
-def _split_sentences(text: str) -> list[tuple[str, int, int]]:
-    sentences: list[tuple[str, int, int]] = []
-    cursor = 0
-    for piece in _SENTENCE_SPLIT.split(text):
-        if not piece:
-            continue
-        index = text.find(piece, cursor)
-        if index == -1:
-            index = cursor
-        sentences.append((piece, index, index + len(piece)))
-        cursor = index + len(piece)
-    return sentences
+def _segment_spans(text: str) -> list[tuple[str, int, int]]:
+    """Split prose into clause segments with their character offsets.
+
+    Boundaries are sentence terminators, semicolons, and clause connectors
+    (``, and`` / ``, but`` / ``, while`` / ...). Offsets are into the original
+    ``text`` so overlap with unsupported spans is exact.
+    """
+    cuts = {0, len(text)}
+    for match in _SEGMENT_BOUNDARY_AFTER.finditer(text):
+        cuts.add(match.end())
+    for match in _CLAUSE_CONNECTOR.finditer(text):
+        cuts.add(match.start())
+    ordered = sorted(cut for cut in cuts if 0 <= cut <= len(text))
+    segments: list[tuple[str, int, int]] = []
+    for start, end in zip(ordered, ordered[1:], strict=False):
+        chunk = text[start:end]
+        if chunk.strip():
+            segments.append((chunk, start, end))
+    return segments
+
+
+def _clean_segment(segment: str) -> str:
+    """Trim a kept clause of leading/trailing connectors and stray punctuation."""
+    cleaned = _LEADING_CONNECTOR.sub("", segment.strip())
+    cleaned = re.sub(r"^[\s,;:]+", "", cleaned)
+    cleaned = _TRAILING_CONNECTOR.sub("", cleaned)
+    cleaned = re.sub(r"[\s,;:]+$", "", cleaned)
+    return cleaned.strip()
 
 
 def ground_text(

@@ -166,8 +166,41 @@ async def test_process_kit_marks_failed_on_engine_error(
         assert failed is not None
         assert failed.status == KitStatus.FAILED
         assert failed.error is not None
-        assert "engine boom" in failed.error
+        # Client-safe: the raw exception message is NOT leaked; only the type name.
+        assert "engine boom" not in failed.error
+        assert "RuntimeError" in failed.error
         assert failed.result is None
+
+
+async def test_process_kit_failure_does_not_leak_sensitive_exception_content(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A badly-constructed exception carrying candidate/secret content must not
+    reach the persisted, client-facing error (audit remediation 4C)."""
+    secret = "SSN 123-45-6789 resume /home/test-candidate/private/resume.pdf sk-provider-key-abcdef"
+
+    def leaky(**_kwargs: object) -> None:
+        raise ValueError(secret)
+
+    monkeypatch.setattr("app.services.generate_application_kit", leaky)
+
+    async with sessionmaker() as session:
+        kit = await create_kit(session, KitCreate(resume_text="x", job_description="y"))
+        kit_id = kit.id
+
+    async with sessionmaker() as session:
+        await process_kit(session, kit_id, settings)
+
+    async with sessionmaker() as session:
+        failed = await get_kit(session, kit_id)
+        assert failed is not None and failed.error is not None
+        assert secret not in failed.error
+        assert "123-45-6789" not in failed.error
+        assert "/home/test-candidate/private/resume.pdf" not in failed.error
+        assert "sk-provider-key" not in failed.error
+        assert "ValueError" in failed.error  # safe type name only
 
 
 async def test_process_kit_missing_id_is_noop(

@@ -21,6 +21,17 @@ an API request handler and from the async worker.
 
 logger = logging.getLogger(__name__)
 
+# Client-facing failure text. The exception's message/args are deliberately
+# excluded: they could echo resume text, a provider prompt, generated content, a
+# filesystem path, an environment value, or a secret. Only the exception *type*
+# (a safe, fixed identifier) is surfaced; full detail stays in server logs.
+_CLIENT_ERROR_PREFIX = "Kit generation failed"
+
+
+def _client_safe_error(exc: Exception) -> str:
+    """A persisted, client-safe failure message that never leaks content."""
+    return f"{_CLIENT_ERROR_PREFIX} ({type(exc).__name__})."
+
 
 async def create_kit(session: AsyncSession, payload: KitCreate) -> Kit:
     """Persist a new kit in the ``pending`` state and return it."""
@@ -87,9 +98,12 @@ async def process_kit(session: AsyncSession, kit_id: UUID, settings: Settings) -
             use_llm=settings.engine_use_llm,
         )
     except Exception as exc:  # noqa: BLE001 - any engine failure marks the kit failed, not the worker.
-        logger.exception("process_kit: engine failed for kit %s", kit_id)
+        # Log only the exception type (no message/traceback) so candidate-derived
+        # content in an exception cannot reach server logs; persist a client-safe
+        # message with no content. See the audit-remediation privacy fix (4C).
+        logger.error("process_kit: engine generation failed for kit %s (type=%s)", kit_id, type(exc).__name__)
         kit.status = KitStatus.FAILED
-        kit.error = f"{type(exc).__name__}: {exc}"
+        kit.error = _client_safe_error(exc)
         await session.commit()
         return
 
