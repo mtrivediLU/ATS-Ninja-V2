@@ -12,6 +12,7 @@ from ats_engine import (
     application_kit_to_dict,
     generate_application_kit,
     is_application_kit_v1,
+    is_application_kit_v2,
     normalize_persisted_result,
 )
 from ats_engine.kit.serialization import LEGACY_SCHEMA_VERSION, UNKNOWN_SCHEMA_VERSION
@@ -37,11 +38,12 @@ def _kit(mode: Mode = Mode.RESUME_AND_COVER) -> ApplicationKit:
 
 
 def test_schema_version_is_explicit_and_versioned() -> None:
-    assert SCHEMA_VERSION == "application-kit/v1"
+    assert SCHEMA_VERSION == "application-kit/v2"
     kit = _kit()
     assert kit.schema_version == SCHEMA_VERSION
     assert kit.engine_version  # populated
     assert kit.orchestration_version.startswith("grounded-orchestration/")
+    assert kit.job_fit is not None
 
 
 def test_roundtrip_is_json_compatible_and_lossless() -> None:
@@ -137,11 +139,22 @@ PHASE1_RESULT = {
 }
 
 
-def test_v1_result_is_detected_and_passed_through() -> None:
+def test_v2_result_is_detected_and_passed_through() -> None:
     kit = _kit()
     data = application_kit_to_dict(kit)
-    assert is_application_kit_v1(data)
+    assert is_application_kit_v2(data)
     assert normalize_persisted_result(data) == data
+
+
+def test_v1_result_remains_readable_with_absent_job_fit() -> None:
+    data = application_kit_to_dict(_kit())
+    data["schema_version"] = "application-kit/v1"
+    data.pop("job_fit")
+    assert is_application_kit_v1(data)
+    normalized = normalize_persisted_result(data)
+    assert normalized is not None
+    assert normalized["schema_version"] == "application-kit/v1"
+    assert normalized["job_fit"] is None
 
 
 def test_legacy_phase1_result_is_adapted_not_crashed() -> None:

@@ -57,6 +57,7 @@ services:
       ATS_API_CORS_ORIGINS: '["http://localhost:3000"]'
       ATS_API_DATABASE_URL: postgresql+asyncpg://ats:ats@db:5432/ats_ninja
       ATS_API_REDIS_URL: redis://redis:6379
+      ATS_API_ENGINE_USE_LLM: ${ATS_API_ENGINE_USE_LLM:-true}
       # Ollama is optional; the engine degrades to a deterministic path.
       OLLAMA_BASE_URL: http://host.docker.internal:11434
     ports:
@@ -85,6 +86,7 @@ services:
     environment:
       ATS_API_DATABASE_URL: postgresql+asyncpg://ats:ats@db:5432/ats_ninja
       ATS_API_REDIS_URL: redis://redis:6379
+      ATS_API_ENGINE_USE_LLM: ${ATS_API_ENGINE_USE_LLM:-true}
       OLLAMA_BASE_URL: http://host.docker.internal:11434
     depends_on:
       db:

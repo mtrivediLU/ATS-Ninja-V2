@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from ats_engine.kit.contract import (
+    APPLICATION_KIT_V1,
     SCHEMA_VERSION,
     AnswerArtifact,
     AnswerItem,
@@ -13,9 +14,16 @@ from ats_engine.kit.contract import (
     ClaimRecord,
     ClaimStatus,
     ClaimType,
+    ConsistencyValidation,
     CoverLetterArtifact,
     EvidenceRef,
+    FitBand,
     GenerationMetadata,
+    JobFitArtifact,
+    PositioningRecommendation,
+    RequirementAssessment,
+    RequirementClassification,
+    RequirementRisk,
     ResumeArtifact,
     ValidationSummary,
 )
@@ -56,6 +64,7 @@ def application_kit_to_dict(kit: ApplicationKit) -> dict[str, Any]:
         "resume": _resume_to_dict(kit.resume) if kit.resume is not None else None,
         "cover_letter": (_cover_letter_to_dict(kit.cover_letter) if kit.cover_letter is not None else None),
         "answers": _answers_to_dict(kit.answers) if kit.answers is not None else None,
+        "job_fit": _job_fit_to_dict(kit.job_fit) if kit.job_fit is not None else None,
         "warnings": list(kit.warnings),
     }
 
@@ -117,6 +126,50 @@ def _answers_to_dict(answers: AnswerArtifact) -> dict[str, Any]:
     }
 
 
+def _requirement_to_dict(item: RequirementAssessment) -> dict[str, Any]:
+    return {
+        "id": item.id,
+        "requirement": item.requirement,
+        "importance": item.importance,
+        "must_have": item.must_have,
+        "classification": item.classification.value,
+        "explanation": item.explanation,
+        "risk": item.risk.value,
+        "permitted_positioning": item.permitted_positioning,
+        "evidence": [_evidence_to_dict(ref) for ref in item.evidence],
+    }
+
+
+def _job_fit_to_dict(job_fit: JobFitArtifact) -> dict[str, Any]:
+    return {
+        "summary": job_fit.summary,
+        "requirement_coverage_score": job_fit.requirement_coverage_score,
+        "fit_band": job_fit.fit_band.value,
+        "ats_keyword_score": job_fit.ats_keyword_score,
+        "interview_probability": job_fit.interview_probability,
+        "requirements": [_requirement_to_dict(item) for item in job_fit.requirements],
+        "strongest_matches": list(job_fit.strongest_matches),
+        "adjacent_capabilities": list(job_fit.adjacent_capabilities),
+        "working_knowledge": list(job_fit.working_knowledge),
+        "genuine_gaps": list(job_fit.genuine_gaps),
+        "must_have_gaps": list(job_fit.must_have_gaps),
+        "positioning_recommendations": [
+            {"requirement_id": item.requirement_id, "text": item.text} for item in job_fit.positioning_recommendations
+        ],
+        "validation": _artifact_validation_to_dict(job_fit.validation),
+        "consistency": {
+            "passed": job_fit.consistency.passed,
+            "errors": list(job_fit.consistency.errors),
+            "repaired_violations": list(job_fit.consistency.repaired_violations),
+        },
+        "generation": _generation_to_dict(job_fit.generation),
+        "claims": [_claim_to_dict(claim) for claim in job_fit.claims],
+        "evidence": [_evidence_to_dict(ref) for ref in job_fit.evidence],
+        "warnings": list(job_fit.warnings),
+        "withheld": job_fit.withheld,
+    }
+
+
 def _generation_to_dict(meta: GenerationMetadata) -> dict[str, Any]:
     return {
         "generation_mode": meta.generation_mode,
@@ -155,6 +208,7 @@ def application_kit_from_dict(data: dict[str, Any]) -> ApplicationKit:
         resume=_resume_from_dict(data.get("resume")),
         cover_letter=_cover_letter_from_dict(data.get("cover_letter")),
         answers=_answers_from_dict(data.get("answers")),
+        job_fit=_job_fit_from_dict(data.get("job_fit")),
         warnings=[str(item) for item in data.get("warnings") or []],
     )
 
@@ -230,6 +284,57 @@ def _answers_from_dict(raw: dict[str, Any] | None) -> AnswerArtifact | None:
     )
 
 
+def _requirement_from_dict(raw: dict[str, Any]) -> RequirementAssessment:
+    return RequirementAssessment(
+        id=str(raw.get("id", "")),
+        requirement=str(raw.get("requirement", "")),
+        importance=str(raw.get("importance", "")),
+        must_have=bool(raw.get("must_have", False)),
+        classification=RequirementClassification(str(raw.get("classification", "genuine_gap"))),
+        explanation=str(raw.get("explanation", "")),
+        risk=RequirementRisk(str(raw.get("risk", "high"))),
+        permitted_positioning=str(raw.get("permitted_positioning", "")),
+        evidence=[_evidence_from_dict(ref) for ref in raw.get("evidence") or []],
+    )
+
+
+def _job_fit_from_dict(raw: dict[str, Any] | None) -> JobFitArtifact | None:
+    if raw is None:
+        return None
+    probability = raw.get("interview_probability")
+    consistency = raw.get("consistency") or {}
+    return JobFitArtifact(
+        summary=str(raw.get("summary", "")),
+        requirement_coverage_score=float(raw.get("requirement_coverage_score", 0.0)),
+        fit_band=FitBand(str(raw.get("fit_band", FitBand.LOW.value))),
+        ats_keyword_score=float(raw.get("ats_keyword_score", 0.0)),
+        interview_probability=int(probability) if probability is not None else None,
+        requirements=[_requirement_from_dict(item) for item in raw.get("requirements") or []],
+        strongest_matches=[str(item) for item in raw.get("strongest_matches") or []],
+        adjacent_capabilities=[str(item) for item in raw.get("adjacent_capabilities") or []],
+        working_knowledge=[str(item) for item in raw.get("working_knowledge") or []],
+        genuine_gaps=[str(item) for item in raw.get("genuine_gaps") or []],
+        must_have_gaps=[str(item) for item in raw.get("must_have_gaps") or []],
+        positioning_recommendations=[
+            PositioningRecommendation(
+                requirement_id=str(item.get("requirement_id", "")), text=str(item.get("text", ""))
+            )
+            for item in raw.get("positioning_recommendations") or []
+        ],
+        validation=_artifact_validation_from_dict(raw.get("validation") or {}),
+        consistency=ConsistencyValidation(
+            passed=bool(consistency.get("passed", False)),
+            errors=[str(item) for item in consistency.get("errors") or []],
+            repaired_violations=[str(item) for item in consistency.get("repaired_violations") or []],
+        ),
+        generation=_generation_from_dict(raw.get("generation") or {}),
+        claims=[_claim_from_dict(claim) for claim in raw.get("claims") or []],
+        evidence=[_evidence_from_dict(ref) for ref in raw.get("evidence") or []],
+        warnings=[str(item) for item in raw.get("warnings") or []],
+        withheld=bool(raw.get("withheld", False)),
+    )
+
+
 def _generation_from_dict(raw: dict[str, Any]) -> GenerationMetadata:
     return GenerationMetadata(
         generation_mode=str(raw.get("generation_mode", "deterministic")),
@@ -259,6 +364,11 @@ def _validation_summary_from_dict(raw: dict[str, Any]) -> ValidationSummary:
 # --------------------------------------------------------------------------- #
 def is_application_kit_v1(raw: dict[str, Any]) -> bool:
     """True when a persisted result is a v1 ApplicationKit."""
+    return str(raw.get("schema_version", "")) == APPLICATION_KIT_V1
+
+
+def is_application_kit_v2(raw: dict[str, Any]) -> bool:
+    """True when a persisted result is a v2 ApplicationKit."""
     return str(raw.get("schema_version", "")) == SCHEMA_VERSION
 
 
@@ -351,6 +461,7 @@ def adapt_legacy_result(raw: dict[str, Any]) -> dict[str, Any]:
         "resume": resume,
         "cover_letter": cover,
         "answers": answers,
+        "job_fit": None,
         "warnings": ["Served from a legacy Phase 1 result record (pre-ApplicationKit)."],
     }
 
@@ -364,8 +475,12 @@ def normalize_persisted_result(raw: dict[str, Any] | None) -> dict[str, Any] | N
     """
     if raw is None:
         return None
-    if is_application_kit_v1(raw):
+    if is_application_kit_v2(raw):
         return raw
+    if is_application_kit_v1(raw):
+        normalized = dict(raw)
+        normalized.setdefault("job_fit", None)
+        return normalized
     if _looks_like_phase1_result(raw):
         return adapt_legacy_result(raw)
     return {
@@ -393,5 +508,6 @@ def normalize_persisted_result(raw: dict[str, Any] | None) -> dict[str, Any] | N
         "resume": None,
         "cover_letter": None,
         "answers": None,
+        "job_fit": None,
         "warnings": ["Unrecognized result schema; not interpreted."],
     }

@@ -33,7 +33,11 @@ async def test_submit_kit_runs_lifecycle_to_completion(client: httpx.AsyncClient
     assert kit["status"] == "completed"
     result = kit["result"]
     # The versioned ApplicationKit contract with typed artifacts.
-    assert result["schema_version"] == "application-kit/v1"
+    assert result["schema_version"] == "application-kit/v2"
+    assert result["job_fit"] is not None
+    assert result["job_fit"]["requirements"]
+    assert result["job_fit"]["consistency"]["passed"] is True
+    assert kit["include_job_fit"] is True
     assert result["resume"]["text"]
     assert result["cover_letter"]["text"]
     assert result["resume"]["latex"].startswith("\\documentclass")
@@ -93,6 +97,23 @@ async def test_submit_kit_rejects_empty_inputs(client: httpx.AsyncClient) -> Non
     assert response.status_code == 422
 
 
+async def test_submit_kit_can_persistently_disable_job_fit(client: httpx.AsyncClient) -> None:
+    response = await client.post(
+        "/api/v1/kits",
+        json={
+            "resume_text": SAMPLE_RESUME,
+            "job_description": SAMPLE_JD,
+            "include_job_fit": False,
+        },
+    )
+    assert response.status_code == 202
+    fetched = await client.get(f"/api/v1/kits/{response.json()['id']}")
+    body = fetched.json()
+    assert body["include_job_fit"] is False
+    assert body["result"]["schema_version"] == "application-kit/v2"
+    assert body["result"]["job_fit"] is None
+
+
 async def test_list_kits_paginates(client: httpx.AsyncClient) -> None:
     for _ in range(3):
         resp = await client.post(
@@ -137,7 +158,8 @@ async def test_process_kit_completes_and_persists_result(
         assert done is not None
         assert done.status == KitStatus.COMPLETED
         assert done.result is not None
-        assert done.result["schema_version"] == "application-kit/v1"
+        assert done.result["schema_version"] == "application-kit/v2"
+        assert done.result["job_fit"] is not None
         assert done.result["resume"]["text"]
         assert done.result["validation"]["passed"] is True
 

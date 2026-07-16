@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-"""The versioned ApplicationKit contract (Phase 2A).
+"""The versioned ApplicationKit contract.
 
 This module is the engine's *public, persistable* representation of a generated
 application kit. It is deliberately:
@@ -19,21 +19,21 @@ application kit. It is deliberately:
   nested dataclasses — no engine-internal implementation objects, no pickled
   state (see :mod:`ats_engine.kit.serialization`).
 
-Scope note (Phase 2A): the modelled artifacts are exactly what the real engine
-generates today — a tailored resume, a tailored cover letter, and application
-answers. Job-fit analysis, interview preparation, and LinkedIn outreach are
-Phase 2B and are intentionally NOT modelled here.
+Scope note (Phase 2B1): the modelled artifacts are a tailored resume, cover
+letter, application answers, and an optional grounded job-fit assessment.
+Interview preparation and LinkedIn outreach remain intentionally absent.
 """
 
 # Explicit, self-describing contract identifiers. Bump these when the shape or
 # meaning of the persisted contract changes; the value is stored on every kit.
-SCHEMA_VERSION = "application-kit/v1"
+APPLICATION_KIT_V1 = "application-kit/v1"
+SCHEMA_VERSION = "application-kit/v2"
 
 # The orchestration contract version identifies the grounded-generation behavior
 # (claim extraction + repair/rejection policy). It participates in cache identity
 # (see ADR-0013) so a change in grounding behavior never reuses prose produced by
 # an older contract.
-ORCHESTRATION_VERSION = "grounded-orchestration/v1"
+ORCHESTRATION_VERSION = "grounded-orchestration/v2"
 
 # Bound every evidence excerpt so the trace never becomes a second copy of the
 # candidate's resume (privacy: see ADR-0008).
@@ -42,11 +42,39 @@ CLAIM_TEXT_MAX_CHARS = 200
 
 
 class ArtifactKind(StrEnum):
-    """Which real Phase 2A artifact a record belongs to."""
+    """Which generated artifact a record belongs to."""
 
     RESUME = "resume"
     COVER_LETTER = "cover_letter"
     ANSWERS = "answers"
+    JOB_FIT = "job_fit"
+
+
+class FitBand(StrEnum):
+    """Deterministic fit band derived from requirement coverage policy."""
+
+    LOW = "low"
+    PARTIAL = "partial"
+    COMPETITIVE = "competitive"
+    STRONG = "strong"
+
+
+class RequirementClassification(StrEnum):
+    """Truth-grounded disposition of a JD requirement."""
+
+    PROVEN = "proven"
+    ADJACENT = "adjacent"
+    WORKING_KNOWLEDGE = "working_knowledge"
+    GENUINE_GAP = "genuine_gap"
+
+
+class RequirementRisk(StrEnum):
+    """Candidate-facing risk attached to a requirement assessment."""
+
+    LOW = "low"
+    MODERATE = "moderate"
+    HIGH = "high"
+    MUST_HAVE_GAP = "must_have_gap"
 
 
 class ClaimType(StrEnum):
@@ -177,6 +205,68 @@ class AnswerArtifact:
 
 
 @dataclass(slots=True)
+class RequirementAssessment:
+    """Authoritative deterministic assessment of one relevant JD requirement."""
+
+    id: str
+    requirement: str
+    importance: str
+    must_have: bool
+    classification: RequirementClassification
+    explanation: str
+    risk: RequirementRisk
+    permitted_positioning: str
+    evidence: list[EvidenceRef] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class PositioningRecommendation:
+    """Honest language a candidate may use for a requirement."""
+
+    requirement_id: str
+    text: str
+
+
+@dataclass(slots=True)
+class ConsistencyValidation:
+    """Job-fit narrative consistency outcome after deterministic enforcement."""
+
+    passed: bool
+    errors: list[str] = field(default_factory=list)
+    repaired_violations: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class JobFitArtifact:
+    """Structured, truth-grounded job-fit analysis.
+
+    ``requirement_coverage_score`` is a reproducible policy index, not an
+    interview probability or model confidence. ``ats_keyword_score`` is the
+    engine's existing literal keyword-match score and is supplemental.
+    """
+
+    summary: str
+    requirement_coverage_score: float
+    fit_band: FitBand
+    ats_keyword_score: float
+    interview_probability: int | None
+    requirements: list[RequirementAssessment]
+    strongest_matches: list[str]
+    adjacent_capabilities: list[str]
+    working_knowledge: list[str]
+    genuine_gaps: list[str]
+    must_have_gaps: list[str]
+    positioning_recommendations: list[PositioningRecommendation]
+    validation: ArtifactValidation
+    consistency: ConsistencyValidation
+    generation: GenerationMetadata
+    claims: list[ClaimRecord] = field(default_factory=list)
+    evidence: list[EvidenceRef] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    withheld: bool = False
+
+
+@dataclass(slots=True)
 class ValidationSummary:
     """Kit-wide validation roll-up.
 
@@ -225,12 +315,13 @@ class ApplicationKit:
     resume: ResumeArtifact | None = None
     cover_letter: CoverLetterArtifact | None = None
     answers: AnswerArtifact | None = None
+    job_fit: JobFitArtifact | None = None
     warnings: list[str] = field(default_factory=list)
 
     def all_claims(self) -> list[ClaimRecord]:
         """Every claim record across all artifacts (the full grounding trace)."""
         claims: list[ClaimRecord] = []
-        for artifact in (self.resume, self.cover_letter, self.answers):
+        for artifact in (self.resume, self.cover_letter, self.answers, self.job_fit):
             if artifact is not None:
                 claims.extend(artifact.claims)
         return claims

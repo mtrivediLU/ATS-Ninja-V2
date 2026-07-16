@@ -23,6 +23,9 @@ def test_every_eval_case_produces_a_versioned_kit_with_requested_artifacts() -> 
     for result in run_all():
         assert result.schema_ok, result.name
         assert result.artifact_present, result.name
+        assert result.job_fit_present, result.name
+        assert result.job_fit_consistent, result.name
+        assert result.missing_job_fit_expectations == [], result.name
 
 
 def test_cases_cover_the_intended_scenarios() -> None:
@@ -34,6 +37,8 @@ def test_cases_cover_the_intended_scenarios() -> None:
         "adjacent-skills",
         "sparse-resume",
         "metric-rich",
+        "working-knowledge",
+        "must-have-gap",
     } <= names
 
 

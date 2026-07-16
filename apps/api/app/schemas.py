@@ -42,6 +42,10 @@ class KitCreate(BaseModel):
     job_description: str = Field(min_length=1, description="Target job description as plain text.")
     requested_mode: str = Field(default="", description="Optional generation intent, e.g. 'resume and cover letter'.")
     questions_text: str = Field(default="", description="Optional application/screening questions.")
+    include_job_fit: bool = Field(
+        default=True,
+        description="Generate the grounded JobFitArtifact (enabled by default).",
+    )
 
 
 class EvidenceRefResponse(BaseModel):
@@ -112,6 +116,29 @@ class AnswerArtifactResponse(BaseModel):
     placeholders: list[str] = Field(default_factory=list)
 
 
+class RequirementAssessmentResponse(BaseModel):
+    id: str = ""
+    requirement: str = ""
+    importance: str = ""
+    must_have: bool = False
+    classification: str = "genuine_gap"
+    explanation: str = ""
+    risk: str = "high"
+    permitted_positioning: str = ""
+    evidence: list[EvidenceRefResponse] = Field(default_factory=list)
+
+
+class PositioningRecommendationResponse(BaseModel):
+    requirement_id: str = ""
+    text: str = ""
+
+
+class ConsistencyValidationResponse(BaseModel):
+    passed: bool = True
+    errors: list[str] = Field(default_factory=list)
+    repaired_violations: list[str] = Field(default_factory=list)
+
+
 class GenerationMetadataResponse(BaseModel):
     """Provider-neutral, persistence-safe generation metadata."""
 
@@ -134,6 +161,30 @@ class ValidationSummaryResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class JobFitArtifactResponse(BaseModel):
+    """Structured, deterministic-authoritative job-fit assessment."""
+
+    summary: str = ""
+    requirement_coverage_score: float = 0.0
+    fit_band: str = "low"
+    ats_keyword_score: float = 0.0
+    interview_probability: int | None = None
+    requirements: list[RequirementAssessmentResponse] = Field(default_factory=list)
+    strongest_matches: list[str] = Field(default_factory=list)
+    adjacent_capabilities: list[str] = Field(default_factory=list)
+    working_knowledge: list[str] = Field(default_factory=list)
+    genuine_gaps: list[str] = Field(default_factory=list)
+    must_have_gaps: list[str] = Field(default_factory=list)
+    positioning_recommendations: list[PositioningRecommendationResponse] = Field(default_factory=list)
+    validation: ArtifactValidationResponse = Field(default_factory=ArtifactValidationResponse)
+    consistency: ConsistencyValidationResponse = Field(default_factory=ConsistencyValidationResponse)
+    generation: GenerationMetadataResponse = Field(default_factory=GenerationMetadataResponse)
+    claims: list[ClaimResponse] = Field(default_factory=list)
+    evidence: list[EvidenceRefResponse] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    withheld: bool = False
+
+
 class ApplicationKitResponse(BaseModel):
     """The versioned, truth-grounded application kit as returned by the API."""
 
@@ -147,6 +198,7 @@ class ApplicationKitResponse(BaseModel):
     resume: ResumeArtifactResponse | None = None
     cover_letter: CoverLetterArtifactResponse | None = None
     answers: AnswerArtifactResponse | None = None
+    job_fit: JobFitArtifactResponse | None = None
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -158,6 +210,7 @@ class KitRead(BaseModel):
     id: UUID
     status: KitStatus
     requested_mode: str
+    include_job_fit: bool = True
     result: ApplicationKitResponse | None = None
     error: str | None = None
     created_at: datetime

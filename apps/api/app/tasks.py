@@ -19,7 +19,7 @@ from app.services import mark_kit_failed, process_kit
 
 The task carries only the kit id. It loads all kit state from PostgreSQL, runs
 the existing shared kit lifecycle (`app.services.process_kit` → the real
-`ats_engine.run_pipeline`), and persists the outcome back to PostgreSQL.
+`ats_engine.generate_application_kit`), and persists the outcome back to PostgreSQL.
 
 Async bridge: the service layer is async (async SQLAlchemy), while Celery tasks
 are synchronous. Each task runs its coroutine on a fresh event loop

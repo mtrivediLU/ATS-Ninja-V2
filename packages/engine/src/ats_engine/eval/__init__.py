@@ -5,10 +5,10 @@ from dataclasses import dataclass, field
 from ats_engine.kit import SCHEMA_VERSION, ApplicationKit, generate_application_kit
 from ats_engine.models import Mode
 
-"""Phase 2A quality-evaluation harness.
+"""Grounding and JobFit quality-evaluation harness.
 
 A small, maintainable set of synthetic candidate/JD cases that measure the
-*properties that matter* for Phase 2A rather than an opaque "AI quality score":
+*properties that matter* for Phase 2B1 rather than an opaque "AI quality score":
 
 - **truth-grounding violations** — any forbidden (never-in-evidence) value that
   reached a final artifact (must be zero);
@@ -37,6 +37,9 @@ class EvalCase:
     expect_present: list[str] = field(default_factory=list)
     # Values that are NOT in the candidate evidence and must never appear.
     forbidden: list[str] = field(default_factory=list)
+    expect_job_fit_strengths: list[str] = field(default_factory=list)
+    expect_job_fit_gaps: list[str] = field(default_factory=list)
+    expect_must_have_gaps: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -48,10 +51,21 @@ class CaseResult:
     missing_supported: list[str]
     truth_violations: list[str]
     validation_fatal: bool
+    job_fit_present: bool
+    job_fit_consistent: bool
+    missing_job_fit_expectations: list[str]
 
     @property
     def passed(self) -> bool:
-        return self.schema_ok and self.artifact_present and not self.truth_violations and not self.missing_supported
+        return (
+            self.schema_ok
+            and self.artifact_present
+            and self.job_fit_present
+            and self.job_fit_consistent
+            and not self.truth_violations
+            and not self.missing_supported
+            and not self.missing_job_fit_expectations
+        )
 
 
 def _artifact_texts(kit: ApplicationKit) -> str:
@@ -62,6 +76,9 @@ def _artifact_texts(kit: ApplicationKit) -> str:
         parts.append(kit.cover_letter.text)
     if kit.answers is not None:
         parts.append(kit.answers.text)
+    # Honest gap names in JobFit are not candidate claims and therefore are not
+    # compared with the generic forbidden-value list. JobFit truth is evaluated
+    # through its structured classifications and consistency result below.
     return "\n".join(parts).lower()
 
 
@@ -87,6 +104,19 @@ def run_case(case: EvalCase) -> CaseResult:
     preserved = [fact for fact in case.expect_present if fact.lower() in text]
     missing = [fact for fact in case.expect_present if fact.lower() not in text]
     violations = [value for value in case.forbidden if value.lower() in text]
+    job_fit = kit.job_fit
+    missing_fit: list[str] = []
+    if job_fit is not None:
+        strengths = {value.casefold() for value in job_fit.strongest_matches}
+        gaps = {value.casefold() for value in job_fit.genuine_gaps}
+        must_gaps = {value.casefold() for value in job_fit.must_have_gaps}
+        missing_fit.extend(
+            f"strength:{value}" for value in case.expect_job_fit_strengths if value.casefold() not in strengths
+        )
+        missing_fit.extend(f"gap:{value}" for value in case.expect_job_fit_gaps if value.casefold() not in gaps)
+        missing_fit.extend(
+            f"must-have-gap:{value}" for value in case.expect_must_have_gaps if value.casefold() not in must_gaps
+        )
     return CaseResult(
         name=case.name,
         schema_ok=kit.schema_version == SCHEMA_VERSION,
@@ -95,6 +125,9 @@ def run_case(case: EvalCase) -> CaseResult:
         missing_supported=missing,
         truth_violations=violations,
         validation_fatal=kit.validation.fatal,
+        job_fit_present=job_fit is not None,
+        job_fit_consistent=bool(job_fit and job_fit.consistency.passed and not job_fit.withheld),
+        missing_job_fit_expectations=missing_fit,
     )
 
 
@@ -103,19 +136,21 @@ def run_all() -> list[CaseResult]:
 
 
 def format_report(results: list[CaseResult]) -> str:
-    lines = ["Phase 2A quality evaluation", "=" * 32]
+    lines = ["Phase 2B1 grounding + JobFit evaluation", "=" * 40]
     for result in results:
         status = "PASS" if result.passed else "FAIL"
         lines.append(
             f"[{status}] {result.name}: "
             f"preserved {len(result.preserved)}/{len(result.preserved) + len(result.missing_supported)}, "
             f"violations {len(result.truth_violations)}, "
-            f"fatal={result.validation_fatal}"
+            f"fit_consistent={result.job_fit_consistent}, fatal={result.validation_fatal}"
         )
         if result.truth_violations:
             lines.append(f"    truth-grounding violations: {result.truth_violations}")
         if result.missing_supported:
             lines.append(f"    missing supported facts: {result.missing_supported}")
+        if result.missing_job_fit_expectations:
+            lines.append(f"    missing JobFit expectations: {result.missing_job_fit_expectations}")
     passed = sum(1 for result in results if result.passed)
     total_violations = sum(len(result.truth_violations) for result in results)
     lines.append("-" * 32)
@@ -163,6 +198,7 @@ CASES: list[EvalCase] = [
         mode=Mode.RESUME_AND_COVER,
         expect_present=["Meridian Data", "Python", "SQL", "35%", "Bachelor"],
         forbidden=["Google", "PhD", "Rust"],
+        expect_job_fit_strengths=["python", "sql", "postgresql", "etl", "tableau"],
     ),
     EvalCase(
         name="partially-aligned",
@@ -171,6 +207,9 @@ CASES: list[EvalCase] = [
         mode=Mode.RESUME_AND_COVER,
         expect_present=["Python", "SQL"],
         forbidden=["expert in Rust", "Kubernetes expert"],
+        expect_job_fit_strengths=["python", "sql"],
+        expect_job_fit_gaps=["rust", "kubernetes"],
+        expect_must_have_gaps=["rust", "kubernetes"],
     ),
     EvalCase(
         name="genuine-gaps",
@@ -179,6 +218,7 @@ CASES: list[EvalCase] = [
         mode=Mode.RESUME,
         expect_present=["Cedar Retail", "SQL"],
         forbidden=["Rust", "Kubernetes", "Python expert"],
+        expect_job_fit_gaps=["python", "rust", "kubernetes"],
     ),
     EvalCase(
         name="adjacent-skills",
@@ -203,5 +243,30 @@ CASES: list[EvalCase] = [
         mode=Mode.RESUME,
         expect_present=["60%", "25%", "Python"],
         forbidden=["Google", "$5 million", "PhD"],
+    ),
+    EvalCase(
+        name="working-knowledge",
+        resume=(
+            "Taylor Chen\nTECHNICAL SKILLS\nKubernetes\nPROFESSIONAL EXPERIENCE\n"
+            "Cedar Labs Toronto, ON\nData Analyst 2022 - 2024\n- Built SQL reports.\n"
+        ),
+        jd=(
+            "Job Title: Platform Analyst\nCompany: Beacon\nRequired qualifications:\n- Kubernetes\n"
+            "The platform uses Kubernetes."
+        ),
+        mode=Mode.RESUME,
+        expect_present=["Working knowledge", "Kubernetes"],
+    ),
+    EvalCase(
+        name="must-have-gap",
+        resume=_STRONG_RESUME,
+        jd=(
+            "Job Title: Platform Engineer\nCompany: Beacon\nRequired qualifications:\n- Kubernetes\n- Rust\n"
+            "The platform uses Kubernetes and Rust."
+        ),
+        mode=Mode.RESUME,
+        expect_job_fit_gaps=["kubernetes", "rust"],
+        expect_must_have_gaps=["kubernetes", "rust"],
+        forbidden=["Kubernetes expert", "Rust expert"],
     ),
 ]
