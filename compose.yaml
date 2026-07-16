@@ -102,8 +102,11 @@ services:
       test:
         - CMD-SHELL
         - celery -A app.tasks inspect ping --destination "celery@$$HOSTNAME" --timeout 5 >/dev/null
-      interval: 30s
-      timeout: 10s
+      # Importing the full worker application can exceed ten seconds on slower
+      # or emulated Docker hosts even when the targeted ping succeeds. Keep the
+      # Celery-level probe, but give it enough wall-clock time to finish.
+      interval: 60s
+      timeout: 30s
       retries: 3
       start_period: 20s
 
