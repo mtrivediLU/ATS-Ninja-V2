@@ -33,7 +33,7 @@ async def test_submit_kit_runs_lifecycle_to_completion(client: httpx.AsyncClient
     assert kit["status"] == "completed"
     result = kit["result"]
     # The versioned ApplicationKit contract with typed artifacts.
-    assert result["schema_version"] == "application-kit/v3"
+    assert result["schema_version"] == "application-kit/v4"
     assert result["job_fit"] is not None
     assert result["job_fit"]["requirements"]
     assert result["job_fit"]["consistency"]["passed"] is True
@@ -42,6 +42,10 @@ async def test_submit_kit_runs_lifecycle_to_completion(client: httpx.AsyncClient
     assert result["interview_prep"] is not None
     assert result["interview_prep"]["questions"]
     assert result["interview_prep"]["consistency"]["passed"] is True
+    assert kit["include_linkedin_outreach"] is True
+    assert result["linkedin_outreach"] is not None
+    assert result["linkedin_outreach"]["drafts"]
+    assert result["linkedin_outreach"]["relationship_validation"]["passed"] is True
     assert result["resume"]["text"]
     assert result["cover_letter"]["text"]
     assert result["resume"]["latex"].startswith("\\documentclass")
@@ -101,12 +105,14 @@ async def test_submit_kit_rejects_empty_inputs(client: httpx.AsyncClient) -> Non
     assert response.status_code == 422
 
 
-async def test_openapi_exposes_interview_prep_request_and_typed_response(client: httpx.AsyncClient) -> None:
+async def test_openapi_exposes_product_intelligence_requests_and_typed_responses(client: httpx.AsyncClient) -> None:
     response = await client.get("/openapi.json")
     assert response.status_code == 200
     schemas = response.json()["components"]["schemas"]
     create_properties = schemas["KitCreate"]["properties"]
     assert create_properties["include_interview_prep"]["default"] is True
+    assert create_properties["include_linkedin_outreach"]["default"] is True
+    assert "outreach_context" in create_properties
     assert "InterviewPrepArtifactResponse" in schemas
     prep_properties = schemas["InterviewPrepArtifactResponse"]["properties"]
     assert {
@@ -121,6 +127,18 @@ async def test_openapi_exposes_interview_prep_request_and_typed_response(client:
         "consistency",
         "claims",
     } <= prep_properties.keys()
+    assert "LinkedInOutreachArtifactResponse" in schemas
+    outreach_properties = schemas["LinkedInOutreachArtifactResponse"]["properties"]
+    assert {
+        "strategy_summary",
+        "drafts",
+        "validation",
+        "consistency",
+        "relationship_validation",
+        "claims",
+        "target_context",
+        "relationship_context",
+    } <= outreach_properties.keys()
 
 
 async def test_submit_kit_can_persistently_disable_job_fit(client: httpx.AsyncClient) -> None:
@@ -136,10 +154,11 @@ async def test_submit_kit_can_persistently_disable_job_fit(client: httpx.AsyncCl
     fetched = await client.get(f"/api/v1/kits/{response.json()['id']}")
     body = fetched.json()
     assert body["include_job_fit"] is False
-    assert body["result"]["schema_version"] == "application-kit/v3"
+    assert body["result"]["schema_version"] == "application-kit/v4"
     assert body["result"]["job_fit"] is None
     assert body["include_interview_prep"] is True
     assert body["result"]["interview_prep"] is not None
+    assert body["result"]["linkedin_outreach"] is not None
 
 
 async def test_submit_kit_can_persistently_disable_interview_prep_independently(
@@ -161,6 +180,75 @@ async def test_submit_kit_can_persistently_disable_interview_prep_independently(
     assert body["include_interview_prep"] is False
     assert body["result"]["job_fit"] is not None
     assert body["result"]["interview_prep"] is None
+    assert body["result"]["linkedin_outreach"] is not None
+
+
+async def test_submit_kit_can_disable_outreach_and_persist_typed_context(
+    client: httpx.AsyncClient,
+    sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    context = {
+        "recipient_name": "Avery Chen",
+        "recipient_title": "Engineering Manager",
+        "recipient_company": "Northstar Analytics",
+        "audience": "hiring_manager",
+        "requested_intent": "follow_up",
+        "has_applied": True,
+        "application_date": "2026-07-16",
+        "shared_affiliation": "Carleton alumni network",
+        "portfolio_url": "https://portfolio.example/jordan",
+    }
+    response = await client.post(
+        "/api/v1/kits",
+        json={
+            "resume_text": SAMPLE_RESUME,
+            "job_description": SAMPLE_JD,
+            "include_linkedin_outreach": False,
+            "outreach_context": context,
+        },
+    )
+    assert response.status_code == 202
+    kit_id = response.json()["id"]
+    body = (await client.get(f"/api/v1/kits/{kit_id}")).json()
+    assert body["include_linkedin_outreach"] is False
+    assert body["result"]["linkedin_outreach"] is None
+
+    from app.models import Kit
+
+    async with sessionmaker() as session:
+        persisted = await session.get(Kit, uuid.UUID(kit_id))
+        assert persisted is not None
+        assert persisted.include_linkedin_outreach is False
+        assert persisted.outreach_context == context
+
+
+async def test_submit_kit_generates_personalized_outreach_without_persisted_fit_or_prep(
+    client: httpx.AsyncClient,
+) -> None:
+    response = await client.post(
+        "/api/v1/kits",
+        json={
+            "resume_text": SAMPLE_RESUME,
+            "job_description": SAMPLE_JD,
+            "include_job_fit": False,
+            "include_interview_prep": False,
+            "outreach_context": {
+                "recipient_name": "Avery Chen",
+                "audience": "recruiter",
+                "has_applied": True,
+                "application_status": "submitted",
+            },
+        },
+    )
+    assert response.status_code == 202
+    body = (await client.get(f"/api/v1/kits/{response.json()['id']}")).json()
+    assert body["result"]["job_fit"] is None
+    assert body["result"]["interview_prep"] is None
+    outreach = body["result"]["linkedin_outreach"]
+    assert outreach is not None
+    assert any("Avery Chen" in draft["text"] for draft in outreach["drafts"])
+    assert any(draft["id"] == "post-application-follow-up" for draft in outreach["drafts"])
+    assert outreach["relationship_validation"]["passed"] is True
 
 
 async def test_list_kits_paginates(client: httpx.AsyncClient) -> None:
@@ -207,9 +295,10 @@ async def test_process_kit_completes_and_persists_result(
         assert done is not None
         assert done.status == KitStatus.COMPLETED
         assert done.result is not None
-        assert done.result["schema_version"] == "application-kit/v3"
+        assert done.result["schema_version"] == "application-kit/v4"
         assert done.result["job_fit"] is not None
         assert done.result["interview_prep"] is not None
+        assert done.result["linkedin_outreach"] is not None
         assert done.result["resume"]["text"]
         assert done.result["validation"]["passed"] is True
 

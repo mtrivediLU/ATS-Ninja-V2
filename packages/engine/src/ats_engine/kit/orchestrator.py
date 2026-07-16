@@ -29,12 +29,15 @@ from ats_engine.kit.contract import (
     GenerationMetadata,
     InterviewPrepArtifact,
     JobFitArtifact,
+    LinkedInOutreachArtifact,
+    OutreachContext,
     ResumeArtifact,
     ValidationSummary,
 )
 from ats_engine.kit.grounding import EvidenceContext, GroundingOutcome, build_evidence_context, ground_text
 from ats_engine.kit.policy import MIN_COVER_LETTER_WORDS
 from ats_engine.kit.routing import ResolvedProviders, resolve_providers
+from ats_engine.linkedin_outreach import build_linkedin_outreach_artifact
 from ats_engine.models import AnswerPlan, CoverLetterPlan, Mode, PipelineResult, ResumePlan
 from ats_engine.parsing.resume import build_profile
 from ats_engine.providers.base import LLMProvider
@@ -81,6 +84,8 @@ def generate_application_kit(
     fallback_provider: LLMProvider | None = None,
     include_job_fit: bool = True,
     include_interview_prep: bool = True,
+    include_linkedin_outreach: bool = True,
+    outreach_context: OutreachContext | None = None,
 ) -> ApplicationKit:
     """Generate a truth-grounded, versioned ApplicationKit."""
     resolved_settings = settings or EngineSettings.from_env()
@@ -159,7 +164,7 @@ def generate_application_kit(
     )
 
     job_fit_assessment = None
-    if (include_job_fit or include_interview_prep) and result.resume_plan is not None:
+    if (include_job_fit or include_interview_prep or include_linkedin_outreach) and result.resume_plan is not None:
         job_fit_assessment = build_job_fit_artifact(
             plan=result.resume_plan,
             profile=profile,
@@ -180,15 +185,35 @@ def generate_application_kit(
             provider=resolved.prose,
         )
 
+    linkedin_outreach_artifact = None
+    if include_linkedin_outreach and job_fit_assessment is not None:
+        linkedin_outreach_artifact = build_linkedin_outreach_artifact(
+            profile=profile,
+            jd_profile=result.jd_profile,
+            job_fit=job_fit_assessment,
+            evidence_context=context,
+            outreach_context=outreach_context,
+            provider=resolved.prose,
+        )
+
     validation = _kit_validation(
         result.validation_errors,
-        [resume_artifact, cover_artifact, answers_artifact, job_fit_artifact, interview_prep_artifact],
+        [
+            resume_artifact,
+            cover_artifact,
+            answers_artifact,
+            job_fit_artifact,
+            interview_prep_artifact,
+            linkedin_outreach_artifact,
+        ],
     )
     generation = _generation_metadata(resolved)
     if job_fit_artifact is not None:
         job_fit_artifact.generation = generation
     if interview_prep_artifact is not None:
         interview_prep_artifact.generation = generation
+    if linkedin_outreach_artifact is not None:
+        linkedin_outreach_artifact.generation = generation
 
     from ats_engine import __version__ as engine_version
 
@@ -205,6 +230,7 @@ def generate_application_kit(
         answers=answers_artifact,
         job_fit=job_fit_artifact,
         interview_prep=interview_prep_artifact,
+        linkedin_outreach=linkedin_outreach_artifact,
     )
 
 
@@ -427,7 +453,13 @@ def _build_answers_artifact(
 def _kit_validation(
     errors: list[str],
     artifacts: list[
-        ResumeArtifact | CoverLetterArtifact | AnswerArtifact | JobFitArtifact | InterviewPrepArtifact | None
+        ResumeArtifact
+        | CoverLetterArtifact
+        | AnswerArtifact
+        | JobFitArtifact
+        | InterviewPrepArtifact
+        | LinkedInOutreachArtifact
+        | None
     ],
 ) -> ValidationSummary:
     fatal_errors, warnings = partition_validation_errors(errors)

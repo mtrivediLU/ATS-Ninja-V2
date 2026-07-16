@@ -2,8 +2,9 @@
 
 The ATS-Ninja-V2 FastAPI backend.
 
-**Current scope:** the async **kit lifecycle** plus ApplicationKit v3 and the
-default-on grounded JobFitArtifact and InterviewPrepArtifact — persistence
+**Current scope:** the async **kit lifecycle** plus ApplicationKit v4 and the
+default-on grounded JobFitArtifact, InterviewPrepArtifact, and
+LinkedInOutreachArtifact — persistence
 (async SQLAlchemy 2.x + Alembic + PostgreSQL), a Redis-backed job queue, a
 separately-runnable worker, and kit endpoints — on top of the Phase 0 health +
 settings plumbing.
@@ -15,13 +16,17 @@ settings plumbing.
 - `GET /api/v1/kits/{id}` — kit status and, once completed, its result
 - `GET /api/v1/kits?limit=&offset=` — list kits (newest first)
 
-**Not yet implemented (future phases):** authentication, credits/billing,
-PDF-upload ingestion. No placeholder endpoints pretend these exist.
+**Not yet implemented:** authentication, credits/billing, PDF-upload ingestion,
+LinkedIn access, contact discovery, or message sending. No placeholder endpoints
+pretend these exist.
 
-Creation accepts independent, persisted `include_job_fit` and
-`include_interview_prep` booleans (both default `true`). Interview preparation
-may use an internal deterministic fit assessment even when JobFit persistence is
-disabled; completed results remain in PostgreSQL's existing JSON result column.
+Creation accepts independent, persisted `include_job_fit`,
+`include_interview_prep`, and `include_linkedin_outreach` booleans (all default
+`true`) plus optional bounded `outreach_context`. Interview preparation or
+outreach may use an internal deterministic fit assessment even when JobFit
+persistence is disabled; completed results remain in PostgreSQL's existing JSON
+result column. Migration 0004 stores the outreach option and only the context
+needed to reproduce the requested drafts.
 
 All career business logic lives in `packages/engine` (`ats-engine`); this service
 persists, queues, and orchestrates it — it owns no domain logic.

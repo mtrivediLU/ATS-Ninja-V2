@@ -20,10 +20,10 @@ and a job description it generates a complete **application kit**:
 - downloadable application artifacts
 
 Today the engine produces the tailored **resume, cover letter, application
-answers, job-fit analysis, and interview preparation** and assembles them into a
-versioned, truth-grounded **ApplicationKit** (`application-kit/v3`, see
-`ats_engine.kit`). LinkedIn outreach remains a future capability and is not yet
-implemented. Never describe an unimplemented feature as done.
+answers, job-fit analysis, interview preparation, and LinkedIn outreach drafts**
+and assembles them into a versioned, truth-grounded **ApplicationKit**
+(`application-kit/v4`, see `ats_engine.kit`). Outreach is draft-only: LinkedIn
+access, contact discovery, browser automation, and sending are not implemented.
 
 ## 2. The core principle: deterministic-first, truth-grounded generation
 
@@ -62,6 +62,14 @@ This is the product's differentiator and the most important rule in this repo.
   metric, client, team size, or leadership from a skill. Mark a STAR candidate
   complete only when all material fields are explicitly evidenced by the same
   source context; an incomplete truthful outline is preferable to fabrication.
+- **Outreach evidence classes never escalate privileges.** Candidate facts come
+  only from resume evidence; target facts come only from the JD; recipient,
+  relationship, application, and referral facts come only from explicit typed
+  request context. A target company/role or recipient fact can personalize a
+  draft but can never become candidate history. Never invent a meeting,
+  conversation, referral, mutual connection, shared affiliation, application,
+  attachment, link, recipient fact, or company fact. Outreach generation creates
+  drafts only and must never send or access an external platform.
 
 ## 3. Architecture boundaries
 

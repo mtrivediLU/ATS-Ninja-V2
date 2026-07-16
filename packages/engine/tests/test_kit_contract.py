@@ -14,6 +14,7 @@ from ats_engine import (
     is_application_kit_v1,
     is_application_kit_v2,
     is_application_kit_v3,
+    is_application_kit_v4,
     normalize_persisted_result,
 )
 from ats_engine.kit.serialization import LEGACY_SCHEMA_VERSION, UNKNOWN_SCHEMA_VERSION
@@ -39,13 +40,14 @@ def _kit(mode: Mode = Mode.RESUME_AND_COVER) -> ApplicationKit:
 
 
 def test_schema_version_is_explicit_and_versioned() -> None:
-    assert SCHEMA_VERSION == "application-kit/v3"
+    assert SCHEMA_VERSION == "application-kit/v4"
     kit = _kit()
     assert kit.schema_version == SCHEMA_VERSION
     assert kit.engine_version  # populated
     assert kit.orchestration_version.startswith("grounded-orchestration/")
     assert kit.job_fit is not None
     assert kit.interview_prep is not None
+    assert kit.linkedin_outreach is not None
 
 
 def test_roundtrip_is_json_compatible_and_lossless() -> None:
@@ -141,23 +143,38 @@ PHASE1_RESULT = {
 }
 
 
-def test_v3_result_is_detected_and_passed_through() -> None:
+def test_v4_result_is_detected_and_passed_through() -> None:
     kit = _kit()
     data = application_kit_to_dict(kit)
-    assert is_application_kit_v3(data)
+    assert is_application_kit_v4(data)
     assert normalize_persisted_result(data) == data
+
+
+def test_v3_result_remains_readable_with_absent_linkedin_outreach() -> None:
+    data = application_kit_to_dict(_kit())
+    data["schema_version"] = "application-kit/v3"
+    data.pop("linkedin_outreach")
+    assert is_application_kit_v3(data)
+    normalized = normalize_persisted_result(data)
+    assert normalized is not None
+    assert normalized["schema_version"] == "application-kit/v3"
+    assert normalized["job_fit"] is not None
+    assert normalized["interview_prep"] is not None
+    assert normalized["linkedin_outreach"] is None
 
 
 def test_v2_result_remains_readable_with_absent_interview_prep() -> None:
     data = application_kit_to_dict(_kit())
     data["schema_version"] = "application-kit/v2"
     data.pop("interview_prep")
+    data.pop("linkedin_outreach")
     assert is_application_kit_v2(data)
     normalized = normalize_persisted_result(data)
     assert normalized is not None
     assert normalized["schema_version"] == "application-kit/v2"
     assert normalized["job_fit"] is not None
     assert normalized["interview_prep"] is None
+    assert normalized["linkedin_outreach"] is None
 
 
 def test_v1_result_remains_readable_with_absent_job_fit() -> None:
@@ -165,12 +182,14 @@ def test_v1_result_remains_readable_with_absent_job_fit() -> None:
     data["schema_version"] = "application-kit/v1"
     data.pop("job_fit")
     data.pop("interview_prep")
+    data.pop("linkedin_outreach")
     assert is_application_kit_v1(data)
     normalized = normalize_persisted_result(data)
     assert normalized is not None
     assert normalized["schema_version"] == "application-kit/v1"
     assert normalized["job_fit"] is None
     assert normalized["interview_prep"] is None
+    assert normalized["linkedin_outreach"] is None
 
 
 def test_legacy_phase1_result_is_adapted_not_crashed() -> None:

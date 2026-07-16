@@ -24,7 +24,8 @@ to a local Ollama server over stdlib HTTP.
 | `ats_engine.generation` | Plans + resume/cover-letter/answer generation + pipeline |
 | `ats_engine.job_fit` | Deterministic requirement coverage, fit bands, narrative consistency |
 | `ats_engine.interview_prep` | Grounded questions, STAR integrity, gap guidance, provider consistency |
-| `ats_engine.kit` | ApplicationKit v3, typed artifacts, grounding, serialization compatibility |
+| `ats_engine.linkedin_outreach` | Grounded drafts, evidence boundaries, relationship and length validation |
+| `ats_engine.kit` | ApplicationKit v4, typed artifacts, grounding, serialization compatibility |
 
 ## Core principles
 
@@ -70,8 +71,10 @@ print(result.job_fit.fit_band)
 print(result.job_fit.genuine_gaps)
 print(result.interview_prep.questions)
 print(result.interview_prep.star_stories)
+print(result.linkedin_outreach.drafts)
 ```
 
-ApplicationKit v3 adds the grounded InterviewPrepArtifact. JobFit and interview
-preparation are independently selectable. LinkedIn outreach remains a future
-capability; no placeholder models it.
+ApplicationKit v4 adds grounded LinkedIn outreach drafts. JobFit, interview
+preparation, and outreach are independently selectable. Outreach context is
+typed and provenance-bound; the engine does not send messages or access
+LinkedIn.

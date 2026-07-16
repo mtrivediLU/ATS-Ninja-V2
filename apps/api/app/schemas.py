@@ -30,6 +30,46 @@ class KitStatus(StrEnum):
     FAILED = "failed"
 
 
+class OutreachAudienceInput(StrEnum):
+    RECRUITER = "recruiter"
+    HIRING_MANAGER = "hiring_manager"
+    EMPLOYEE = "employee"
+    TEAMMATE = "teammate"
+    ALUMNI = "alumni"
+    PROFESSIONAL_CONTACT = "professional_contact"
+
+
+class OutreachIntentInput(StrEnum):
+    CONNECT = "connect"
+    DIRECT_MESSAGE = "direct_message"
+    FOLLOW_UP = "follow_up"
+    INFORMATIONAL = "informational"
+    REFERRAL_REQUEST = "referral_request"
+    SHARED_AFFILIATION = "shared_affiliation"
+
+
+class OutreachContextInput(BaseModel):
+    """Optional explicit personalization; never candidate evidence."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    recipient_name: str = Field(default="", max_length=100)
+    recipient_title: str = Field(default="", max_length=120)
+    recipient_company: str = Field(default="", max_length=120)
+    audience: OutreachAudienceInput | None = None
+    requested_intent: OutreachIntentInput | None = None
+    has_applied: bool | None = None
+    application_date: str = Field(default="", max_length=40)
+    application_status: str = Field(default="", max_length=80)
+    referral_contact_name: str = Field(default="", max_length=100)
+    shared_affiliation: str = Field(default="", max_length=140)
+    mutual_connection: str = Field(default="", max_length=100)
+    prior_meeting: str = Field(default="", max_length=160)
+    prior_conversation: str = Field(default="", max_length=160)
+    personalization_note: str = Field(default="", max_length=300)
+    portfolio_url: str = Field(default="", max_length=300, pattern=r"^$|^https?://[^\s<>]+$")
+
+
 class KitCreate(BaseModel):
     """Input to create a kit generation job.
 
@@ -49,6 +89,14 @@ class KitCreate(BaseModel):
     include_interview_prep: bool = Field(
         default=True,
         description="Generate the grounded InterviewPrepArtifact (enabled by default).",
+    )
+    include_linkedin_outreach: bool = Field(
+        default=True,
+        description="Generate grounded LinkedIn outreach drafts (enabled by default).",
+    )
+    outreach_context: OutreachContextInput | None = Field(
+        default=None,
+        description="Optional recipient, relationship, and application facts supplied by the user.",
     )
 
 
@@ -280,6 +328,53 @@ class InterviewPrepArtifactResponse(BaseModel):
     withheld: bool = False
 
 
+class OutreachContextRefResponse(BaseModel):
+    kind: str = "target_job"
+    field: str = ""
+    excerpt: str = ""
+
+
+class OutreachDraftResponse(BaseModel):
+    id: str = ""
+    audience: str = "recruiter"
+    intent: str = "connect"
+    format: str = "connection_note"
+    text: str = ""
+    character_count: int = 0
+    character_limit: int = 0
+    target_company: str = ""
+    target_role: str = ""
+    personalization_fields: list[str] = Field(default_factory=list)
+    call_to_action: str = ""
+    evidence: list[EvidenceRefResponse] = Field(default_factory=list)
+    target_context: list[OutreachContextRefResponse] = Field(default_factory=list)
+    relationship_context: list[OutreachContextRefResponse] = Field(default_factory=list)
+    validation: ArtifactValidationResponse = Field(default_factory=ArtifactValidationResponse)
+
+
+class RelationshipValidationResponse(BaseModel):
+    passed: bool = False
+    errors: list[str] = Field(default_factory=list)
+    repaired_violations: list[str] = Field(default_factory=list)
+
+
+class LinkedInOutreachArtifactResponse(BaseModel):
+    """Structured drafts only; no sending or external-platform state."""
+
+    strategy_summary: str = ""
+    drafts: list[OutreachDraftResponse] = Field(default_factory=list)
+    validation: ArtifactValidationResponse = Field(default_factory=ArtifactValidationResponse)
+    consistency: ConsistencyValidationResponse = Field(default_factory=ConsistencyValidationResponse)
+    relationship_validation: RelationshipValidationResponse = Field(default_factory=RelationshipValidationResponse)
+    generation: GenerationMetadataResponse = Field(default_factory=GenerationMetadataResponse)
+    claims: list[ClaimResponse] = Field(default_factory=list)
+    evidence: list[EvidenceRefResponse] = Field(default_factory=list)
+    target_context: list[OutreachContextRefResponse] = Field(default_factory=list)
+    relationship_context: list[OutreachContextRefResponse] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    withheld: bool = False
+
+
 class ApplicationKitResponse(BaseModel):
     """The versioned, truth-grounded application kit as returned by the API."""
 
@@ -295,6 +390,7 @@ class ApplicationKitResponse(BaseModel):
     answers: AnswerArtifactResponse | None = None
     job_fit: JobFitArtifactResponse | None = None
     interview_prep: InterviewPrepArtifactResponse | None = None
+    linkedin_outreach: LinkedInOutreachArtifactResponse | None = None
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -308,6 +404,7 @@ class KitRead(BaseModel):
     requested_mode: str
     include_job_fit: bool = True
     include_interview_prep: bool = True
+    include_linkedin_outreach: bool = True
     result: ApplicationKitResponse | None = None
     error: str | None = None
     created_at: datetime

@@ -4,10 +4,10 @@ A deterministic-first, truth-grounded AI career SaaS. From a candidate's resume
 and a job description it generates an application kit that stays honest to what
 the candidate has actually done.
 
-> **Status: Phase 2B2 (grounded interview preparation).**
+> **Status: Phase 2B3 (grounded LinkedIn outreach drafts).**
 > The engine produces a tailored **resume, cover letter, and application answers**
 > and now assembles them into a versioned, truth-grounded **ApplicationKit**
-> (`application-kit/v3`): every candidate-specific claim in generated prose is
+> (`application-kit/v4`): every candidate-specific claim in generated prose is
 > validated against the candidate's own evidence, and anything unsupported is
 > removed (or the artifact withheld) before delivery — with a structured
 > claim/evidence trace. The async API + Celery/Redis worker persist this contract
@@ -15,7 +15,10 @@ the candidate has actually done.
 > coverage, fit band, strengths, honest adjacency/working knowledge, and visible
 > gaps. A typed `InterviewPrepArtifact` adds evidence-bounded questions, answer
 > guides, single-context STAR outlines, study topics, and honest gap handling.
-> LinkedIn outreach, authentication, and billing remain future work.
+> A typed `LinkedInOutreachArtifact` adds concise recruiter, hiring-manager,
+> employee, follow-up, referral, and genuine shared-context drafts with explicit
+> candidate/target/recipient/relationship provenance. It generates drafts only;
+> sending, LinkedIn access, authentication, and billing remain future work.
 > See [docs/architecture.md](docs/architecture.md).
 
 ## Why it is different
@@ -98,7 +101,7 @@ pnpm --filter @ats-ninja/web dev                      # http://localhost:3000
 
 ### Use the engine directly (no server)
 
-Generate a versioned, truth-grounded ApplicationKit with JobFit and interview preparation:
+Generate a versioned, truth-grounded ApplicationKit with JobFit, interview preparation, and outreach drafts:
 
 ```python
 from ats_engine import generate_application_kit
@@ -109,11 +112,12 @@ kit = generate_application_kit(
     requested_mode="resume and cover letter",
     use_llm=False,            # fully deterministic path (provider=None)
 )
-print(kit.schema_version)                 # "application-kit/v3"
+print(kit.schema_version)                 # "application-kit/v4"
 print(kit.job_fit.fit_band)               # deterministic requirement-coverage band
 print(kit.job_fit.must_have_gaps)         # honest risks stay visible
 print(kit.interview_prep.questions)       # grounded questions + answer guides
 print(kit.interview_prep.star_stories)    # complete only when every STAR field is evidenced
+print(kit.linkedin_outreach.drafts)       # drafts only; no sending or LinkedIn access
 print(kit.resume.text)                    # tailored resume (fabrications removed)
 print(kit.validation.fatal)               # False means nothing was withheld
 for claim in kit.resume.claims:           # structured truth-grounding trace
@@ -123,7 +127,7 @@ for claim in kit.resume.claims:           # structured truth-grounding trace
 The lower-level `run_pipeline` (raw `PipelineResult`) is still available for
 engine-only callers who do not need the ApplicationKit contract.
 
-### Grounding + JobFit + InterviewPrep quality-evaluation harness
+### Grounding + product-intelligence quality-evaluation harness
 
 ```bash
 python -m ats_engine.eval    # truth-grounding violations + supported-claim preservation
