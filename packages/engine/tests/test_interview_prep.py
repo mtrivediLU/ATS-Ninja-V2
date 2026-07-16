@@ -22,7 +22,7 @@ INTERVIEW_RESUME = (
     "Harbor Data Toronto, ON\n"
     "Data Analyst 2021 - 2025\n"
     "- Situation: Reporting was slow. Task: Improve analyst access. Action: Built Python and SQL pipelines. Result: Reduced reporting time by 30%.\n"
-    "- Supported a migration and delivered Tableau dashboards for operations.\n"
+    "- Supported Project Orion for client Redwood with a team of 5 and delivered Tableau dashboards for operations.\n"
     "Lake Systems Ottawa, ON\n"
     "Software Associate 2019 - 2021\n"
     "- Contributed SQL documentation for internal teams.\n"
@@ -198,8 +198,12 @@ def test_supported_details_and_honest_boundaries_survive() -> None:
         "metro university",
         "bachelor of computer science",
         "tableau",
+        "project orion",
+        "client redwood",
+        "team of 5",
         "kubernetes",
         "rust",
+        "certified data foundations",
     ):
         assert supported in final
     classifications = {area.topic.casefold(): area.classification for area in artifact.focus_areas}

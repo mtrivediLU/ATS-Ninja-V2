@@ -284,6 +284,37 @@ def _story_questions(stories: list[StarStoryCandidate]) -> list[InterviewQuestio
     return questions
 
 
+def _credential_questions(profile: Profile) -> list[InterviewQuestion]:
+    questions: list[InterviewQuestion] = []
+    for index, certification in enumerate(profile.certifications[:2], start=1):
+        excerpt = " ".join(part for part in (certification.name, certification.date) if part)
+        evidence = [
+            EvidenceRef(
+                source="candidate_resume",
+                locator=f"certification:{index - 1}",
+                excerpt=excerpt[:EVIDENCE_EXCERPT_MAX_CHARS],
+            )
+        ]
+        questions.append(
+            InterviewQuestion(
+                id=f"credential-{index:03d}",
+                category=InterviewQuestionCategory.ROLE_SPECIFIC,
+                question="Which resume-listed certification is relevant to discuss for this role?",
+                rationale="A verified credential may be useful context when relevant; do not add unlisted credentials.",
+                related_requirement_ids=[],
+                priority=InterviewPriority.LOW,
+                answer_guide=InterviewAnswerGuide(
+                    key_points=[excerpt],
+                    statements_to_avoid=["Do not claim a credential, issuer, scope, or date absent from the resume."],
+                    suggested_answer=f"My resume lists {certification.name}",
+                    evidence=evidence,
+                ),
+                evidence=evidence,
+            )
+        )
+    return questions
+
+
 def _study_topics(job_fit: JobFitArtifact) -> list[TechnicalStudyTopic]:
     return [
         TechnicalStudyTopic(
@@ -492,7 +523,7 @@ def build_interview_prep_artifact(
     """Build complete interview preparation; deterministic structure is authoritative."""
     focus_areas = [_focus(item) for item in job_fit.requirements]
     stories = _star_stories(profile)
-    questions = _questions(job_fit) + _story_questions(stories)
+    questions = _questions(job_fit) + _story_questions(stories) + _credential_questions(profile)
     study_topics = _study_topics(job_fit)
     gap_handling = _gap_guides(job_fit)
     interviewer_questions = _interviewer_questions(jd_profile)
