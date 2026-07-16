@@ -4,11 +4,15 @@ A deterministic-first, truth-grounded AI career SaaS. From a candidate's resume
 and a job description it generates an application kit that stays honest to what
 the candidate has actually done.
 
-> **Status: Phase 1 (async kit lifecycle).** The engine produces a tailored
-> **resume, cover letter, and application answers** as LaTeX artifacts, and the
-> API now runs generation asynchronously with persistence (PostgreSQL) and a
-> Redis-backed worker. Job-fit narrative, interview prep, LinkedIn outreach,
-> authentication, and billing are **planned** and not yet implemented.
+> **Status: Phase 2A (versioned ApplicationKit + grounded AI orchestration).**
+> The engine produces a tailored **resume, cover letter, and application answers**
+> and now assembles them into a versioned, truth-grounded **ApplicationKit**
+> (`application-kit/v1`): every candidate-specific claim in generated prose is
+> validated against the candidate's own evidence, and anything unsupported is
+> removed (or the artifact withheld) before delivery — with a structured
+> claim/evidence trace. The async API + Celery/Redis worker persist this contract
+> to PostgreSQL. Job-fit narrative, interview prep, LinkedIn outreach,
+> authentication, and billing are **planned (Phase 2B+)** and not yet implemented.
 > See [docs/architecture.md](docs/architecture.md).
 
 ## Why it is different
@@ -91,17 +95,31 @@ pnpm --filter @ats-ninja/web dev                      # http://localhost:3000
 
 ### Use the engine directly (no server)
 
-```python
-from ats_engine import run_pipeline
+Generate a versioned, truth-grounded ApplicationKit (Phase 2A):
 
-result = run_pipeline(
+```python
+from ats_engine import generate_application_kit
+
+kit = generate_application_kit(
     resume_text=my_resume_text,
     job_description=my_jd_text,
     requested_mode="resume and cover letter",
-    use_llm=False,            # fully deterministic path
+    use_llm=False,            # fully deterministic path (provider=None)
 )
-print(result.resume_text)
-print(result.validation_errors)  # [] means every truth-grounding gate passed
+print(kit.schema_version)                 # "application-kit/v1"
+print(kit.resume.text)                    # tailored resume (fabrications removed)
+print(kit.validation.fatal)               # False means nothing was withheld
+for claim in kit.resume.claims:           # structured truth-grounding trace
+    print(claim.claim_type, claim.status, claim.text)
+```
+
+The lower-level `run_pipeline` (raw `PipelineResult`) is still available for
+engine-only callers who do not need the ApplicationKit contract.
+
+### Phase 2A quality-evaluation harness
+
+```bash
+python -m ats_engine.eval    # truth-grounding violations + supported-claim preservation
 ```
 
 ### Containers (requires a running Docker daemon)
@@ -137,6 +155,13 @@ pnpm --filter @ats-ninja/web lint
 pnpm --filter @ats-ninja/web typecheck
 pnpm --filter @ats-ninja/web build
 ```
+
+> The canonical type-check gate is the `mypy --config-file …` form shown above.
+> Each package's config scopes `ignore_missing_imports` to the few stub-less
+> third-party libs (`diskcache`, `pdfplumber`, `celery`) while keeping all
+> first-party code `strict`. A bare `mypy --strict packages/engine/src` from the
+> repo root bypasses that config and reports false `import-untyped` errors — use
+> the config-file form. See AGENTS.md §11.
 
 ## Security & privacy
 

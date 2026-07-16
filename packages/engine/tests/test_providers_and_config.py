@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
+
+import pytest
 
 from ats_engine.caching.content_hash import ContentHashCache, make_key
 from ats_engine.config import EngineSettings
@@ -42,6 +45,23 @@ def test_generate_json_parses_and_repairs(tmp_path: Path) -> None:
 def test_generate_json_returns_none_on_unparseable(tmp_path: Path) -> None:
     provider = ScriptedProvider("not json at all")
     assert generate_json(provider, "prompt", retries=0, cache=_no_cache(tmp_path)) is None
+
+
+def test_generate_json_failure_does_not_log_raw_provider_output(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Provider output is candidate-derived; a JSON parse failure must log only
+    safe metadata (length + hash), never the raw response (audit remediation 4B)."""
+    secret_output = "CANDIDATE_SECRET jordan.rivera@example.com resume text not json"
+    provider = ScriptedProvider(secret_output)
+    with caplog.at_level(logging.WARNING, logger="ats_engine.providers.base"):
+        assert generate_json(provider, "prompt", retries=0, cache=_no_cache(tmp_path)) is None
+    log_text = "\n".join(record.getMessage() for record in caplog.records)
+    assert "CANDIDATE_SECRET" not in log_text
+    assert "jordan.rivera@example.com" not in log_text
+    assert "not json" not in log_text
+    # A safe fingerprint is present instead.
+    assert "sha256=" in log_text and "len=" in log_text
 
 
 def test_content_hash_cache_disabled_is_always_miss(tmp_path: Path) -> None:

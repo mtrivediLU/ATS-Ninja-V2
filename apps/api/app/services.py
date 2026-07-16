@@ -4,13 +4,13 @@ import asyncio
 import logging
 from uuid import UUID
 
-from ats_engine import partition_validation_errors, run_pipeline
+from ats_engine import application_kit_to_dict, generate_application_kit
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
 from app.models import Kit
-from app.schemas import KitCreate, KitResult, KitStatus
+from app.schemas import KitCreate, KitStatus
 
 """Kit application service.
 
@@ -20,6 +20,17 @@ an API request handler and from the async worker.
 """
 
 logger = logging.getLogger(__name__)
+
+# Client-facing failure text. The exception's message/args are deliberately
+# excluded: they could echo resume text, a provider prompt, generated content, a
+# filesystem path, an environment value, or a secret. Only the exception *type*
+# (a safe, fixed identifier) is surfaced; full detail stays in server logs.
+_CLIENT_ERROR_PREFIX = "Kit generation failed"
+
+
+def _client_safe_error(exc: Exception) -> str:
+    """A persisted, client-safe failure message that never leaks content."""
+    return f"{_CLIENT_ERROR_PREFIX} ({type(exc).__name__})."
 
 
 async def create_kit(session: AsyncSession, payload: KitCreate) -> Kit:
@@ -52,14 +63,17 @@ async def list_kits(session: AsyncSession, *, limit: int, offset: int) -> tuple[
 
 
 async def process_kit(session: AsyncSession, kit_id: UUID, settings: Settings) -> None:
-    """Run the engine for a kit and persist the result.
+    """Generate a kit's ApplicationKit and persist it.
 
     This is the unit of work the async worker executes. The engine's
-    ``run_pipeline`` is synchronous and potentially CPU/IO bound, so it runs in a
-    worker thread (``asyncio.to_thread``) to avoid blocking the event loop.
-    Provider output remains untrusted: the engine's own validation gates run
-    inside ``run_pipeline`` and are surfaced here as ``validation_errors`` plus
-    the truth-critical ``fatal_validation_errors`` subset.
+    ``generate_application_kit`` orchestrator is synchronous and potentially
+    CPU/IO bound, so it runs in a worker thread (``asyncio.to_thread``) to avoid
+    blocking the event loop. All truth-grounding happens inside the orchestrator:
+    the persisted ApplicationKit already has every unsupported claim removed (or,
+    if it could not be removed, the affected artifact withheld and flagged
+    ``fatal``). This service adds no business logic; it only drives the lifecycle
+    and persists the versioned contract through the engine's serialization
+    boundary (`application_kit_to_dict`).
     """
     kit = await session.get(Kit, kit_id)
     if kit is None:
@@ -75,8 +89,8 @@ async def process_kit(session: AsyncSession, kit_id: UUID, settings: Settings) -
     await session.commit()
 
     try:
-        pipeline_result = await asyncio.to_thread(
-            run_pipeline,
+        application_kit = await asyncio.to_thread(
+            generate_application_kit,
             resume_text=kit.resume_text,
             job_description=kit.job_description,
             requested_mode=kit.requested_mode or "",
@@ -84,27 +98,16 @@ async def process_kit(session: AsyncSession, kit_id: UUID, settings: Settings) -
             use_llm=settings.engine_use_llm,
         )
     except Exception as exc:  # noqa: BLE001 - any engine failure marks the kit failed, not the worker.
-        logger.exception("process_kit: engine failed for kit %s", kit_id)
+        # Log only the exception type (no message/traceback) so candidate-derived
+        # content in an exception cannot reach server logs; persist a client-safe
+        # message with no content. See the audit-remediation privacy fix (4C).
+        logger.error("process_kit: engine generation failed for kit %s (type=%s)", kit_id, type(exc).__name__)
         kit.status = KitStatus.FAILED
-        kit.error = f"{type(exc).__name__}: {exc}"
+        kit.error = _client_safe_error(exc)
         await session.commit()
         return
 
-    fatal, _warnings = partition_validation_errors(pipeline_result.validation_errors)
-    result = KitResult(
-        resume_text=pipeline_result.resume_text,
-        cover_letter_text=pipeline_result.cover_letter_text,
-        answers_text=pipeline_result.answers_text,
-        resume_latex=pipeline_result.resume_latex,
-        cover_letter_latex=pipeline_result.cover_letter_latex,
-        interview_probability=(
-            pipeline_result.resume_plan.interview_probability if pipeline_result.resume_plan else None
-        ),
-        validation_errors=pipeline_result.validation_errors,
-        fatal_validation_errors=fatal,
-        engine_metadata=pipeline_result.metadata,
-    )
-    kit.result = result.model_dump()
+    kit.result = application_kit_to_dict(application_kit)
     kit.status = KitStatus.COMPLETED
     kit.error = None
     await session.commit()

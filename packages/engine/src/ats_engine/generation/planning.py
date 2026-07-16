@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import cast
 
 from ats_engine.evidence.matrix import build_evidence_matrix, interview_probability
+from ats_engine.generation.prompts import PROHIBITED_INVENTION_CLAUSE
 from ats_engine.models import (
     AnswerPlan,
     ContactInfo,
@@ -293,7 +294,9 @@ def _build_summary(
         "Rules: no em dashes, en dashes, or double hyphens. Do not state any number, percentage, or metric "
         "that is not already given above. Avoid cliche resume filler (results-driven, detail-oriented, "
         "passionate about, proven track record, dynamic, innovative, seamless, robust, leveraged, spearheaded, "
-        "architected, orchestrated, streamlined). Return ONLY the summary text, no headers, no quotes."
+        "architected, orchestrated, streamlined).\n\n"
+        f"{PROHIBITED_INVENTION_CLAUSE}\n\n"
+        "Return ONLY the summary text, no headers, no quotes."
     )
 
     def validate(candidate: str) -> bool:
@@ -441,6 +444,7 @@ def _rewrite_bullets_batch(
         f"Original bullets:\n{numbered}\n\n"
         "Rules: no em dashes, en dashes, or double hyphens. Avoid cliche resume verbs (leveraged, "
         "spearheaded, architected, orchestrated, streamlined, championed, synergized, facilitated).\n\n"
+        f"{PROHIBITED_INVENTION_CLAUSE}\n\n"
         f"Return ONLY a JSON array of exactly {len(bullets)} strings, one rewritten bullet per input bullet, "
         "in the same order. No bullet numbers inside the strings, no commentary, no markdown fences."
     )
@@ -579,7 +583,8 @@ def _build_cover_letter_body(
         f"P4 (50-65 words): logistics and close. Must include, in the candidate's own words: {logistics_line}\n\n"
         "Rules: no em dashes, en dashes, or double hyphens. No flattery phrases like 'I am excited to apply', "
         "'esteemed organization', 'perfect fit', 'I would welcome the opportunity'. Do not state any number or "
-        "percentage that is not already given above. "
+        "percentage that is not already given above.\n\n"
+        f"{PROHIBITED_INVENTION_CLAUSE}\n\n"
         "Return ONLY the four paragraphs separated by a blank line, no salutation, no signature, no headers."
     )
 
@@ -731,7 +736,8 @@ def _long_answer(question: str, resume_plan: ResumePlan, provider: LLMProvider |
         f"Candidate's real proof point to draw from: {proof}\n"
         f"Candidate's summary: {resume_plan.summary}\n\n"
         "Rules: no em dashes, en dashes, or double hyphens. No cliche phrases (I am confident that, I would "
-        "welcome the opportunity, resonates with me, aligns perfectly, as an experienced professional). "
+        "welcome the opportunity, resonates with me, aligns perfectly, as an experienced professional).\n\n"
+        f"{PROHIBITED_INVENTION_CLAUSE}\n\n"
         "Do not start with 'I am writing to'. Return ONLY the answer text."
     )
 

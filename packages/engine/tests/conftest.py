@@ -184,3 +184,108 @@ class ScriptedProvider(LLMProvider):
     def complete(self, prompt: str) -> str:
         self.calls.append(prompt)
         return self._response
+
+
+# ---------------------------------------------------------------------------
+# Phase 2A adversarial fixtures.
+#
+# A synthetic candidate with a *tightly controlled* evidence set, so the
+# adversarial anti-fabrication suite can inject claims the candidate provably
+# never made and assert they never reach the final ApplicationKit.
+#   - real employer: Northstar Analytics (NOT Google)
+#   - real title: Data Analyst (NOT Director/Chief anything)
+#   - real skills: Python, SQL, dashboards (NOT Rust)
+#   - real degree: Bachelor of Computer Science (NOT PhD)
+#   - real metric: 30% (so a real metric can be shown to survive)
+#   - real tenure: 2022-2024 (~2 years, so "10 years" is provably false)
+#   - no certifications, no team-size/headcount evidence
+# ---------------------------------------------------------------------------
+ADVERSARIAL_RESUME = (
+    "Jordan Rivera\n"
+    "jordan.rivera@example.com | linkedin.com/in/jordanrivera\n"
+    "PROFESSIONAL EXPERIENCE\n"
+    "Northstar Analytics Toronto, ON\n"
+    "Data Analyst 2022 - 2024\n"
+    "- Built dashboards and SQL reporting using Python, reducing manual reporting time by 30%.\n"
+    "- Prepared data pipelines and documentation for business analysts.\n"
+    "EDUCATION\n"
+    "Carleton University Ottawa, ON\n"
+    "Bachelor of Computer Science 2018 - 2022\n"
+)
+
+ADVERSARIAL_JD = (
+    "Job Title: AI Engineer\n"
+    "Company: Vantage Analytics\n"
+    "Required qualifications:\n"
+    "- Python and SQL for data systems\n"
+    "- Dashboards and reporting for business teams\n"
+    "The team uses Python and SQL."
+)
+
+# Generic, truthful, style-clean padding used to bulk an injected answer up to
+# the engine's minimum answer length without adding any new candidate claim, so
+# only the fabricated sentence is the thing under test.
+CLEAN_ANSWER_PADDING = (
+    "I care about clear communication and steady delivery on the work I take on. "
+    "I document what I build so the next person can maintain it without guesswork. "
+    "I keep scope honest and ship the smallest useful version first. "
+    "I collaborate closely with the people who rely on the output."
+)
+
+
+def fabricated_answer(claim_sentence: str) -> str:
+    """A first-person answer whose only fabrication is ``claim_sentence``.
+
+    The clean padding keeps the answer long enough to pass the engine's answer
+    length gate and lets a test assert that the truthful remainder survives while
+    only the fabricated sentence is removed.
+    """
+    return f"{claim_sentence} {CLEAN_ANSWER_PADDING}"
+
+
+class FabricatingProvider(LLMProvider):
+    """A prompt-aware adversarial provider.
+
+    It returns fabricated prose only for the artifact surface under test
+    (answers, cover letter, or summary), and an empty string everywhere else so
+    those steps fall back to the deterministic path. This routes a specific
+    fabrication into a specific artifact while keeping the rest of the kit clean,
+    so the assertion isolates the grounding gate.
+    """
+
+    def __init__(
+        self,
+        *,
+        answer: str | None = None,
+        cover: str | None = None,
+        summary: str | None = None,
+        identity: str | None = None,
+    ) -> None:
+        self._answer = answer
+        self._cover = cover
+        self._summary = summary
+        # Identity is part of the engine's content-hash cache key. A fake provider
+        # that returns different content must therefore advertise a different
+        # identity, or the disk cache would serve one fabrication for another. A
+        # real provider's identity already encodes its model/params, so this is
+        # simply the correct behavior for a test double.
+        import hashlib
+
+        digest = hashlib.sha256(f"{answer}|{cover}|{summary}".encode()).hexdigest()[:12]
+        self._identity = identity or f"fabricator:{digest}"
+        self.calls: list[str] = []
+
+    @property
+    def identity(self) -> str:
+        return self._identity
+
+    def complete(self, prompt: str) -> str:
+        self.calls.append(prompt)
+        lowered = prompt.lower()
+        if self._answer is not None and "application question" in lowered:
+            return self._answer
+        if self._cover is not None and "cover letter body" in lowered:
+            return self._cover
+        if self._summary is not None and "resume summary" in lowered:
+            return self._summary
+        return ""

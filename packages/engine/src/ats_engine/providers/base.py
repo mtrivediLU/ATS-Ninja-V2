@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -10,6 +11,18 @@ from typing import Any, Protocol, TypeVar, runtime_checkable
 from ats_engine.caching.content_hash import ContentHashCache, default_cache, make_key
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_response_fingerprint(text: str) -> str:
+    """A privacy-safe descriptor of a provider response for logs.
+
+    Model output is candidate-derived and must never be logged verbatim. This
+    returns only its length and a short content hash — enough to correlate
+    repeated failures without exposing any prompt, resume, or generated content.
+    """
+    digest = hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()[:12]
+    return f"len={len(text)} sha256={digest}"
+
 
 T = TypeVar("T")
 
@@ -109,7 +122,12 @@ def generate_json(
             "No markdown code fences, no commentary, no trailing commas."
         )
 
-    logger.warning("LLM never returned parseable JSON. Last raw output: %.200s", last_raw)
+    logger.warning(
+        "LLM never returned parseable JSON after %s attempts (provider=%s, response=%s).",
+        retries + 1,
+        provider.identity,
+        _safe_response_fingerprint(last_raw),
+    )
     return None
 
 

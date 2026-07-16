@@ -19,10 +19,12 @@ and a job description it generates a complete **application kit**:
 - LinkedIn networking / outreach drafts
 - downloadable application artifacts
 
-Today (Phase 0) the engine produces the tailored **resume, cover letter, and
-application answers** as LaTeX artifacts. Job-fit narrative, interview prep, and
-LinkedIn outreach are **future** capabilities and are not yet implemented. Never
-describe an unimplemented feature as done.
+Today the engine produces the tailored **resume, cover letter, and application
+answers** and assembles them into a versioned, truth-grounded **ApplicationKit**
+(`application-kit/v1`, see `ats_engine.kit`). Job-fit narrative, interview prep,
+and LinkedIn outreach are **future (Phase 2B+)** capabilities and are not yet
+implemented. Never describe an unimplemented feature as done, and never add
+ApplicationKit fields for those future artifacts before they exist.
 
 ## 2. The core principle: deterministic-first, truth-grounded generation
 
@@ -38,6 +40,16 @@ This is the product's differentiator and the most important rule in this repo.
   considered deliverable. Re-validate rewritten prose against the candidate's
   evidence and reject anything that introduces an unsupported metric or a tool
   the source did not contain.
+- **Detection is not enough — unsupported claims must be *removed*.** As of Phase
+  2A the grounded orchestrator (`ats_engine.kit`) runs a truth gate over **every**
+  generated artifact (resume summary/bullets, cover letter, *and* answers): each
+  candidate-specific claim is extracted, classified against the candidate's
+  evidence, and — if unsupported — deterministically excised (or the artifact
+  withheld and the kit marked `fatal`). No fabricated employer, title, metric,
+  dollar value, team size, unsupported skill/expertise, certification, degree,
+  tenure, or management claim may reach the final `ApplicationKit`. Repair is
+  removal (never "soften a fabricated fact into acceptance") and is bounded to a
+  single deterministic pass. See ADR-0009/0011.
 - **Candidate evidence is the single source of truth.** Every candidate-specific
   claim must be backed by evidence from the uploaded resume.
 - **Never fabricate candidate claims** to improve ATS alignment. Inventing an
@@ -100,9 +112,13 @@ Persistence & queue discipline:
   the kit id; the worker loads all state from PostgreSQL (never the Celery result
   backend, which is disabled).
 - The kit service is the single code path the API and the worker share; the
-  worker adds no business logic. An engine failure marks the kit `failed` — it
-  must never crash the worker, and truth-critical validation errors are recorded,
-  never swallowed.
+  worker adds no business logic. It calls the engine's `generate_application_kit`
+  orchestrator and persists the versioned ApplicationKit through the engine's
+  serialization boundary (`application_kit_to_dict`) — the grounding/truth logic
+  and prompts live in `ats_engine`, never in `apps/api` or the Celery task. An
+  engine failure marks the kit `failed` — it must never crash the worker. The
+  persisted result is normalized on read, so a kit stored under the older Phase 1
+  shape is adapted, not crashed (ADR-0012).
 - Tests are hermetic: SQLite + inline queue + `engine_use_llm=False`. No test may
   require a running PostgreSQL, Redis, or model server.
 
@@ -208,6 +224,20 @@ pnpm --filter @ats-ninja/web build
 # Containers (requires a running Docker daemon)
 docker compose config
 ```
+
+**Canonical mypy commands.** The type-check gate is `mypy --config-file
+<package>/pyproject.toml <package>/src` (or, equivalently, running `mypy` from
+inside the package directory). This form is canonical because each package's
+`[tool.mypy]` config holds the **scoped** `ignore_missing_imports` overrides for
+the few third-party libraries that ship no type stubs (`diskcache` and
+`pdfplumber` for the engine; `celery` for the API). First-party ATS-Ninja code is
+always under full `strict = true`.
+
+Do **not** rely on a bare `mypy --strict packages/engine/src` run from the
+repository root: without `--config-file` it does not discover the per-package
+config, so it reports false `import-untyped` errors for those stub-less
+third-party libraries. That is a working-directory artifact, not a first-party
+typing failure — always use the config-file form above.
 
 Do not mark a task complete while a required gate is failing. If a genuine
 pre-existing behavior cannot be migrated safely, document it accurately instead
