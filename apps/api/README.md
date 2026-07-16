@@ -2,7 +2,8 @@
 
 The ATS-Ninja-V2 FastAPI backend.
 
-**Phase 1 scope (implemented):** the async **kit lifecycle** — persistence
+**Current scope:** the async **kit lifecycle** plus ApplicationKit v2 and the
+default-on grounded JobFitArtifact — persistence
 (async SQLAlchemy 2.x + Alembic + PostgreSQL), a Redis-backed job queue, a
 separately-runnable worker, and kit endpoints — on top of the Phase 0 health +
 settings plumbing.
@@ -23,15 +24,15 @@ persists, queues, and orchestrates it — it owns no domain logic.
 ## Architecture
 
 ```
-POST /kits ──▶ Postgres (Kit: pending) ──▶ Redis (arq) ──▶ 202
+POST /kits ──▶ Postgres (Kit: pending) ──▶ Redis (Celery broker) ──▶ 202
                                               │
-        worker (arq app.worker.WorkerSettings) dequeues
+        worker (celery -A app.tasks worker -Q kits) dequeues
                                               │
-              run_pipeline (in a thread) ─────▶ Postgres (Kit: completed|failed)
+      generate_application_kit (thread) ─────▶ Postgres (Kit: completed|failed)
 GET /kits/{id} ◀── current status / result
 ```
 
-The API depends only on a `JobQueue` interface (`app.queue`): `ArqJobQueue` in
+The API depends only on a `JobQueue` interface (`app.queue`): `CeleryJobQueue` in
 production, `InlineJobQueue` (in-process) for tests. The DB session factory lives
 on `app.state`, populated by the lifespan (prod) or the test fixtures.
 
@@ -49,7 +50,7 @@ export ATS_API_REDIS_URL="redis://localhost:6379"
 # Apply migrations, then run the API and the worker (separate processes):
 (cd apps/api && alembic upgrade head)
 uvicorn app.main:app --reload --app-dir apps/api          # API on :8000
-(cd apps/api && arq app.worker.WorkerSettings)            # worker
+(cd apps/api && celery -A app.tasks worker -l info -Q kits) # worker
 
 # Or run the whole topology in containers:
 docker compose up --build                                  # db, redis, migrate, api, worker, web

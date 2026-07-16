@@ -41,6 +41,7 @@ async def create_kit(session: AsyncSession, payload: KitCreate) -> Kit:
         job_description=payload.job_description,
         requested_mode=payload.requested_mode,
         questions_text=payload.questions_text,
+        include_job_fit=payload.include_job_fit,
     )
     session.add(kit)
     await session.commit()
@@ -96,6 +97,7 @@ async def process_kit(session: AsyncSession, kit_id: UUID, settings: Settings) -
             requested_mode=kit.requested_mode or "",
             questions_text=kit.questions_text or "",
             use_llm=settings.engine_use_llm,
+            include_job_fit=kit.include_job_fit,
         )
     except Exception as exc:  # noqa: BLE001 - any engine failure marks the kit failed, not the worker.
         # Log only the exception type (no message/traceback) so candidate-derived

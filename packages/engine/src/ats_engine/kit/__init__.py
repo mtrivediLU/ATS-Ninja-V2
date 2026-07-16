@@ -13,6 +13,7 @@ import from here rather than from private submodules.
 from __future__ import annotations
 
 from ats_engine.kit.contract import (
+    APPLICATION_KIT_V1,
     ORCHESTRATION_VERSION,
     SCHEMA_VERSION,
     AnswerArtifact,
@@ -24,9 +25,16 @@ from ats_engine.kit.contract import (
     ClaimRecord,
     ClaimStatus,
     ClaimType,
+    ConsistencyValidation,
     CoverLetterArtifact,
     EvidenceRef,
+    FitBand,
     GenerationMetadata,
+    JobFitArtifact,
+    PositioningRecommendation,
+    RequirementAssessment,
+    RequirementClassification,
+    RequirementRisk,
     ResumeArtifact,
     ValidationSummary,
 )
@@ -36,11 +44,13 @@ from ats_engine.kit.serialization import (
     application_kit_from_dict,
     application_kit_to_dict,
     is_application_kit_v1,
+    is_application_kit_v2,
     normalize_persisted_result,
 )
 
 __all__ = [
     "ORCHESTRATION_VERSION",
+    "APPLICATION_KIT_V1",
     "SCHEMA_VERSION",
     "LEGACY_SCHEMA_VERSION",
     "AnswerArtifact",
@@ -55,11 +65,19 @@ __all__ = [
     "CoverLetterArtifact",
     "EvidenceRef",
     "GenerationMetadata",
+    "ConsistencyValidation",
+    "FitBand",
+    "JobFitArtifact",
+    "PositioningRecommendation",
+    "RequirementAssessment",
+    "RequirementClassification",
+    "RequirementRisk",
     "ResumeArtifact",
     "ValidationSummary",
     "generate_application_kit",
     "application_kit_from_dict",
     "application_kit_to_dict",
     "is_application_kit_v1",
+    "is_application_kit_v2",
     "normalize_persisted_result",
 ]

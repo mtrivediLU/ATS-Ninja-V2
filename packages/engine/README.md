@@ -22,6 +22,8 @@ to a local Ollama server over stdlib HTTP.
 | `ats_engine.caching` | Content-hash cache (disk-backed, degrades to no-op) |
 | `ats_engine.providers` | `LLMProvider` interface + Ollama adapter |
 | `ats_engine.generation` | Plans + resume/cover-letter/answer generation + pipeline |
+| `ats_engine.job_fit` | Deterministic requirement coverage, fit bands, narrative consistency |
+| `ats_engine.kit` | ApplicationKit v2, JobFitArtifact, grounding, serialization compatibility |
 
 ## Core principles
 
@@ -54,19 +56,18 @@ mypy --config-file packages/engine/pyproject.toml packages/engine/src  # types
 ## Usage
 
 ```python
-from ats_engine import run_pipeline, Mode
+from ats_engine import Mode, generate_application_kit
 
-result = run_pipeline(
+result = generate_application_kit(
     resume_text=my_resume_text,
     job_description=my_jd_text,
     requested_mode="resume and cover letter",
     use_llm=False,  # fully deterministic path
 )
-print(result.resume_text)
-print(result.validation_errors)  # [] means every truth-grounding gate passed
+print(result.resume.text)
+print(result.job_fit.fit_band)
+print(result.job_fit.genuine_gaps)
 ```
 
-> **Phase 0 scope:** the pipeline produces a tailored resume, cover letter, and
-> application answers (LaTeX artifacts). Job-fit narrative, interview prep, and
-> LinkedIn outreach are future capabilities and are intentionally not yet
-> implemented — no placeholder pretends they exist.
+ApplicationKit v2 adds the grounded JobFitArtifact. Interview preparation and
+LinkedIn outreach remain future capabilities; no placeholder models them.

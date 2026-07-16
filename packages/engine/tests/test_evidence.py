@@ -30,6 +30,15 @@ def test_adjacency_phrasing_does_not_become_fake_production_experience(profile: 
     assert "production" not in item.allowed_placement.lower()
 
 
+def test_adjacency_uses_exact_related_tool_evidence_from_experience_bullets(profile: Profile) -> None:
+    profile.tier_a = {}
+    profile.tier_b = {}
+    profile.experiences[0].bullets.append("Delivered Tableau dashboards for finance teams.")
+    item = classify_keyword("Power BI", "required", profile)
+    assert item.evidence_tier == "adjacency"
+    assert "tableau" in item.real_evidence.lower()
+
+
 def test_genuine_gap_is_marked_missing_and_not_claimed(profile: Profile) -> None:
     item = classify_keyword("COBOL", "required", profile)
     assert item.evidence_tier == "missing"
