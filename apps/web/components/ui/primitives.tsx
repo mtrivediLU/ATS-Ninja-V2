@@ -143,6 +143,8 @@ const statusClasses: Record<StatusTone, string> = {
   danger: "border-danger-border bg-danger-bg text-danger",
   info: "border-info-border bg-info-bg text-info",
   neutral: "border-neutral-border bg-neutral-bg text-neutral",
+  edited: "border-edited-border bg-edited-bg text-edited",
+  unavailable: "border-unavailable-border border-dashed bg-unavailable-bg text-unavailable",
 };
 
 export function Badge({ tone = "neutral", children, className }: { tone?: StatusTone; children: ReactNode; className?: string }) {

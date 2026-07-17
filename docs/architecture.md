@@ -1,6 +1,6 @@
 # ATS-Ninja-V2 — Architecture
 
-Status: **Phase 2 backend complete; Design Phase D1 private product workflows**. This
+Status: **Phase 2 backend complete; Design Phase D2 private-local dogfooding polish**. This
 document distinguishes what is **completed**, what **architecture is
 established**, and what is **future** planned work. It never describes
 unimplemented functionality as done.
@@ -44,22 +44,38 @@ application shells. Three deployable/importable units plus infra and docs:
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Frontend workflows (Design Phase D1)
+### Frontend workflows (Design Phase D2)
 
 `apps/web` preserves the approved Signal application foundation: centralized
 semantic tokens, responsive desktop/sidebar, tablet/rail, mobile/drawer and
 bottom-navigation layouts, route-based artifact tabs, a responsive evidence
-panel, and accessible UI primitives. D1 connects that foundation to the real
+panel, and accessible UI primitives. D1 connected that foundation to the real
 Kit lifecycle through a small typed fetch client, cancellable polling, dynamic
 Kit routes, six ApplicationKit v4 workspaces, real evidence traces, and
-server-backed paginated history. It does not recalculate lifecycle, grounding,
-fit, STAR completeness, outreach validation, or claim classification.
+server-backed paginated history. D2 adds a route-backed trust/content view,
+artifact trust summaries, a unified state presentation vocabulary, trace filters
+and keyboard navigation, local edit/dirty/compare/reset/discard flows, copy and
+safe downloads, history active filters/load-more, recovery copy, Job Fit gap
+emphasis, Interview focus mode, and Outreach per-draft local editing.
+
+All D2 summaries are presentation aggregates of `ClaimResponse` and
+`ArtifactValidationResponse`; they do not calculate grounding, scores, fit bands,
+STAR completeness, relationship validity, or a confidence/readiness score.
+Evidence excerpts remain bounded server values. Because the contract carries no
+claim character offsets, the frontend renders explicit trace markers below
+content rather than inferring claim locations with browser text matching.
+
+Manual edits remain React-only and are never persisted, sent to the API, stored
+in browser storage, or called revalidated. Reload restores server-generated
+content. The D2 development-only `/states/d2` route isolates typed unavailable,
+partial, old-format, and malformed-response fixtures from real Kit history.
 
 Primary artifact selection is persisted as three explicit booleans while
 `requested_mode` remains backward-compatible (ADR-0017). Local document edits
 are deliberately unsaved and marked as not revalidated because no edit/ground
 endpoint exists. PDF upload, artifact regeneration, authentication, billing,
-and public hosting remain later or out-of-scope work.
+and public hosting remain later or out-of-scope work. D2 does not change the API,
+engine, persistence authority, or queue payloads.
 
 ### Async kit lifecycle (Phase 1, completed)
 

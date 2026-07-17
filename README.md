@@ -4,7 +4,7 @@ A deterministic-first, truth-grounded AI career SaaS. From a candidate's resume
 and a job description it generates an application kit that stays honest to what
 the candidate has actually done.
 
-> **Status: Phase 2 backend complete; Design Phase D1 private product workflows.**
+> **Status: Phase 2 backend complete; Design Phase D2 private-local dogfooding polish.**
 > The engine produces a tailored **resume, cover letter, and application answers**
 > and now assembles them into a versioned, truth-grounded **ApplicationKit**
 > (`application-kit/v4`): every candidate-specific claim in generated prose is
@@ -21,9 +21,10 @@ the candidate has actually done.
 > sending, LinkedIn access, authentication, and billing remain future work.
 > The Next.js frontend now provides the approved responsive **Signal** shell and
 > privately usable local workflows: real Kit submission and polling, all six
-> ApplicationKit v4 workspaces, evidence inspection, local copy/download and
-> editing, and server-backed history. Authentication and public SaaS concerns
-> remain intentionally absent.
+> ApplicationKit v4 workspaces, trust-first summaries, bounded evidence
+> inspection, unvalidated local editing/compare/reset, safe local
+> copy/download, recovery handling, and server-backed history. Authentication
+> and public SaaS concerns remain intentionally absent.
 > See [docs/architecture.md](docs/architecture.md).
 
 ## Why it is different
@@ -44,7 +45,7 @@ Read [AGENTS.md](AGENTS.md) — the standing engineering contract — before con
 packages/engine   Pure-Python domain engine (ats_engine): parsing, evidence,
                   scoring, validation, caching, providers, generation, models
 apps/api          FastAPI backend (Phase 0: health + settings, engine-ready)
-apps/web          Next.js App Router frontend — D1 private local product workflows
+apps/web          Next.js App Router frontend — D2 private-local dogfooding workflows
 infra             Dockerfiles + Docker Compose topology
 docs              Architecture documentation + ADRs
 ```

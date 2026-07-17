@@ -41,7 +41,7 @@ export function safeFilename(...parts: string[]): string {
     .replace(/[^a-z0-9._-]+/g, "-")
     .replace(/-+/g, "-")
     .replace(/^[-.]+|[-.]+$/g, "")
-    .slice(0, 96);
+    .slice(0, 80);
   return safe || "ats-ninja-artifact";
 }
 

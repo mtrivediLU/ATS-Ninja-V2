@@ -12,7 +12,7 @@ export default function ErrorPage() {
       <div className="grid gap-5 xl:grid-cols-3">
         <section className="rounded-lg border border-border bg-surface px-5"><ErrorState title="Kit generation failed" description="The kit is marked failed. A retry creates a new job; the worker itself is not treated as crashed." status={kitStatusPresentation.failed} action={<Link href="/" className={buttonClassName("primary", "sm")}>Retry as new kit</Link>} /></section>
         <section className="rounded-lg border border-border bg-surface px-5"><ErrorState title="API unavailable" description="The service could not be reached. Inputs stay in this disconnected demonstration only." status={kitStatusPresentation.failed} action={<Link href="/" className={buttonClassName("secondary", "sm")}>Return to New Kit</Link>} /></section>
-        <section className="rounded-lg border border-border bg-surface px-5"><ErrorState title="Worker unavailable" description="The API accepted the job, but processing infrastructure is unavailable. The state is surfaced plainly." status={withheldPresentation} action={<Link href="/history" className={buttonClassName("secondary", "sm")}>View history</Link>} /></section>
+        <section className="rounded-lg border border-border bg-surface px-5"><ErrorState title="Processing service unavailable" description="The Kit could not continue processing. The persisted lifecycle record does not reliably identify an underlying service, so no operational diagnosis is shown." status={withheldPresentation} action={<Link href="/history" className={buttonClassName("secondary", "sm")}>View history</Link>} /></section>
       </div>
     </div>
   );
