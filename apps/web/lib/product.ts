@@ -45,6 +45,12 @@ export function safeFilename(...parts: string[]): string {
   return safe || "ats-ninja-artifact";
 }
 
+/** A concise filename for template exports; unavailable target values are omitted. */
+export function templateFilename(company: string, role: string, artifact: "resume" | "cover-letter", template: "classic" | "modern"): string {
+  const usable = (value: string): string => value === "Target company unavailable" || value === "Application kit" ? "" : value;
+  return safeFilename(usable(company), usable(role), artifact, template, "ats");
+}
+
 export async function copyText(text: string): Promise<void> {
   if (!text) throw new Error("Nothing is available to copy.");
   await navigator.clipboard.writeText(text);
