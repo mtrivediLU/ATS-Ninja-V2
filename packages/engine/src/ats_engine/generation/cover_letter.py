@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from ats_engine.generation.document_normalization import normalize_document_text
 from ats_engine.generation.latex_renderer import cover_letter_to_latex
 from ats_engine.models import CoverLetterPlan
 from ats_engine.validation.repair import soften_banned_style
@@ -7,7 +8,7 @@ from ats_engine.validation.repair import soften_banned_style
 
 def generate_cover_letter_text(plan: CoverLetterPlan) -> str:
     """Render cover-letter body text from a structured plan."""
-    return soften_banned_style(_strip_banned_dashes("\n\n".join(plan.body_paragraphs).strip()))
+    return normalize_document_text(soften_banned_style(_strip_banned_dashes("\n\n".join(plan.body_paragraphs).strip())))
 
 
 def generate_cover_letter_latex(plan: CoverLetterPlan) -> str:

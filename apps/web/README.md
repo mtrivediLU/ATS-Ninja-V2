@@ -3,6 +3,14 @@
 The ATS-Ninja private local frontend: Next.js 15 App Router, React 19, strict
 TypeScript, and Tailwind CSS 4.
 
+## Structured documents and printing
+
+Resume and Cover Letter templates prefer optional engine-provided structured
+document fields, then use the conservative text parser/verbatim fallback for
+older Kits. Classic and Modern render the same source content. Print / Save as
+PDF uses one flowing print-only document root, excluding all application
+warnings and controls. Local edits stay local and are not revalidated.
+
 ## Current scope: Design Phase D2
 
 D2 retains the D0 **Signal** foundation and D1 real workflows, then adds the

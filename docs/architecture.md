@@ -1,5 +1,15 @@
 # ATS-Ninja-V2 — Architecture
 
+## Structured candidate documents and browser print
+
+Resume and Cover Letter artifacts retain their existing plain-text and optional
+LaTeX fields and may include structured document data assembled from the
+already-grounded engine plans. No browser-side candidate-fact inference is used.
+Older persisted Kits fall back to conservative text parsing and then verbatim
+display. The web template view has one dedicated, flowing print root for the
+selected document; controls, trust UI, and fallback notices are deliberately
+excluded from Print / Save as PDF. No external PDF service is used.
+
 Status: **Phase 2 backend complete; Design Phase D2 private-local dogfooding polish**. This
 document distinguishes what is **completed**, what **architecture is
 established**, and what is **future** planned work. It never describes

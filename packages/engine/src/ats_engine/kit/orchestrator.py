@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import date
+
 from ats_engine.config import EngineSettings
 from ats_engine.generation.answers import generate_answers_text
 from ats_engine.generation.cover_letter import (
@@ -7,6 +9,7 @@ from ats_engine.generation.cover_letter import (
     generate_cover_letter_latex,
     generate_cover_letter_text,
 )
+from ats_engine.generation.document_normalization import normalize_document_text
 from ats_engine.generation.pipeline import resolve_artifact_selection, run_pipeline, validate_pipeline_result
 from ats_engine.generation.resume import (
     format_resume_output,
@@ -26,12 +29,18 @@ from ats_engine.kit.contract import (
     ArtifactValidation,
     ClaimRecord,
     CoverLetterArtifact,
+    CoverLetterDocument,
     GenerationMetadata,
     InterviewPrepArtifact,
     JobFitArtifact,
     LinkedInOutreachArtifact,
     OutreachContext,
     ResumeArtifact,
+    ResumeCertificationEntry,
+    ResumeDocument,
+    ResumeEducationEntry,
+    ResumeExperienceEntry,
+    ResumeSkillGroup,
     ValidationSummary,
 )
 from ats_engine.kit.grounding import EvidenceContext, GroundingOutcome, build_evidence_context, ground_text
@@ -417,6 +426,7 @@ def _build_resume_artifact(
         validation=validation,
         claims=claims,
         interview_probability=(result.resume_plan.interview_probability if result.resume_plan else None),
+        document=None if withheld or result.resume_plan is None else _resume_document(result.resume_plan),
     )
 
 
@@ -433,6 +443,83 @@ def _build_cover_artifact(
         latex="" if withheld else result.cover_letter_latex,
         validation=validation,
         claims=claims,
+        document=None if withheld or result.cover_letter_plan is None else _cover_document(result.cover_letter_plan),
+    )
+
+
+def _contact_lines(plan: ResumePlan | CoverLetterPlan) -> list[str]:
+    contact = plan.contacts
+    return [
+        normalize_document_text(value)
+        for value in (contact.email, contact.phone, contact.location, contact.linkedin, contact.website)
+        if normalize_document_text(value)
+    ]
+
+
+def _resume_document(plan: ResumePlan) -> ResumeDocument:
+    """Project the already-grounded plan into presentation fields without inference."""
+    return ResumeDocument(
+        candidate_name=normalize_document_text(plan.contacts.name),
+        professional_headline=normalize_document_text(plan.headline),
+        contact_lines=_contact_lines(plan),
+        summary=normalize_document_text(plan.summary),
+        skill_groups=[
+            ResumeSkillGroup(
+                normalize_document_text(label),
+                [normalize_document_text(item) for item in items if normalize_document_text(item)],
+            )
+            for label, items in plan.skill_groups
+            if normalize_document_text(label) or items
+        ],
+        experience=[
+            ResumeExperienceEntry(
+                employer=normalize_document_text(item.company),
+                title=normalize_document_text(item.title),
+                location=normalize_document_text(item.location),
+                date_range=normalize_document_text(item.dates),
+                bullets=[normalize_document_text(bullet) for bullet in item.bullets if normalize_document_text(bullet)],
+            )
+            for item in plan.experience
+        ],
+        education=[
+            ResumeEducationEntry(
+                institution=normalize_document_text(item.institution),
+                degree=normalize_document_text(item.degree),
+                location=normalize_document_text(item.location),
+                date_range=normalize_document_text(item.dates),
+                details=[normalize_document_text(detail) for detail in item.bullets if normalize_document_text(detail)],
+            )
+            for item in plan.education
+        ],
+        certifications=[
+            ResumeCertificationEntry(
+                normalize_document_text(item.name),
+                normalize_document_text(item.date),
+                normalize_document_text(item.link),
+            )
+            for item in plan.certifications
+            if normalize_document_text(item.name)
+        ],
+    )
+
+
+def _cover_document(plan: CoverLetterPlan) -> CoverLetterDocument:
+    company = plan.jd_profile.company if plan.jd_profile.company != "Target Company" else ""
+    role = plan.jd_profile.title if plan.jd_profile.title != "Target Role" else ""
+    return CoverLetterDocument(
+        sender_name=normalize_document_text(plan.contacts.name),
+        sender_contact_lines=_contact_lines(plan),
+        date=date.today().strftime("%B %d, %Y").replace(" 0", " "),
+        recipient_company=normalize_document_text(company),
+        target_role=normalize_document_text(role),
+        greeting="Dear Hiring Manager,",
+        body_paragraphs=[
+            normalize_document_text(paragraph)
+            for paragraph in plan.body_paragraphs
+            if normalize_document_text(paragraph)
+        ],
+        closing="Sincerely,",
+        signature_name=normalize_document_text(plan.contacts.name),
     )
 
 

@@ -64,6 +64,23 @@ def test_roundtrip_is_json_compatible_and_lossless() -> None:
     assert [c.claim_type for c in kit2.resume.claims] == [c.claim_type for c in kit.resume.claims]
 
 
+def test_structured_documents_are_optional_and_come_from_grounded_plans() -> None:
+    kit = _kit()
+    assert kit.resume is not None and kit.resume.document is not None
+    assert kit.cover_letter is not None and kit.cover_letter.document is not None
+    resume = kit.resume.document
+    cover = kit.cover_letter.document
+    assert resume.candidate_name
+    assert resume.experience
+    assert all("Company:" not in entry.employer for entry in resume.experience)
+    assert cover.greeting == "Dear Hiring Manager,"
+    assert cover.closing == "Sincerely,"
+    assert all(not paragraph.startswith("Dear ") for paragraph in cover.body_paragraphs)
+    serialized = application_kit_to_dict(kit)
+    assert serialized["resume"]["document"]["experience"]
+    assert serialized["cover_letter"]["document"]["greeting"] == "Dear Hiring Manager,"
+
+
 def test_resume_only_kit_has_no_cover_or_answers() -> None:
     kit = _kit(Mode.RESUME)
     assert kit.resume is not None
@@ -233,6 +250,7 @@ def test_legacy_phase1_result_is_adapted_not_crashed() -> None:
     assert normalized is not None
     assert normalized["schema_version"] == LEGACY_SCHEMA_VERSION
     assert normalized["resume"] is not None
+    assert normalized["resume"].get("document") is None
     assert normalized["resume"]["text"].startswith("Candidate Header")
     assert normalized["cover_letter"] is not None
     assert normalized["answers"] is None  # empty legacy answers -> absent
