@@ -1,6 +1,6 @@
 # ATS-Ninja-V2 — Architecture
 
-Status: **Phase 2 backend complete; Design Phase D0 frontend foundation**. This
+Status: **Phase 2 backend complete; Design Phase D1 private product workflows**. This
 document distinguishes what is **completed**, what **architecture is
 established**, and what is **future** planned work. It never describes
 unimplemented functionality as done.
@@ -44,18 +44,22 @@ application shells. Three deployable/importable units plus infra and docs:
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Frontend foundation (Design Phase D0)
+### Frontend workflows (Design Phase D1)
 
-`apps/web` implements the approved Signal application foundation: centralized
+`apps/web` preserves the approved Signal application foundation: centralized
 semantic tokens, responsive desktop/sidebar, tablet/rail, mobile/drawer and
 bottom-navigation layouts, route-based artifact tabs, a responsive evidence
-panel, accessible UI primitives, and synthetic foundation states. Its typed
-status layer maps existing API values to labels, icons, and semantic tones; it
-does not recalculate lifecycle, grounding, fit, or validation state.
+panel, and accessible UI primitives. D1 connects that foundation to the real
+Kit lifecycle through a small typed fetch client, cancellable polling, dynamic
+Kit routes, six ApplicationKit v4 workspaces, real evidence traces, and
+server-backed paginated history. It does not recalculate lifecycle, grounding,
+fit, STAR completeness, outreach validation, or claim classification.
 
-Detailed New Kit submission/polling, artifact workspaces, evidence drill-down,
-authentication, billing, and upload flows remain later phases. D0 routes label
-all placeholder content clearly and make no backend requests.
+Primary artifact selection is persisted as three explicit booleans while
+`requested_mode` remains backward-compatible (ADR-0017). Local document edits
+are deliberately unsaved and marked as not revalidated because no edit/ground
+endpoint exists. PDF upload, artifact regeneration, authentication, billing,
+and public hosting remain later or out-of-scope work.
 
 ### Async kit lifecycle (Phase 1, completed)
 

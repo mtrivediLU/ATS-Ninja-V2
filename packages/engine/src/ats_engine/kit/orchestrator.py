@@ -7,7 +7,7 @@ from ats_engine.generation.cover_letter import (
     generate_cover_letter_latex,
     generate_cover_letter_text,
 )
-from ats_engine.generation.pipeline import run_pipeline, validate_pipeline_result
+from ats_engine.generation.pipeline import resolve_artifact_selection, run_pipeline, validate_pipeline_result
 from ats_engine.generation.resume import (
     format_resume_output,
     generate_resume_latex,
@@ -64,10 +64,6 @@ evidence, scoring, or generation. The flow:
 The worker calls this; the ApplicationKit logic never lives in FastAPI or Celery.
 """
 
-_RESUME_MODES = {Mode.RESUME, Mode.RESUME_AND_COVER, Mode.RESUME_AND_QUESTIONS}
-_COVER_MODES = {Mode.COVER_LETTER, Mode.RESUME_AND_COVER}
-_ANSWER_MODES = {Mode.QUESTIONS, Mode.RESUME_AND_QUESTIONS}
-
 
 def generate_application_kit(
     *,
@@ -76,6 +72,9 @@ def generate_application_kit(
     requested_mode: str = "",
     questions_text: str = "",
     default_mode: Mode | None = None,
+    include_resume: bool | None = None,
+    include_cover_letter: bool | None = None,
+    include_application_answers: bool | None = None,
     settings: EngineSettings | None = None,
     use_llm: bool = True,
     model_name: str = "",
@@ -98,12 +97,18 @@ def generate_application_kit(
         fallback_provider=fallback_provider,
     )
 
+    legacy_mode = default_mode if default_mode is not None and not requested_mode.strip() else None
+
     result = run_pipeline(
         resume_text=resume_text,
         job_description=job_description,
         requested_mode=requested_mode,
         questions_text=questions_text,
         default_mode=default_mode,
+        include_resume=include_resume,
+        include_cover_letter=include_cover_letter,
+        include_application_answers=include_application_answers,
+        require_resume_plan=include_job_fit or include_interview_prep or include_linkedin_outreach,
         settings=resolved_settings,
         use_llm=resolved.llm_available,
         extraction_provider=resolved.extraction,
@@ -117,20 +122,26 @@ def generate_application_kit(
         profile.raw_markdown = resume_text
     context = build_evidence_context(profile, result.jd_profile)
 
-    mode = default_mode if (default_mode is not None and not requested_mode.strip()) else result.parsed_input.mode
+    mode = legacy_mode or result.parsed_input.mode
+    selection = resolve_artifact_selection(
+        mode,
+        include_resume=include_resume,
+        include_cover_letter=include_cover_letter,
+        include_application_answers=include_application_answers,
+    )
 
     resume_claims: list[ClaimRecord] = []
     cover_claims: list[ClaimRecord] = []
     answer_claims: list[ClaimRecord] = []
     grounding: dict[str, _ArtifactGrounding] = {}
 
-    if mode in _RESUME_MODES and result.resume_plan is not None:
+    if selection.resume and result.resume_plan is not None:
         resume_claims, grounding["resume"] = _ground_resume(result.resume_plan, context)
         result.resume_text = generate_resume_text(result.resume_plan)
         result.resume_latex = generate_resume_latex(result.resume_plan)
         result.mode_outputs[Mode.RESUME.value] = format_resume_output(result.resume_plan, result.resume_latex)
 
-    if mode in _COVER_MODES and result.cover_letter_plan is not None:
+    if selection.cover_letter and result.cover_letter_plan is not None:
         cover_claims, grounding["cover"] = _ground_cover_letter(result.cover_letter_plan, context)
         result.cover_letter_text = generate_cover_letter_text(result.cover_letter_plan)
         result.cover_letter_latex = generate_cover_letter_latex(result.cover_letter_plan)
@@ -138,7 +149,7 @@ def generate_application_kit(
             result.cover_letter_plan, result.cover_letter_latex
         )
 
-    if mode in _ANSWER_MODES and result.answer_plan is not None:
+    if selection.application_answers and result.answer_plan is not None:
         answer_claims, grounding["answers"] = _ground_answers(result.answer_plan, context)
         result.answers_text = generate_answers_text(result.answer_plan)
         result.mode_outputs[Mode.QUESTIONS.value] = result.answers_text
@@ -149,17 +160,17 @@ def generate_application_kit(
 
     resume_artifact = (
         _build_resume_artifact(result, resume_claims, grounding.get("resume"), buckets)
-        if mode in _RESUME_MODES and result.resume_plan is not None
+        if selection.resume and result.resume_plan is not None
         else None
     )
     cover_artifact = (
         _build_cover_artifact(result, cover_claims, grounding.get("cover"), buckets)
-        if mode in _COVER_MODES and result.cover_letter_plan is not None
+        if selection.cover_letter and result.cover_letter_plan is not None
         else None
     )
     answers_artifact = (
         _build_answers_artifact(result, answer_claims, grounding.get("answers"), buckets)
-        if mode in _ANSWER_MODES and result.answer_plan is not None
+        if selection.application_answers and result.answer_plan is not None
         else None
     )
 
@@ -222,7 +233,7 @@ def generate_application_kit(
         engine_version=engine_version,
         orchestration_version=ORCHESTRATION_VERSION,
         requested_mode=requested_mode,
-        resolved_mode=mode.value,
+        resolved_mode=selection.code,
         generation=generation,
         validation=validation,
         resume=resume_artifact,

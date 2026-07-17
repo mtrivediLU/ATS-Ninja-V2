@@ -80,6 +80,42 @@ def test_cover_only_kit_has_no_resume() -> None:
     assert kit.resume is None
 
 
+def test_explicit_selection_can_generate_all_primary_artifacts() -> None:
+    kit = generate_application_kit(
+        resume_text=ADVERSARIAL_RESUME,
+        job_description=ADVERSARIAL_JD,
+        questions_text="What interests you about this role?",
+        include_resume=True,
+        include_cover_letter=True,
+        include_application_answers=True,
+        use_llm=False,
+    )
+    assert kit.resolved_mode == "RCQ"
+    assert kit.resume is not None
+    assert kit.cover_letter is not None
+    assert kit.answers is not None
+
+
+def test_explicit_false_primary_flags_are_respected_with_optional_artifacts() -> None:
+    kit = generate_application_kit(
+        resume_text=ADVERSARIAL_RESUME,
+        job_description=ADVERSARIAL_JD,
+        questions_text="What interests you about this role?",
+        include_resume=False,
+        include_cover_letter=False,
+        include_application_answers=False,
+        include_job_fit=True,
+        include_interview_prep=False,
+        include_linkedin_outreach=False,
+        use_llm=False,
+    )
+    assert kit.resolved_mode == ""
+    assert kit.resume is None
+    assert kit.cover_letter is None
+    assert kit.answers is None
+    assert kit.job_fit is not None
+
+
 def test_artifacts_are_typed_not_a_bag_of_strings() -> None:
     kit = _kit(Mode.RESUME_AND_QUESTIONS)
     assert kit.resume is not None

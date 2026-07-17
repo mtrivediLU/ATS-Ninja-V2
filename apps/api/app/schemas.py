@@ -82,6 +82,18 @@ class KitCreate(BaseModel):
     job_description: str = Field(min_length=1, description="Target job description as plain text.")
     requested_mode: str = Field(default="", description="Optional generation intent, e.g. 'resume and cover letter'.")
     questions_text: str = Field(default="", description="Optional application/screening questions.")
+    include_resume: bool | None = Field(
+        default=None,
+        description="Explicitly include or omit the tailored resume; omitted preserves requested_mode behavior.",
+    )
+    include_cover_letter: bool | None = Field(
+        default=None,
+        description="Explicitly include or omit the cover letter; omitted preserves requested_mode behavior.",
+    )
+    include_application_answers: bool | None = Field(
+        default=None,
+        description="Explicitly include or omit application answers; omitted preserves requested_mode behavior.",
+    )
     include_job_fit: bool = Field(
         default=True,
         description="Generate the grounded JobFitArtifact (enabled by default).",
@@ -402,6 +414,9 @@ class KitRead(BaseModel):
     id: UUID
     status: KitStatus
     requested_mode: str
+    include_resume: bool = True
+    include_cover_letter: bool = False
+    include_application_answers: bool = False
     include_job_fit: bool = True
     include_interview_prep: bool = True
     include_linkedin_outreach: bool = True

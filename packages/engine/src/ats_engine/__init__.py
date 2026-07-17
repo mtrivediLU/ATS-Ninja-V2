@@ -22,6 +22,7 @@ from ats_engine.evidence import (
 )
 from ats_engine.generation import (
     build_resume_plan,
+    resolve_artifact_selection,
     run_pipeline,
     validate_pipeline_result,
 )
@@ -84,6 +85,7 @@ from ats_engine.kit import (
 )
 from ats_engine.models import (
     AnswerPlan,
+    ArtifactSelection,
     Certification,
     ContactInfo,
     CoverLetterPlan,
@@ -119,6 +121,7 @@ __all__ = [
     "EngineSettings",
     # models
     "AnswerPlan",
+    "ArtifactSelection",
     "Certification",
     "ContactInfo",
     "CoverLetterPlan",
@@ -151,6 +154,7 @@ __all__ = [
     "validate_claims",
     # generation
     "build_resume_plan",
+    "resolve_artifact_selection",
     "run_pipeline",
     "validate_pipeline_result",
     # kit contract + orchestration (Phase 2A)

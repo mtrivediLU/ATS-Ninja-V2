@@ -110,6 +110,7 @@ async def test_openapi_exposes_product_intelligence_requests_and_typed_responses
     assert response.status_code == 200
     schemas = response.json()["components"]["schemas"]
     create_properties = schemas["KitCreate"]["properties"]
+    assert {"include_resume", "include_cover_letter", "include_application_answers"} <= create_properties.keys()
     assert create_properties["include_interview_prep"]["default"] is True
     assert create_properties["include_linkedin_outreach"]["default"] is True
     assert "outreach_context" in create_properties
@@ -139,6 +140,63 @@ async def test_openapi_exposes_product_intelligence_requests_and_typed_responses
         "target_context",
         "relationship_context",
     } <= outreach_properties.keys()
+
+
+async def test_submit_kit_supports_all_six_independent_artifacts(client: httpx.AsyncClient) -> None:
+    response = await client.post(
+        "/api/v1/kits",
+        json={
+            "resume_text": SAMPLE_RESUME,
+            "job_description": SAMPLE_JD,
+            "questions_text": "Why this role?",
+            "include_resume": True,
+            "include_cover_letter": True,
+            "include_application_answers": True,
+            "include_job_fit": True,
+            "include_interview_prep": True,
+            "include_linkedin_outreach": True,
+        },
+    )
+    assert response.status_code == 202
+    created = response.json()
+    assert created["include_resume"] is True
+    assert created["include_cover_letter"] is True
+    assert created["include_application_answers"] is True
+
+    body = (await client.get(f"/api/v1/kits/{created['id']}")).json()
+    result = body["result"]
+    assert result["resolved_mode"] == "RCQ"
+    assert result["resume"] is not None
+    assert result["cover_letter"] is not None
+    assert result["answers"] is not None
+    assert result["job_fit"] is not None
+    assert result["interview_prep"] is not None
+    assert result["linkedin_outreach"] is not None
+
+
+async def test_submit_kit_respects_explicit_false_primary_flags(client: httpx.AsyncClient) -> None:
+    response = await client.post(
+        "/api/v1/kits",
+        json={
+            "resume_text": SAMPLE_RESUME,
+            "job_description": SAMPLE_JD,
+            "include_resume": False,
+            "include_cover_letter": False,
+            "include_application_answers": False,
+            "include_job_fit": True,
+            "include_interview_prep": False,
+            "include_linkedin_outreach": False,
+        },
+    )
+    assert response.status_code == 202
+    body = (await client.get(f"/api/v1/kits/{response.json()['id']}")).json()
+    assert body["include_resume"] is False
+    assert body["include_cover_letter"] is False
+    assert body["include_application_answers"] is False
+    assert body["result"]["resume"] is None
+    assert body["result"]["cover_letter"] is None
+    assert body["result"]["answers"] is None
+    assert body["result"]["job_fit"] is not None
 
 
 async def test_submit_kit_can_persistently_disable_job_fit(client: httpx.AsyncClient) -> None:

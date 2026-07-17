@@ -4,6 +4,7 @@ import {
   FileText,
   History,
   LayoutGrid,
+  LayoutDashboard,
   ListChecks,
   Mail,
   MessageSquareText,
@@ -57,22 +58,29 @@ export const artifactNavigation: ReadonlyArray<NavigationItem & { id: ArtifactSl
   },
 ];
 
-export function navigationGroups(hasCurrentKit: boolean, kitId = "demo"): NavigationGroup[] {
+export function navigationGroups(hasCurrentKit: boolean, kitId?: string): NavigationGroup[] {
   return [
     {
       id: "primary",
       items: [
-        { id: "new", label: "New Kit", shortLabel: "New", href: "/", icon: Plus, primary: true },
-        { id: "history", label: "Kit history", shortLabel: "History", href: "/history", icon: History, count: 4 },
+        { id: "new", label: "New Kit", shortLabel: "New", href: "/kits/new", icon: Plus, primary: true },
+        { id: "history", label: "Kit history", shortLabel: "History", href: "/history", icon: History },
       ],
     },
     {
       id: "current-kit",
       label: "Current kit",
       items: [
+        {
+          id: "overview",
+          label: "Kit overview",
+          href: hasCurrentKit && kitId ? `/kits/${kitId}` : undefined,
+          icon: LayoutDashboard,
+          currentKitOnly: true,
+        },
         ...artifactNavigation.map((item) => ({
           ...item,
-          href: hasCurrentKit ? `/kits/${kitId}/${item.id}` : undefined,
+          href: hasCurrentKit && kitId ? `/kits/${kitId}/${item.id}` : undefined,
         })),
         {
           id: "evidence",

@@ -23,10 +23,20 @@ import {
   Tooltip,
 } from "@/components/ui/primitives";
 import { Tabs } from "@/components/ui/tabs";
-import { demoEvidence } from "@/lib/demo-data";
 import { claimStatusPresentation, kitStatusPresentation, notRequestedPresentation, withheldPresentation } from "@/lib/status";
 
 export const metadata: Metadata = { title: "Components" };
+
+const componentEvidence = {
+  id: "component-claim",
+  artifact: "resume",
+  claim_type: "experience",
+  text: "Built SQL reporting pipelines for operations teams.",
+  status: "supported",
+  disposition: "kept",
+  reason: "Supported by bounded resume evidence.",
+  evidence: [{ source: "candidate-resume", locator: "experience:0 · L14", excerpt: "Built SQL reporting pipelines used by operations teams." }],
+};
 
 export default function ComponentsPage() {
   return (
@@ -69,7 +79,7 @@ export default function ComponentsPage() {
       </Section>
 
       <Section title="Evidence card foundation">
-        <div className="max-w-md"><EvidenceCard record={demoEvidence[0]} /></div>
+        <div className="max-w-md"><EvidenceCard record={componentEvidence} active={false} /></div>
       </Section>
 
       <Section title="Loading, empty, and placeholder states">

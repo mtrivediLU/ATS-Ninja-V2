@@ -15,6 +15,7 @@ from ats_engine.generation.cover_letter import (
 )
 from ats_engine.generation.pipeline import (
     mode_from_text,
+    resolve_artifact_selection,
     run_pipeline,
     validate_pipeline_result,
 )
@@ -43,6 +44,7 @@ __all__ = [
     "generate_resume_latex",
     "generate_resume_text",
     "mode_from_text",
+    "resolve_artifact_selection",
     "run_pipeline",
     "validate_pipeline_result",
 ]
