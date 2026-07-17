@@ -19,7 +19,7 @@ from ats_engine.generation.resume import (
     generate_resume_latex,
     generate_resume_text,
 )
-from ats_engine.models import JDProfile, Mode, ParsedInput, PipelineResult, Profile
+from ats_engine.models import ArtifactSelection, JDProfile, Mode, ParsedInput, PipelineResult, Profile
 from ats_engine.parsing.input import detect_mode, parse_input
 from ats_engine.parsing.job_description import parse_jd
 from ats_engine.parsing.resume import build_profile
@@ -58,6 +58,10 @@ def run_pipeline(
     questions_text: str = "",
     requested_mode: str = "",
     default_mode: Mode | None = None,
+    include_resume: bool | None = None,
+    include_cover_letter: bool | None = None,
+    include_application_answers: bool | None = None,
+    require_resume_plan: bool = False,
     model_name: str = "",
     settings: EngineSettings | None = None,
     use_llm: bool = True,
@@ -85,9 +89,13 @@ def run_pipeline(
         questions_text=questions_text,
         requested_mode=requested_mode,
     )
-    mode = parsed_input.mode
-    if default_mode is not None and not requested_mode.strip():
-        mode = default_mode
+    mode = default_mode if default_mode is not None and not requested_mode.strip() else parsed_input.mode
+    selection = resolve_artifact_selection(
+        mode,
+        include_resume=include_resume,
+        include_cover_letter=include_cover_letter,
+        include_application_answers=include_application_answers,
+    )
 
     resolved_settings = settings or EngineSettings.from_env()
     if extraction_provider is not None or prose_provider is not None:
@@ -102,7 +110,7 @@ def run_pipeline(
     result = PipelineResult(parsed_input=parsed_input, jd_profile=jd_profile)
     result.metadata["llm_available"] = extraction is not None
     resume_plan = None
-    if mode in {Mode.RESUME, Mode.RESUME_AND_COVER, Mode.RESUME_AND_QUESTIONS}:
+    if selection.resume or selection.cover_letter or selection.application_answers or require_resume_plan:
         resume_plan = build_resume_plan(
             contacts=parsed_input.contacts,
             jd_profile=jd_profile,
@@ -111,36 +119,20 @@ def run_pipeline(
             batch_provider=extraction,
         )
         result.resume_plan = resume_plan
+
+    if selection.resume and resume_plan is not None:
         result.resume_text = generate_resume_text(resume_plan)
         result.resume_latex = generate_resume_latex(resume_plan)
         result.mode_outputs[Mode.RESUME.value] = format_resume_output(resume_plan, result.resume_latex)
 
-    if mode in {Mode.COVER_LETTER, Mode.RESUME_AND_COVER}:
-        resume_plan = resume_plan or build_resume_plan(
-            contacts=parsed_input.contacts,
-            jd_profile=jd_profile,
-            profile=profile,
-            provider=prose,
-            batch_provider=extraction,
-        )
-        result.resume_plan = resume_plan
-        if not result.resume_text:
-            result.resume_text = generate_resume_text(resume_plan)
+    if selection.cover_letter and resume_plan is not None:
         cover_plan = build_cover_letter_plan(resume_plan, profile, provider=prose)
         result.cover_letter_plan = cover_plan
         result.cover_letter_text = generate_cover_letter_text(cover_plan)
         result.cover_letter_latex = generate_cover_letter_latex(cover_plan)
         result.mode_outputs[Mode.COVER_LETTER.value] = format_cover_letter_output(cover_plan, result.cover_letter_latex)
 
-    if mode in {Mode.QUESTIONS, Mode.RESUME_AND_QUESTIONS}:
-        resume_plan = resume_plan or build_resume_plan(
-            contacts=parsed_input.contacts,
-            jd_profile=jd_profile,
-            profile=profile,
-            provider=prose,
-            batch_provider=extraction,
-        )
-        result.resume_plan = resume_plan
+    if selection.application_answers and resume_plan is not None:
         answer_plan = build_answer_plan(questions=parsed_input.questions, resume_plan=resume_plan, provider=prose)
         result.answer_plan = answer_plan
         result.answers_text = generate_answers_text(answer_plan)
@@ -148,6 +140,28 @@ def run_pipeline(
 
     result.validation_errors = validate_pipeline_result(result, profile)
     return result
+
+
+def resolve_artifact_selection(
+    mode: Mode,
+    *,
+    include_resume: bool | None = None,
+    include_cover_letter: bool | None = None,
+    include_application_answers: bool | None = None,
+) -> ArtifactSelection:
+    """Resolve optional explicit flags over a backward-compatible legacy mode."""
+    legacy = ArtifactSelection(
+        resume=mode in {Mode.RESUME, Mode.RESUME_AND_COVER, Mode.RESUME_AND_QUESTIONS},
+        cover_letter=mode in {Mode.COVER_LETTER, Mode.RESUME_AND_COVER},
+        application_answers=mode in {Mode.QUESTIONS, Mode.RESUME_AND_QUESTIONS},
+    )
+    return ArtifactSelection(
+        resume=legacy.resume if include_resume is None else include_resume,
+        cover_letter=legacy.cover_letter if include_cover_letter is None else include_cover_letter,
+        application_answers=(
+            legacy.application_answers if include_application_answers is None else include_application_answers
+        ),
+    )
 
 
 def _parse_profile_and_jd(parsed_input: ParsedInput, extraction: LLMProvider | None) -> tuple[Profile, JDProfile]:

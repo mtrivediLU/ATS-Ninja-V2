@@ -23,6 +23,33 @@ class Mode(StrEnum):
     RESUME_AND_QUESTIONS = "RQ"
 
 
+@dataclass(frozen=True, slots=True)
+class ArtifactSelection:
+    """Independent primary-artifact selection resolved from API intent.
+
+    The legacy :class:`Mode` values remain supported, while this model lets new
+    callers request resume, cover letter, and application answers in any
+    combination without inventing more ambiguous mode strings.
+    """
+
+    resume: bool
+    cover_letter: bool
+    application_answers: bool
+
+    @property
+    def code(self) -> str:
+        """Return a stable compact representation for result metadata."""
+        return "".join(
+            token
+            for enabled, token in (
+                (self.resume, "R"),
+                (self.cover_letter, "C"),
+                (self.application_answers, "Q"),
+            )
+            if enabled
+        )
+
+
 @dataclass(slots=True)
 class ContactInfo:
     name: str = ""

@@ -10,7 +10,9 @@ from ats_engine import (
     OutreachIntent,
     application_kit_to_dict,
     generate_application_kit,
+    resolve_artifact_selection,
 )
+from ats_engine.generation import mode_from_text
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -41,12 +43,26 @@ def _client_safe_error(exc: Exception) -> str:
 
 async def create_kit(session: AsyncSession, payload: KitCreate) -> Kit:
     """Persist a new kit in the ``pending`` state and return it."""
+    legacy_mode = mode_from_text(
+        payload.requested_mode,
+        job_description=payload.job_description,
+        questions=[payload.questions_text] if payload.questions_text.strip() else [],
+    )
+    selection = resolve_artifact_selection(
+        legacy_mode,
+        include_resume=payload.include_resume,
+        include_cover_letter=payload.include_cover_letter,
+        include_application_answers=payload.include_application_answers,
+    )
     kit = Kit(
         status=KitStatus.PENDING,
         resume_text=payload.resume_text,
         job_description=payload.job_description,
         requested_mode=payload.requested_mode,
         questions_text=payload.questions_text,
+        include_resume=selection.resume,
+        include_cover_letter=selection.cover_letter,
+        include_application_answers=selection.application_answers,
         include_job_fit=payload.include_job_fit,
         include_interview_prep=payload.include_interview_prep,
         include_linkedin_outreach=payload.include_linkedin_outreach,
@@ -109,6 +125,9 @@ async def process_kit(session: AsyncSession, kit_id: UUID, settings: Settings) -
             job_description=kit.job_description,
             requested_mode=kit.requested_mode or "",
             questions_text=kit.questions_text or "",
+            include_resume=kit.include_resume,
+            include_cover_letter=kit.include_cover_letter,
+            include_application_answers=kit.include_application_answers,
             use_llm=settings.engine_use_llm,
             include_job_fit=kit.include_job_fit,
             include_interview_prep=kit.include_interview_prep,

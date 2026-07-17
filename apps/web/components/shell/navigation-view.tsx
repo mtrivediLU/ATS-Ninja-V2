@@ -6,14 +6,15 @@ import { navigationGroups } from "@/lib/navigation";
 
 type NavigationViewProps = {
   hasCurrentKit: boolean;
+  kitId?: string;
   expanded: boolean;
   onEvidence: () => void;
   onNavigate?: () => void;
 };
 
-export function NavigationView({ hasCurrentKit, expanded, onEvidence, onNavigate }: NavigationViewProps) {
+export function NavigationView({ hasCurrentKit, kitId, expanded, onEvidence, onNavigate }: NavigationViewProps) {
   const pathname = usePathname();
-  const groups = navigationGroups(hasCurrentKit);
+  const groups = navigationGroups(hasCurrentKit, kitId);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -28,7 +29,7 @@ export function NavigationView({ hasCurrentKit, expanded, onEvidence, onNavigate
             {group.items.map((item) => {
               const Icon = item.icon;
               const disabled = Boolean(item.currentKitOnly && !hasCurrentKit);
-              const active = Boolean(item.href && (pathname === item.href || (item.id !== "new" && pathname.startsWith(`${item.href}/`))));
+              const active = Boolean(item.href && pathname === item.href);
               const classes = `flex w-full items-center rounded-md text-left text-base transition-colors ${
                 expanded ? "min-h-11 gap-3 px-2" : "min-h-10 justify-center px-2"
               } ${

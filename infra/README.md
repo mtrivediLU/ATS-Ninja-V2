@@ -26,8 +26,8 @@ docker compose up --build  # build images and run the full stack
 ## Current topology
 
 The stack runs the persisted, asynchronous kit lifecycle that generates a
-versioned, truth-grounded ApplicationKit v4, plus the presentation-only D0 web
-foundation:
+versioned, truth-grounded ApplicationKit v4, plus the connected D1 private local
+web workflows:
 
 | Service | Image | Role |
 | --- | --- | --- |
@@ -36,7 +36,7 @@ foundation:
 | `migrate` | `ats-ninja-v2/api:dev` | One-shot `alembic upgrade head`; runs to completion, then `api`/`worker` start. |
 | `api` | `ats-ninja-v2/api:dev` | FastAPI backend (`POST/GET /api/v1/kits`). |
 | `worker` | `ats-ninja-v2/api:dev` | Celery worker (`celery -A app.tasks worker -Q kits`) running the ApplicationKit generation. |
-| `web` | built from `web.Dockerfile` | Next.js D0 Signal foundation (presentation only; workflows disconnected). |
+| `web` | built from `web.Dockerfile` | Next.js D1 Signal application (real local Kit workflows; no browser domain logic). |
 
 Startup ordering is enforced with health checks and
 `depends_on: { condition: service_completed_successfully }` on `migrate`. The

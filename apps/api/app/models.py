@@ -32,6 +32,11 @@ class Kit(Base):
     job_description: Mapped[str] = mapped_column(Text, nullable=False)
     requested_mode: Mapped[str] = mapped_column(String(64), default="", nullable=False)
     questions_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    include_resume: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
+    include_cover_letter: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
+    include_application_answers: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
     include_job_fit: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
     include_interview_prep: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
     include_linkedin_outreach: Mapped[bool] = mapped_column(

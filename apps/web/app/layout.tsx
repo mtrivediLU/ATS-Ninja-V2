@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { AppShell } from "@/components/shell/app-shell";
+import { FeedbackProvider } from "@/components/product/feedback";
 import { hankenGrotesk, ibmPlexMono } from "./fonts";
 import "./globals.css";
 
@@ -20,7 +21,7 @@ export default function RootLayout({
   return (
     <html lang="en" data-theme="light">
       <body className={`${hankenGrotesk.variable} ${ibmPlexMono.variable}`}>
-        <AppShell>{children}</AppShell>
+        <FeedbackProvider><AppShell>{children}</AppShell></FeedbackProvider>
       </body>
     </html>
   );

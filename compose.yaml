@@ -2,7 +2,7 @@
 #
 # Runs the async kit lifecycle: PostgreSQL (persistence), Redis (Celery broker),
 # a one-shot migration step, the FastAPI API, the Celery worker, and the web
-# frontend. Authentication, billing, and product frontend flows are out of scope.
+# frontend. Authentication, billing, and public SaaS flows are out of scope.
 #
 # The API image is built once (by the `api` service) and reused by `migrate`
 # and `worker` via the shared image tag.
@@ -114,8 +114,10 @@ services:
     build:
       context: .
       dockerfile: infra/docker/web.Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:8000
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
       PORT: "3000"
       HOSTNAME: 0.0.0.0
     ports:

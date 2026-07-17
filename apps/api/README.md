@@ -20,13 +20,17 @@ settings plumbing.
 LinkedIn access, contact discovery, or message sending. No placeholder endpoints
 pretend these exist.
 
-Creation accepts independent, persisted `include_job_fit`,
-`include_interview_prep`, and `include_linkedin_outreach` booleans (all default
-`true`) plus optional bounded `outreach_context`. Interview preparation or
+Creation accepts independent, persisted `include_resume`,
+`include_cover_letter`, `include_application_answers`, `include_job_fit`,
+`include_interview_prep`, and `include_linkedin_outreach` booleans plus optional
+bounded `outreach_context`. The three primary flags are optional for backward
+compatibility: omitted values preserve the existing `requested_mode` behavior;
+new clients should send them explicitly. Interview preparation or
 outreach may use an internal deterministic fit assessment even when JobFit
 persistence is disabled; completed results remain in PostgreSQL's existing JSON
-result column. Migration 0004 stores the outreach option and only the context
-needed to reproduce the requested drafts.
+result column. Migration 0005 stores the resolved primary selection, while
+migration 0004 stores the outreach option and only the context needed to
+reproduce the requested drafts.
 
 All career business logic lives in `packages/engine` (`ats-engine`); this service
 persists, queues, and orchestrates it — it owns no domain logic.

@@ -7,22 +7,22 @@ import { NavigationView } from "@/components/shell/navigation-view";
 import { Drawer } from "@/components/ui/drawer";
 import { mobileMoreItem, navigationGroups } from "@/lib/navigation";
 
-export function MobileNavDrawer({ open, onClose, hasCurrentKit, onEvidence }: { open: boolean; onClose: () => void; hasCurrentKit: boolean; onEvidence: () => void }) {
+export function MobileNavDrawer({ open, onClose, hasCurrentKit, kitId, onEvidence }: { open: boolean; onClose: () => void; hasCurrentKit: boolean; kitId?: string; onEvidence: () => void }) {
   return (
     <Drawer open={open} onClose={onClose} title="Navigation" side="left" className="max-w-[280px]">
       <div className="border-b border-border-subtle px-4 py-3">
         <Brand />
       </div>
       <nav aria-label="Labelled navigation" className="flex min-h-0 flex-1 px-3 py-4">
-        <NavigationView hasCurrentKit={hasCurrentKit} expanded onEvidence={onEvidence} onNavigate={onClose} />
+        <NavigationView hasCurrentKit={hasCurrentKit} kitId={kitId} expanded onEvidence={onEvidence} onNavigate={onClose} />
       </nav>
     </Drawer>
   );
 }
 
-export function MobileBottomNav({ hasCurrentKit, onMore }: { hasCurrentKit: boolean; onMore: () => void }) {
+export function MobileBottomNav({ hasCurrentKit, kitId, onMore }: { hasCurrentKit: boolean; kitId?: string; onMore: () => void }) {
   const pathname = usePathname();
-  const groups = navigationGroups(hasCurrentKit);
+  const groups = navigationGroups(hasCurrentKit, kitId);
   const all = groups.flatMap((group) => group.items);
   const items = [
     all.find((item) => item.id === "new"),
