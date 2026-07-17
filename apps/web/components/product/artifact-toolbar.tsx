@@ -31,6 +31,7 @@ type ArtifactToolbarProps = {
   onDiscardChanges?: () => void;
   onReset?: () => void;
   onCompare?: () => void;
+  templates?: boolean;
 };
 
 export function ArtifactToolbar({
@@ -53,6 +54,7 @@ export function ArtifactToolbar({
   onDiscardChanges,
   onReset,
   onCompare,
+  templates = false,
 }: ArtifactToolbarProps) {
   const { notify } = useFeedback();
   const [downloadOpen, setDownloadOpen] = useState(false);
@@ -92,6 +94,7 @@ export function ArtifactToolbar({
       <div className="inline-flex rounded-control border border-border bg-surface-subtle p-0.5" role="group" aria-label="Artifact view">
         <button type="button" aria-pressed={view === "trust"} onClick={() => onViewChange("trust")} className="min-h-9 rounded-sm px-3 text-sm aria-pressed:bg-surface aria-pressed:font-semibold aria-pressed:shadow-xs">Trust</button>
         <button type="button" aria-pressed={view === "content"} onClick={() => onViewChange("content")} className="min-h-9 rounded-sm px-3 text-sm aria-pressed:bg-surface aria-pressed:font-semibold aria-pressed:shadow-xs">Content</button>
+        {templates && <button type="button" aria-pressed={view === "template"} onClick={() => onViewChange("template")} className="min-h-9 rounded-sm px-3 text-sm aria-pressed:bg-surface aria-pressed:font-semibold aria-pressed:shadow-xs">Template</button>}
       </div>
       {editable && !editing && <Button size="sm" variant="secondary" onClick={onBeginEdit}>Edit</Button>}
       {editing && <><Button size="sm" variant="primary" onClick={onApplyLocalEdits}>Apply local edits</Button><Button size="sm" variant="ghost" onClick={() => dirty ? setDiscardOpen(true) : onExitEdit?.()}>Exit edit mode</Button></>}
