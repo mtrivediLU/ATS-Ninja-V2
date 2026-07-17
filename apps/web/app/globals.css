@@ -1,19 +1,229 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #0a0a0a;
+  --paper: #faf9f6;
+  --white: #ffffff;
+  --ink-900: #1c1c1a;
+  --ink-700: #45423b;
+  --ink-600: #57544d;
+  --ink-500: #6f6c62;
+  --ink-400: #8a877c;
+  --ink-300: #a8a496;
+  --primary-50: #eef4f1;
+  --primary-100: #e8f0ea;
+  --primary-200: #cadfd2;
+  --primary-300: #9cc3ac;
+  --primary-500: #3a7d62;
+  --primary-600: #2f6b52;
+  --primary-700: #245140;
+  --primary-800: #1c3f32;
+
+  --surface-canvas: var(--paper);
+  --surface-default: var(--white);
+  --surface-subtle: #f4f2ec;
+  --surface-raised: #f1efe8;
+  --border-subtle: #eeece5;
+  --border-default: #e7e4dc;
+  --border-strong: #d8d4c8;
+
+  --text-primary: var(--ink-900);
+  --text-secondary: var(--ink-600);
+  --text-muted: var(--ink-400);
+  --text-faint: var(--ink-300);
+  --text-on-accent: var(--white);
+  --text-link: var(--primary-600);
+  --text-link-hover: var(--primary-700);
+
+  --accent: var(--primary-600);
+  --accent-hover: var(--primary-700);
+  --accent-active: var(--primary-800);
+  --accent-subtle-bg: var(--primary-100);
+  --accent-subtle-border: var(--primary-200);
+
+  --status-positive-fg: #2f6b52;
+  --status-positive-bg: #e8f0ea;
+  --status-positive-border: #cadfd2;
+  --status-warning-fg: #8a5a12;
+  --status-warning-bg: #f6edda;
+  --status-warning-border: #ecdcb4;
+  --status-danger-fg: #a3301c;
+  --status-danger-bg: #f7e6e2;
+  --status-danger-border: #eec7bd;
+  --status-info-fg: #2b52a3;
+  --status-info-bg: #e7edf8;
+  --status-info-border: #c8d5ee;
+  --status-neutral-fg: #57544d;
+  --status-neutral-bg: #f1efe8;
+  --status-neutral-border: #e0ddd3;
+
+  --focus-ring-color: var(--primary-600);
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  --radius-sm: 6px;
+  --radius-control: 7px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-pill: 999px;
+
+  --shadow-xs: 0 1px 2px rgba(28, 28, 26, 0.05);
+  --shadow-sm: 0 1px 3px rgba(28, 28, 26, 0.08);
+  --shadow-md: 0 4px 14px rgba(28, 28, 26, 0.09);
+  --shadow-lg: 0 14px 36px rgba(28, 28, 26, 0.14);
+
+  --sidebar-w: 248px;
+  --sidebar-collapsed-w: 64px;
+  --evidence-w: 360px;
+  --header-h: 60px;
+  --bottomnav-h: 60px;
+  --content-max: 1200px;
+
+  --dur-fast: 120ms;
+  --dur-base: 180ms;
+  --dur-slow: 240ms;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+
+  --z-header: 100;
+  --z-overlay: 190;
+  --z-drawer: 200;
+  --z-dialog: 300;
+  --z-toast: 400;
+  --z-tooltip: 500;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+@theme {
+  --color-canvas: var(--surface-canvas);
+  --color-surface: var(--surface-default);
+  --color-surface-subtle: var(--surface-subtle);
+  --color-surface-raised: var(--surface-raised);
+  --color-border-subtle: var(--border-subtle);
+  --color-border: var(--border-default);
+  --color-border-strong: var(--border-strong);
+  --color-ink: var(--text-primary);
+  --color-ink-secondary: var(--text-secondary);
+  --color-ink-muted: var(--text-muted);
+  --color-ink-faint: var(--text-faint);
+  --color-on-accent: var(--text-on-accent);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-active: var(--accent-active);
+  --color-accent-subtle: var(--accent-subtle-bg);
+  --color-accent-border: var(--accent-subtle-border);
+  --color-positive: var(--status-positive-fg);
+  --color-positive-bg: var(--status-positive-bg);
+  --color-positive-border: var(--status-positive-border);
+  --color-warning: var(--status-warning-fg);
+  --color-warning-bg: var(--status-warning-bg);
+  --color-warning-border: var(--status-warning-border);
+  --color-danger: var(--status-danger-fg);
+  --color-danger-bg: var(--status-danger-bg);
+  --color-danger-border: var(--status-danger-border);
+  --color-info: var(--status-info-fg);
+  --color-info-bg: var(--status-info-bg);
+  --color-info-border: var(--status-info-border);
+  --color-neutral: var(--status-neutral-fg);
+  --color-neutral-bg: var(--status-neutral-bg);
+  --color-neutral-border: var(--status-neutral-border);
+  --font-sans: var(--font-hanken), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.9375rem;
+  --text-md: 1.0625rem;
+  --text-lg: 1.25rem;
+  --text-xl: 1.5rem;
+  --text-2xl: 2rem;
+  --radius-sm: 6px;
+  --radius-control: 7px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-pill: 999px;
+  --shadow-xs: 0 1px 2px rgba(28, 28, 26, 0.05);
+  --shadow-sm: 0 1px 3px rgba(28, 28, 26, 0.08);
+  --shadow-md: 0 4px 14px rgba(28, 28, 26, 0.09);
+  --shadow-lg: 0 14px 36px rgba(28, 28, 26, 0.14);
+}
+
+@layer base {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  html {
+    background: var(--surface-canvas);
+  }
+
+  body {
+    margin: 0;
+    background: var(--surface-canvas);
+    color: var(--text-primary);
+    font-family: var(--font-hanken), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size: 0.9375rem;
+    line-height: 1.5;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+  }
+
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
+
+  :focus-visible {
+    border-radius: var(--radius-sm);
+    outline: var(--focus-ring-width) solid var(--focus-ring-color);
+    outline-offset: var(--focus-ring-offset);
+  }
+
+  ::selection {
+    background: var(--accent-subtle-bg);
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+@layer utilities {
+  .text-pretty {
+    text-wrap: pretty;
+  }
+
+  .scrollbar-none {
+    scrollbar-width: none;
+  }
+
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.001ms !important;
+  }
 }

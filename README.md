@@ -4,7 +4,7 @@ A deterministic-first, truth-grounded AI career SaaS. From a candidate's resume
 and a job description it generates an application kit that stays honest to what
 the candidate has actually done.
 
-> **Status: Phase 2B3 (grounded LinkedIn outreach drafts).**
+> **Status: Phase 2 backend complete; Design Phase D0 frontend foundation.**
 > The engine produces a tailored **resume, cover letter, and application answers**
 > and now assembles them into a versioned, truth-grounded **ApplicationKit**
 > (`application-kit/v4`): every candidate-specific claim in generated prose is
@@ -19,6 +19,10 @@ the candidate has actually done.
 > employee, follow-up, referral, and genuine shared-context drafts with explicit
 > candidate/target/recipient/relationship provenance. It generates drafts only;
 > sending, LinkedIn access, authentication, and billing remain future work.
+> The Next.js frontend now provides the approved responsive **Signal** shell,
+> semantic tokens, evidence-panel foundation, accessible components, and
+> synthetic foundation states. Real Kit submission and detailed artifact
+> workflows remain intentionally disconnected until later design phases.
 > See [docs/architecture.md](docs/architecture.md).
 
 ## Why it is different
@@ -39,7 +43,7 @@ Read [AGENTS.md](AGENTS.md) — the standing engineering contract — before con
 packages/engine   Pure-Python domain engine (ats_engine): parsing, evidence,
                   scoring, validation, caching, providers, generation, models
 apps/api          FastAPI backend (Phase 0: health + settings, engine-ready)
-apps/web          Next.js App Router frontend (TypeScript + Tailwind) — product shell
+apps/web          Next.js App Router frontend — D0 Signal shell and component foundation
 infra             Dockerfiles + Docker Compose topology
 docs              Architecture documentation + ADRs
 ```

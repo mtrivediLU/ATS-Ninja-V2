@@ -1,6 +1,6 @@
 # ATS-Ninja-V2 — Architecture
 
-Status: **Phase 2B3 (grounded LinkedInOutreachArtifact)**. This
+Status: **Phase 2 backend complete; Design Phase D0 frontend foundation**. This
 document distinguishes what is **completed**, what **architecture is
 established**, and what is **future** planned work. It never describes
 unimplemented functionality as done.
@@ -43,6 +43,19 @@ application shells. Three deployable/importable units plus infra and docs:
 │  No web framework. No LLM-vendor SDK. Zero Streamlit imports.          │
 └────────────────────────────────────────────────────────────────────────┘
 ```
+
+### Frontend foundation (Design Phase D0)
+
+`apps/web` implements the approved Signal application foundation: centralized
+semantic tokens, responsive desktop/sidebar, tablet/rail, mobile/drawer and
+bottom-navigation layouts, route-based artifact tabs, a responsive evidence
+panel, accessible UI primitives, and synthetic foundation states. Its typed
+status layer maps existing API values to labels, icons, and semantic tones; it
+does not recalculate lifecycle, grounding, fit, or validation state.
+
+Detailed New Kit submission/polling, artifact workspaces, evidence drill-down,
+authentication, billing, and upload flows remain later phases. D0 routes label
+all placeholder content clearly and make no backend requests.
 
 ### Async kit lifecycle (Phase 1, completed)
 
