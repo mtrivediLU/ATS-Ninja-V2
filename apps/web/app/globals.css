@@ -55,6 +55,13 @@
   --status-neutral-fg: #57544d;
   --status-neutral-bg: #f1efe8;
   --status-neutral-border: #e0ddd3;
+  --status-edited-fg: #4a5a6a;
+  --status-edited-bg: #eef1f3;
+  --status-edited-border: #d5dde3;
+  --status-unavailable-fg: #6f6c62;
+  --status-unavailable-bg: #f4f2ec;
+  --status-unavailable-border: #d8d4c8;
+  --readiness-track: var(--surface-raised);
 
   --focus-ring-color: var(--primary-600);
   --focus-ring-width: 2px;
@@ -137,6 +144,12 @@
   --color-neutral: var(--status-neutral-fg);
   --color-neutral-bg: var(--status-neutral-bg);
   --color-neutral-border: var(--status-neutral-border);
+  --color-edited: var(--status-edited-fg);
+  --color-edited-bg: var(--status-edited-bg);
+  --color-edited-border: var(--status-edited-border);
+  --color-unavailable: var(--status-unavailable-fg);
+  --color-unavailable-bg: var(--status-unavailable-bg);
+  --color-unavailable-border: var(--status-unavailable-border);
   --font-sans: var(--font-hanken), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-mono: var(--font-plex-mono), ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --text-xs: 0.75rem;

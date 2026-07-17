@@ -9,6 +9,7 @@ import { Sidebar } from "@/components/shell/sidebar";
 import { WorkspaceHeader } from "@/components/shell/workspace-header";
 import { KitProvider, useKit } from "@/components/product/kit-context";
 import { Drawer } from "@/components/ui/drawer";
+import { Banner } from "@/components/ui/primitives";
 import { kitStatusPresentation } from "@/lib/status";
 import { kitTarget } from "@/lib/product";
 
@@ -20,6 +21,7 @@ const screenMeta: Record<string, { title: string; meta?: string }> = {
   "/settings": { title: "Local settings", meta: "Foundation preferences · not persisted" },
   "/states/processing": { title: "Processing states", meta: "Development reference" },
   "/states/error": { title: "Error states", meta: "Development reference" },
+  "/states/d2": { title: "D2 synthetic states", meta: "Development-only fixtures" },
 };
 
 function kitIdFromPath(pathname: string): string | null {
@@ -40,7 +42,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 function AppShellContent({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const [navOpen, setNavOpen] = useState(false);
-  const { kitId, kit, evidenceOpen, setEvidenceOpen, closeEvidence, openEvidence } = useKit();
+  const { kitId, kit, evidenceOpen, setEvidenceOpen, closeEvidence, openEvidence, connectionRestored, error } = useKit();
   const target = kitTarget(kit);
   const completed = kit?.status === "completed" && Boolean(kit.result);
   const meta = useMemo(
@@ -71,7 +73,7 @@ function AppShellContent({ children }: { children: ReactNode }) {
         {kitId && completed && <ArtifactTabs kitId={kitId} />}
         <div className="flex min-h-0 flex-1">
           <main id="main-content" className="min-w-0 flex-1 overflow-x-hidden px-4 py-6 pb-[calc(var(--bottomnav-h)+24px)] sm:px-6 md:pb-6">
-            <div className="mx-auto max-w-[1200px]">{children}</div>
+            <div className="mx-auto max-w-[1200px]">{error && kit && <Banner tone="warning" className="mb-4" title="Temporary retrieval interruption.">The last known Kit state remains visible. Check the local API, then use retry retrieval if the interruption persists.</Banner>}{connectionRestored && <Banner tone="info" className="mb-4" title="Connection restored.">The latest Kit state was retrieved from the local API.</Banner>}{children}</div>
           </main>
           {kitId && evidenceOpen && (
             <div className="sticky top-[60px] hidden h-[calc(100vh-60px)] shrink-0 lg:block">

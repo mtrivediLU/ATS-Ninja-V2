@@ -3,22 +3,36 @@
 The ATS-Ninja private local frontend: Next.js 15 App Router, React 19, strict
 TypeScript, and Tailwind CSS 4.
 
-## Current scope: Design Phase D1
+## Current scope: Design Phase D2
 
-D1 connects the approved D0 **Signal** shell to the real FastAPI and
-ApplicationKit v4 lifecycle:
+D2 retains the D0 **Signal** foundation and D1 real workflows, then adds the
+trust, evidence, editing, recovery, accessibility, and responsive polish needed
+for private local dogfooding:
 
 - three-step New Kit workflow with form validation and six independent outputs
 - optional application questions and typed LinkedIn outreach context
 - real `POST /api/v1/kits`, cancellable lifecycle polling, and terminal states
-- real Kit overview and six artifact workspaces
-- server-provided Job Fit, Interview Prep, outreach, validation, and evidence
-- local-only editing, clipboard actions, and text/LaTeX downloads
-- paginated server-backed history with loaded-page search/filter/sort
-- responsive desktop, tablet, and mobile behavior inherited from D0
+- trust-first and content views for all six artifact workspaces, with counts and
+  evidence-trace distribution derived only from persisted claim/validation fields
+- trace filters by returned artifact and status, bounded excerpts, reasons,
+  disposition, keyboard previous/next, and desktop panel/tablet drawer/mobile sheet
+- unified generated, notes, removed, withheld, not-requested, unavailable,
+  empty, failed, partial, older-format, and locally edited presentation states
+- local-only document and outreach editing with dirty warnings, apply-local-edits,
+  discard/reset confirmations, compare, browser-close/route protection, and
+  persistent not-revalidated wording
+- source-labelled copy/download dialogs, safe bounded filenames, text/LaTeX and
+  Markdown exports, failure feedback, and mobile editing actions
+- accumulated API-page history with honest loaded-item search/filter/sort,
+  active filters, included-artifact filter, load-more, schema compatibility, and
+  status-aware reopen behavior
+- calm processing/retrieval recovery with no fabricated ETA or progress percentage
+- Job Fit gap emphasis, Interview study focus mode with interaction-only progress,
+  and per-draft Outreach local editing/context provenance/mobile copy
 
 The browser never calculates scores, fit bands, gaps, evidence support, claim
-repairs, STAR completeness, or relationship validity. It renders API values.
+repairs, STAR completeness, or relationship validity. It renders API values and
+only aggregates existing trace records for presentation.
 
 ## Routes
 
@@ -36,6 +50,7 @@ repairs, STAR completeness, or relationship validity. It renders API values.
 | `/history` | Paginated real Kit history and reopen flow |
 | `/components` | D0 component reference surface |
 | `/kits/demo/[artifact]` | Clearly synthetic D0 development fixtures |
+| `/states/d2` | Clearly labelled D2 development-only unavailable/partial/old-schema fixtures |
 
 ## API configuration
 
@@ -58,23 +73,73 @@ navigates to the real Kit route and polls `GET /api/v1/kits/{id}` every 1.5
 seconds without overlapping requests. Polling stops on `completed` or `failed`
 and is aborted when the route unmounts.
 
+## Trust, evidence, and artifact state
+
+Every real workspace defaults to a route-backed **Trust** view (`?view=content`
+opens Content). Trust summaries show supported, adjusted, removed, withheld, and
+warning counts from the returned records; their trace-distribution percentage is
+explicitly labelled as presentation, not a quality/readiness/AI-confidence score.
+
+The evidence panel renders bounded API excerpts only. It filters returned traces
+by artifact and D2 status, supports keyboard ←/→ traversal, and restores focus on
+close. The API provides no character offsets, so the UI deliberately renders
+trace markers below text rather than inferring claim positions by browser string
+matching. The development-only D2 fixture exercises unavailable evidence without
+mixing synthetic records into real Kits or history.
+
+### D2 semantic token deltas and state model
+
+D2 adds only `--status-edited-{fg,bg,border}`,
+`--status-unavailable-{fg,bg,border}`, and `--readiness-track` to the existing
+light-theme Signal token layer. Tailwind exposes matching semantic colors; no
+component contains new raw state hex values. Edited uses a cool slate treatment;
+unavailable uses a muted dashed treatment. The unified presentation model is:
+generated, ready-with-notes, removed, withheld, not-requested, unavailable,
+empty, failed, partially-generated, older-format, and edited-not-revalidated.
+Every state is an icon plus text and maps only to persisted lifecycle,
+validation, selection, or explicitly local editing state.
+
 ## Local edits, copy, and downloads
 
-Resume, cover-letter, and answer edits exist only in React state. They are
-labelled “Edited since generation”, are not sent to the backend, and are not
-revalidated. Reloading restores generated content. Copy and download use the
-current local text; LaTeX is downloadable when returned. No rendered PDF is
-promised or produced.
+Resume, cover-letter, application-answer, and individual outreach-draft edits
+exist only in React state. “Apply local edits” never sends content to the API;
+the edit is labelled “Edited — not revalidated,” can be compared with the
+read-only generated version, reset, or discarded, and disappears on reload.
+Browser-close and ordinary route navigation warn only for true unsaved editor
+changes. No candidate content is stored in localStorage/sessionStorage.
+
+Copy/download actions identify whether they use generated, applied local, or
+currently unsaved local text. Text is available for every export; the engine
+provided LaTeX remains optional for resume/cover-letter; Interview Preparation
+exports Markdown. No rendered PDF is promised or produced.
 
 Download filenames are bounded and sanitized from available target context.
 Generated content never leaves the browser for copy/download actions.
 
 ## History behavior
 
-`GET /api/v1/kits` supplies real newest-first pagination. D1 retrieves details
-for the currently loaded page so it can show available target/artifact values.
-Search, filter, and sort operate only over that page and are labelled honestly.
-Rename, duplicate, and delete are omitted because the API exposes no endpoints.
+`GET /api/v1/kits` supplies real newest-first pagination. D2 accumulates the
+pages explicitly loaded with **Load more** so filtering/search/sort can operate
+over those loaded items; this limitation remains labelled in the UI and is not
+represented as server-wide search. History exposes lifecycle, included-artifact,
+and validation-notes filters, clearable active filters, old-schema/partial/failed
+indicators, and normal reopen links. Rename, duplicate, and delete are omitted
+because the API exposes no endpoints.
+
+## Recovery, responsive behavior, and accessibility
+
+Lifecycle presentation names only persisted Kit states. Pending/processing/slow,
+temporary retrieval interruption, malformed response, failed Kit, retry, and
+connection-restored states use client-safe copy without asserting an unknown
+worker or broker failure. There is no fake progress bar or ETA.
+
+The shell is verified at desktop, tablet, and mobile breakpoints. Evidence is an
+inline desktop panel, a tablet drawer, and a mobile sheet. Artifact tabs scroll,
+mobile editing actions sit above bottom navigation/safe-area clearance, and wide
+Job Fit tables scroll inside their region. Statuses include icon + text, drawers
+and dialogs trap/restore focus and support Escape, trace navigation is keyboard
+accessible, feedback is announced through live regions, and reduced-motion rules
+remain in the base token layer.
 
 ## Run locally
 
@@ -103,8 +168,9 @@ docker compose config
 
 ## Intentionally unsupported
 
-D1 does not implement PDF/DOCX upload, saved/revalidated edits, per-artifact
-regeneration, rendered PDF download, history mutations, authentication, billing,
-credits, analytics, LinkedIn access/sending, public hosting, or external
-research. Later design work should extend the typed API/client/component
-boundaries without moving backend business rules into the web app.
+D2 does not implement PDF/DOCX upload, server-persisted/revalidated edits,
+per-artifact regeneration, rendered PDF download, history mutations,
+authentication, billing, pricing, credits, analytics/tracking, LinkedIn
+access/sending, public hosting, or external research. It is private-local
+dogfooding polish, not public-SaaS work. Later work must extend typed API/client
+boundaries without moving domain logic into the browser.

@@ -1,49 +1,27 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect } from "react";
+import { ShieldCheck } from "lucide-react";
 import { useKit } from "@/components/product/kit-context";
 import type { Claim } from "@/lib/api-types";
+import { evidenceStateForClaim } from "@/lib/artifact-presentation";
+import { evidenceStatePresentation } from "@/lib/status";
 
-type Segment = { text: string; claim?: Claim };
-
-function segmentsFor(text: string, claims: Claim[]): Segment[] {
-  const segments: Segment[] = [];
-  let cursor = 0;
-  const unused = claims.filter((claim) => claim.text.trim().length >= 3);
-  while (cursor < text.length) {
-    let nextClaim: Claim | undefined;
-    let nextIndex = -1;
-    for (const claim of unused) {
-      const index = text.indexOf(claim.text, cursor);
-      if (index >= 0 && (nextIndex < 0 || index < nextIndex)) {
-        nextClaim = claim;
-        nextIndex = index;
-      }
-    }
-    if (!nextClaim || nextIndex < 0) {
-      segments.push({ text: text.slice(cursor) });
-      break;
-    }
-    if (nextIndex > cursor) segments.push({ text: text.slice(cursor, nextIndex) });
-    segments.push({ text: nextClaim.text, claim: nextClaim });
-    cursor = nextIndex + nextClaim.text.length;
-    unused.splice(unused.indexOf(nextClaim), 1);
-  }
-  return segments;
-}
-
+/**
+ * The API deliberately does not provide character offsets for claims. We do
+ * not guess them by matching browser text: trace markers are rendered as an
+ * explicit, source-record list below the generated content instead.
+ */
 export function GroundedText({ text, claims, className = "" }: { text: string; claims: Claim[]; className?: string }) {
   const { selectedClaimId, highlightClaims, openEvidence } = useKit();
-  const segments = useMemo(() => segmentsFor(text, claims), [claims, text]);
 
   useEffect(() => {
     if (!selectedClaimId) return;
-    document.getElementById(`claim-${selectedClaimId}`)?.scrollIntoView({ block: "center", behavior: "smooth" });
+    document.getElementById(`claim-marker-${selectedClaimId}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [selectedClaimId]);
 
-  return <div className={`whitespace-pre-wrap text-pretty leading-relaxed ${className}`}>{segments.map((segment, index) => {
-    if (!segment.claim) return <span key={index}>{segment.text}</span>;
-    const status = segment.claim.status === "repaired" || segment.claim.status === "rejected" ? segment.claim.status : "supported";
-    return <button key={`${segment.claim.id}-${index}`} id={`claim-${segment.claim.id}`} type="button" onClick={() => openEvidence(segment.claim?.id)} className={`rounded-sm border-b-2 px-0.5 text-left ${highlightClaims ? status === "supported" ? "border-positive-border bg-positive-bg" : status === "repaired" ? "border-warning-border bg-warning-bg" : "border-danger-border bg-danger-bg line-through" : "border-transparent"} ${selectedClaimId === segment.claim.id ? "outline-2 outline-offset-1 outline-accent" : ""}`} title={`Open evidence: ${status}`}>{segment.text}{status === "repaired" && <span className="ml-1 font-mono text-xs text-warning">⚠ repaired</span>}</button>;
-  })}</div>;
+  return <div className={className}>
+    <div className="whitespace-pre-wrap text-pretty leading-relaxed">{text}</div>
+    {highlightClaims && claims.length > 0 && <aside aria-label="Available evidence markers" className="mt-5 border-t border-border-subtle pt-4"><p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.05em] text-ink-muted"><ShieldCheck aria-hidden="true" className="size-4 text-accent" />Evidence markers</p><p className="mt-1 text-xs text-ink-muted">Trace positions were not included by the API, so markers are listed without guessing text locations.</p><div className="mt-3 flex flex-wrap gap-2">{claims.map((claim) => { const state = evidenceStateForClaim(claim); const presentation = evidenceStatePresentation[state]; const Icon = presentation.icon; const tone = presentation.tone === "positive" ? "border-positive-border bg-positive-bg text-positive" : presentation.tone === "warning" ? "border-warning-border bg-warning-bg text-warning" : presentation.tone === "unavailable" ? "border-unavailable-border border-dashed bg-unavailable-bg text-unavailable" : "border-danger-border bg-danger-bg text-danger"; return <button key={claim.id} id={`claim-marker-${claim.id}`} type="button" onClick={() => openEvidence(claim.id)} className={`inline-flex min-h-10 max-w-full items-center gap-1.5 rounded-pill border px-3 py-1.5 text-left text-xs font-semibold ${tone} ${selectedClaimId === claim.id ? "outline-2 outline-offset-1 outline-accent" : ""}`}><Icon aria-hidden="true" className="size-3.5 shrink-0" /> <span className="max-w-[240px] truncate">{claim.text || "Claim record"}</span></button>; })}</div></aside>}
+  </div>;
 }

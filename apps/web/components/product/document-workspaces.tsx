@@ -1,48 +1,81 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Copy, RotateCcw } from "lucide-react";
+import { useState } from "react";
+import { Copy } from "lucide-react";
 import { ArtifactToolbar } from "@/components/product/artifact-toolbar";
+import { CompareView } from "@/components/product/compare-view";
 import { GroundedText } from "@/components/product/grounded-text";
 import { useFeedback } from "@/components/product/feedback";
+import { TrustSummary } from "@/components/product/trust-summary";
+import { StickyActionBar } from "@/components/product/sticky-action-bar";
+import { useArtifactView } from "@/components/product/use-artifact-view";
+import { useLocalTextEditor, useUnsavedChangeProtection } from "@/components/product/use-local-text-editor";
 import { Banner, Button, Card, Field, Textarea } from "@/components/ui/primitives";
 import type { AnswerArtifact, CoverLetterArtifact, ResumeArtifact } from "@/lib/api-types";
-import { copyText, downloadText, safeFilename } from "@/lib/product";
+import { copyText, safeFilename } from "@/lib/product";
 
 export function DocumentWorkspace({ kind, artifact, company, role }: { kind: "resume" | "cover-letter"; artifact: ResumeArtifact | CoverLetterArtifact; company: string; role: string }) {
-  const [editing, setEditing] = useState(false);
-  const [localText, setLocalText] = useState(artifact.text);
-  useEffect(() => setLocalText(artifact.text), [artifact.text]);
-  const dirty = localText !== artifact.text;
+  const { notify } = useFeedback();
+  const [view, setView] = useArtifactView();
+  const editor = useLocalTextEditor(artifact.text);
+  const [compare, setCompare] = useState(false);
+  useUnsavedChangeProtection(editor.dirty);
   const title = kind === "resume" ? "Tailored resume" : "Cover letter";
   const filename = safeFilename(company, role, kind);
+  const visibleText = editor.editing ? editor.draft : editor.applied;
+
+  function apply() {
+    if (!editor.apply()) { notify("Can't apply empty local content. Reset to generated content or enter text first.", "error"); return; }
+    notify("Applied locally — manual edits have not been revalidated.", "warning");
+  }
+
   return <div>
-    <ArtifactToolbar title={title} validation={artifact.validation} claims={artifact.claims} text={localText} latex={artifact.latex} filename={filename} editing={editing} editable dirty={dirty} onEditingChange={setEditing} onReset={() => setLocalText(artifact.text)} />
-    {artifact.validation.repaired_claims > 0 && <Banner tone="warning" title={`${artifact.validation.repaired_claims} claim${artifact.validation.repaired_claims === 1 ? " was" : "s were"} repaired.`}>Unsupported content was removed or adjusted by the grounding gate. Open Evidence for the server-provided disposition.</Banner>}
-    {editing ? <div className="mx-auto mt-5 max-w-[820px]"><Banner tone="warning" title="Local unsaved edit.">Changes exist only in this tab, have not been revalidated, and are never sent back to the API. Copy and download use the edited text.</Banner><Field label={`${title} text`} htmlFor={`${kind}-editor`} hint={dirty ? "Edited since generation · not revalidated" : "Generated text unchanged"} className="mt-4"><Textarea id={`${kind}-editor`} value={localText} onChange={(event) => setLocalText(event.target.value)} className="min-h-[520px] font-mono text-sm" /></Field></div> : <article className="mx-auto mt-5 max-w-[820px] rounded-lg border border-border bg-surface p-5 shadow-sm sm:p-8"><GroundedText text={localText} claims={artifact.claims} className="text-base" /></article>}
+    <ArtifactToolbar title={title} validation={artifact.validation} claims={artifact.claims} text={visibleText} latex={artifact.latex} filename={filename} view={view} onViewChange={setView} editing={editor.editing} editable dirty={editor.dirty} edited={editor.edited} onBeginEdit={() => { setView("content"); editor.beginEdit(); }} onApplyLocalEdits={apply} onExitEdit={() => editor.exit()} onDiscardChanges={editor.discard} onReset={editor.reset} onCompare={() => setCompare((open) => !open)} />
+    {view === "trust" ? <TrustSummary title={title} claims={artifact.claims} validation={artifact.validation} text={editor.applied} manuallyEdited={editor.edited} onOpenContent={() => setView("content")} /> : <div className="mx-auto mt-5 max-w-[820px]">
+      {artifact.validation.repaired_claims > 0 && <Banner tone="warning" title={`${artifact.validation.repaired_claims} claim${artifact.validation.repaired_claims === 1 ? " was" : "s were"} repaired.`}>The engine removed unsupported content. Open Evidence to review the persisted reason; no removed wording is restored here.</Banner>}
+      {editor.editing ? <><Editor title={title} value={editor.draft} onChange={editor.setDraft} dirty={editor.dirty} /><StickyActionBar><Button className="flex-1" onClick={apply}>Apply local edits</Button><Button className="flex-1" variant="secondary" onClick={() => { if (!editor.dirty || window.confirm("Discard unsaved changes and exit edit mode?")) editor.discard(); }}>Exit edit mode</Button></StickyActionBar></> : <>
+        {editor.edited && <Banner tone="warning" className="mt-4" title="Edited since generation.">This local version is not revalidated and will be lost on reload. Copy and download are explicitly labelled as local edits.</Banner>}
+        <article className="mt-5 rounded-lg border border-border bg-surface p-5 shadow-sm sm:p-8"><GroundedText text={editor.applied} claims={editor.edited ? [] : artifact.claims} className="text-base" /></article>
+        {compare && editor.edited && <CompareView generated={artifact.text} edited={editor.applied} />}
+      </>}
+    </div>}
   </div>;
 }
 
 export function AnswersWorkspace({ artifact, company, role }: { artifact: AnswerArtifact; company: string; role: string }) {
   const { notify } = useFeedback();
-  const [editing, setEditing] = useState(false);
-  const [answers, setAnswers] = useState(() => artifact.items.map((item) => item.answer));
-  useEffect(() => setAnswers(artifact.items.map((item) => item.answer)), [artifact.items]);
-  const generatedText = artifact.items.map((item, index) => `${item.question}\n${answers[index] ?? item.answer}`).join("\n\n");
-  const originalText = artifact.items.map((item) => `${item.question}\n${item.answer}`).join("\n\n") || artifact.text;
-  const dirty = generatedText !== originalText;
+  const [view, setView] = useArtifactView();
+  const generated = formatAnswers(artifact);
+  const editor = useLocalTextEditor(generated);
+  const [compare, setCompare] = useState(false);
+  useUnsavedChangeProtection(editor.dirty);
   const filename = safeFilename(company, role, "application-answers");
+  const visibleText = editor.editing ? editor.draft : editor.applied;
+  const malformed = editor.editing && artifact.items.length > 0 && artifact.items.some((item) => !editor.draft.includes(item.question));
 
   async function copyAnswer(text: string, index: number) {
-    try { await copyText(text); notify(`Answer ${index + 1} copied.`); } catch { notify("Copy failed. Your browser may have blocked clipboard access.", "error"); }
+    try { await copyText(text); notify(`Answer ${index + 1} copied from the generated version.`); } catch { notify("Couldn't access the clipboard. Select and copy the answer manually.", "error"); }
+  }
+  function apply() {
+    if (!editor.apply()) { notify("Can't apply empty local content. Reset to generated answers or enter text first.", "error"); return; }
+    notify("Applied locally — answers have not been revalidated.", "warning");
   }
 
   return <div>
-    <ArtifactToolbar title="Application answers" validation={artifact.validation} claims={artifact.claims} text={generatedText || artifact.text} filename={filename} editing={editing} editable dirty={dirty} onEditingChange={setEditing} onReset={() => setAnswers(artifact.items.map((item) => item.answer))} />
-    {dirty && <Banner tone="warning" title="Edited since generation.">Local changes have not been grounded or revalidated and disappear when this page is reloaded.</Banner>}
-    {(artifact.placeholders.length > 0 || artifact.validation.rejected_claims > 0) && <Banner tone="warning" title="Some answers could not be completed safely.">Missing evidence remains visible as a placeholder or rejected claim rather than being fabricated.</Banner>}
-    {!artifact.items.length ? <Card className="mt-5 text-center"><h2 className="text-lg font-semibold">No application questions</h2><p className="mt-2 text-sm text-ink-secondary">The backend returned a valid empty answers artifact.</p></Card> : <div className="mt-5 space-y-4">{artifact.items.map((item, index) => <Card key={`${item.question}-${index}`} className="shadow-none"><div className="flex flex-wrap items-start justify-between gap-3"><h2 className="max-w-[780px] font-semibold">{item.question}</h2><Button size="sm" onClick={() => void copyAnswer(answers[index] ?? item.answer, index)}><Copy aria-hidden="true" className="size-4" />Copy answer</Button></div>{editing ? <Field label={`Local answer ${index + 1}`} htmlFor={`answer-${index}`} hint="Not revalidated" className="mt-4"><Textarea id={`answer-${index}`} value={answers[index] ?? ""} onChange={(event) => setAnswers((current) => current.map((answer, answerIndex) => answerIndex === index ? event.target.value : answer))} className="min-h-36" /></Field> : <GroundedText text={answers[index] ?? item.answer} claims={artifact.claims} className="mt-4 text-base" />}</Card>)}</div>}
-    {artifact.placeholders.length > 0 && <Card className="mt-4 border-warning-border bg-warning-bg shadow-none"><h2 className="font-semibold text-warning">Withheld or incomplete answer guidance</h2><ul className="mt-3 space-y-2 text-sm text-ink-secondary">{artifact.placeholders.map((placeholder) => <li key={placeholder}>{placeholder}</li>)}</ul></Card>}
-    {dirty && <div className="mt-4 flex flex-wrap gap-3"><Button variant="ghost" onClick={() => setAnswers(artifact.items.map((item) => item.answer))}><RotateCcw aria-hidden="true" className="size-4" />Reset generated answers</Button><Button onClick={() => { try { downloadText(generatedText, `${filename}.txt`); notify("Edited answers downloaded."); } catch { notify("Download failed.", "error"); } }}>Download local edit</Button></div>}
+    <ArtifactToolbar title="Application answers" validation={artifact.validation} claims={artifact.claims} text={visibleText} filename={filename} view={view} onViewChange={setView} editing={editor.editing} editable dirty={editor.dirty} edited={editor.edited} onBeginEdit={() => { setView("content"); editor.beginEdit(); }} onApplyLocalEdits={apply} onExitEdit={() => editor.exit()} onDiscardChanges={editor.discard} onReset={editor.reset} onCompare={() => setCompare((open) => !open)} />
+    {view === "trust" ? <TrustSummary title="Application answers" claims={artifact.claims} validation={artifact.validation} text={editor.applied} manuallyEdited={editor.edited} onOpenContent={() => setView("content")} /> : <div className="mx-auto mt-5 max-w-[860px]">
+      {(artifact.placeholders.length > 0 || artifact.validation.rejected_claims > 0) && <Banner tone="warning" title="Some answers could not be completed safely.">Missing evidence remains visible as a placeholder or withheld state rather than being fabricated.</Banner>}
+      {editor.editing ? <><Editor title="Application answers" value={editor.draft} onChange={editor.setDraft} dirty={editor.dirty} />{malformed && <Banner tone="warning" className="mt-4" title="Edited answer structure changed.">Question headings are missing from this local text. It can still be copied or downloaded as local content, but it will be shown as freeform text until you reset to generated answers.</Banner>}<StickyActionBar><Button className="flex-1" onClick={apply}>Apply local edits</Button><Button className="flex-1" variant="secondary" onClick={() => { if (!editor.dirty || window.confirm("Discard unsaved changes and exit edit mode?")) editor.discard(); }}>Exit edit mode</Button></StickyActionBar></> : editor.edited ? <><Banner tone="warning" title="Edited since generation.">This local answer set is not revalidated and will be lost on reload.</Banner><pre className="mt-5 whitespace-pre-wrap rounded-lg border border-border bg-surface p-5 font-sans text-base leading-relaxed shadow-sm">{editor.applied}</pre>{compare && <CompareView generated={generated} edited={editor.applied} />}</> : !artifact.items.length ? <Card className="mt-5 text-center"><h2 className="text-lg font-semibold">No application questions</h2><p className="mt-2 text-sm text-ink-secondary">The backend returned a valid empty answers artifact.</p></Card> : <div className="mt-5 space-y-4">{artifact.items.map((item, index) => <Card key={`${item.question}-${index}`} className="shadow-none"><div className="flex flex-wrap items-start justify-between gap-3"><h2 className="max-w-[780px] font-semibold">{item.question}</h2><Button size="sm" onClick={() => void copyAnswer(item.answer, index)}><Copy aria-hidden="true" className="size-4" />Copy answer</Button></div><GroundedText text={item.answer} claims={artifact.claims} className="mt-4 text-base" /></Card>)}</div>}
+      {artifact.placeholders.length > 0 && <Card className="mt-4 border-warning-border bg-warning-bg shadow-none"><h2 className="font-semibold text-warning">Withheld or incomplete answer guidance</h2><ul className="mt-3 space-y-2 text-sm text-ink-secondary">{artifact.placeholders.map((placeholder) => <li key={placeholder}>{placeholder}</li>)}</ul></Card>}
+    </div>}
   </div>;
+}
+
+function Editor({ title, value, onChange, dirty }: { title: string; value: string; onChange: (value: string) => void; dirty: boolean }) {
+  return <div className="mt-4"><Banner tone="warning" title="Editing locally.">Manual edits are not revalidated against evidence, are never sent to the API, and disappear on reload.</Banner><Field label={`${title} local text`} htmlFor={`${title.toLowerCase().replaceAll(" ", "-")}-editor`} hint={dirty ? "Unsaved local changes" : "No unsaved local changes"} className="mt-4"><Textarea id={`${title.toLowerCase().replaceAll(" ", "-")}-editor`} value={value} onChange={(event) => onChange(event.target.value)} className="min-h-[520px] font-mono text-sm" /></Field></div>;
+}
+
+function formatAnswers(artifact: AnswerArtifact): string {
+  const text = artifact.items.map((item) => `${item.question}\n${item.answer}`).join("\n\n");
+  return text || artifact.text;
 }
