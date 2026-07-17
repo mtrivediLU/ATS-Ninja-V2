@@ -18,6 +18,7 @@ from ats_engine.kit.contract import (
     ClaimType,
     ConsistencyValidation,
     CoverLetterArtifact,
+    CoverLetterDocument,
     EvidenceRef,
     FitBand,
     GapHandlingGuide,
@@ -43,6 +44,11 @@ from ats_engine.kit.contract import (
     RequirementClassification,
     RequirementRisk,
     ResumeArtifact,
+    ResumeCertificationEntry,
+    ResumeDocument,
+    ResumeEducationEntry,
+    ResumeExperienceEntry,
+    ResumeSkillGroup,
     StarCompleteness,
     StarSourceType,
     StarStoryCandidate,
@@ -130,6 +136,7 @@ def _resume_to_dict(resume: ResumeArtifact) -> dict[str, Any]:
         "validation": _artifact_validation_to_dict(resume.validation),
         "claims": [_claim_to_dict(claim) for claim in resume.claims],
         "interview_probability": resume.interview_probability,
+        "document": _resume_document_to_dict(resume.document) if resume.document is not None else None,
     }
 
 
@@ -139,6 +146,60 @@ def _cover_letter_to_dict(cover: CoverLetterArtifact) -> dict[str, Any]:
         "latex": cover.latex,
         "validation": _artifact_validation_to_dict(cover.validation),
         "claims": [_claim_to_dict(claim) for claim in cover.claims],
+        "document": _cover_document_to_dict(cover.document) if cover.document is not None else None,
+    }
+
+
+def _resume_document_to_dict(document: ResumeDocument) -> dict[str, Any]:
+    return {
+        "candidate_name": document.candidate_name,
+        "professional_headline": document.professional_headline,
+        "contact_lines": list(document.contact_lines),
+        "summary": document.summary,
+        "skill_groups": [{"label": group.label, "items": list(group.items)} for group in document.skill_groups],
+        "experience": [
+            {
+                "employer": item.employer,
+                "title": item.title,
+                "location": item.location,
+                "date_range": item.date_range,
+                "bullets": list(item.bullets),
+            }
+            for item in document.experience
+        ],
+        "education": [
+            {
+                "institution": item.institution,
+                "degree": item.degree,
+                "location": item.location,
+                "date_range": item.date_range,
+                "details": list(item.details),
+            }
+            for item in document.education
+        ],
+        "certifications": [
+            {"name": item.name, "date": item.date, "link": item.link} for item in document.certifications
+        ],
+        "remaining_sections": [
+            {"heading": heading, "lines": list(lines)} for heading, lines in document.remaining_sections
+        ],
+    }
+
+
+def _cover_document_to_dict(document: CoverLetterDocument) -> dict[str, Any]:
+    return {
+        "sender_name": document.sender_name,
+        "sender_contact_lines": list(document.sender_contact_lines),
+        "date": document.date,
+        "recipient_name": document.recipient_name,
+        "recipient_title": document.recipient_title,
+        "recipient_company": document.recipient_company,
+        "recipient_address": list(document.recipient_address),
+        "target_role": document.target_role,
+        "greeting": document.greeting,
+        "body_paragraphs": list(document.body_paragraphs),
+        "closing": document.closing,
+        "signature_name": document.signature_name,
     }
 
 
@@ -432,6 +493,7 @@ def _resume_from_dict(raw: dict[str, Any] | None) -> ResumeArtifact | None:
         validation=_artifact_validation_from_dict(raw.get("validation") or {}),
         claims=[_claim_from_dict(claim) for claim in raw.get("claims") or []],
         interview_probability=int(probability) if probability is not None else None,
+        document=_resume_document_from_dict(raw.get("document")),
     )
 
 
@@ -443,6 +505,76 @@ def _cover_letter_from_dict(raw: dict[str, Any] | None) -> CoverLetterArtifact |
         latex=str(raw.get("latex", "")),
         validation=_artifact_validation_from_dict(raw.get("validation") or {}),
         claims=[_claim_from_dict(claim) for claim in raw.get("claims") or []],
+        document=_cover_document_from_dict(raw.get("document")),
+    )
+
+
+def _resume_document_from_dict(raw: object) -> ResumeDocument | None:
+    if not isinstance(raw, dict):
+        return None
+    return ResumeDocument(
+        candidate_name=str(raw.get("candidate_name", "")),
+        professional_headline=str(raw.get("professional_headline", "")),
+        contact_lines=[str(item) for item in raw.get("contact_lines") or []],
+        summary=str(raw.get("summary", "")),
+        skill_groups=[
+            ResumeSkillGroup(label=str(item.get("label", "")), items=[str(value) for value in item.get("items") or []])
+            for item in raw.get("skill_groups") or []
+            if isinstance(item, dict)
+        ],
+        experience=[
+            ResumeExperienceEntry(
+                employer=str(item.get("employer", "")),
+                title=str(item.get("title", "")),
+                location=str(item.get("location", "")),
+                date_range=str(item.get("date_range", "")),
+                bullets=[str(value) for value in item.get("bullets") or []],
+            )
+            for item in raw.get("experience") or []
+            if isinstance(item, dict)
+        ],
+        education=[
+            ResumeEducationEntry(
+                institution=str(item.get("institution", "")),
+                degree=str(item.get("degree", "")),
+                location=str(item.get("location", "")),
+                date_range=str(item.get("date_range", "")),
+                details=[str(value) for value in item.get("details") or []],
+            )
+            for item in raw.get("education") or []
+            if isinstance(item, dict)
+        ],
+        certifications=[
+            ResumeCertificationEntry(
+                name=str(item.get("name", "")), date=str(item.get("date", "")), link=str(item.get("link", ""))
+            )
+            for item in raw.get("certifications") or []
+            if isinstance(item, dict)
+        ],
+        remaining_sections=[
+            (str(item.get("heading", "")), [str(value) for value in item.get("lines") or []])
+            for item in raw.get("remaining_sections") or []
+            if isinstance(item, dict)
+        ],
+    )
+
+
+def _cover_document_from_dict(raw: object) -> CoverLetterDocument | None:
+    if not isinstance(raw, dict):
+        return None
+    return CoverLetterDocument(
+        sender_name=str(raw.get("sender_name", "")),
+        sender_contact_lines=[str(item) for item in raw.get("sender_contact_lines") or []],
+        date=str(raw.get("date", "")),
+        recipient_name=str(raw.get("recipient_name", "")),
+        recipient_title=str(raw.get("recipient_title", "")),
+        recipient_company=str(raw.get("recipient_company", "")),
+        recipient_address=[str(item) for item in raw.get("recipient_address") or []],
+        target_role=str(raw.get("target_role", "")),
+        greeting=str(raw.get("greeting", "")),
+        body_paragraphs=[str(item) for item in raw.get("body_paragraphs") or []],
+        closing=str(raw.get("closing", "")),
+        signature_name=str(raw.get("signature_name", "")),
     )
 
 

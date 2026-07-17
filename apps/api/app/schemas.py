@@ -144,6 +144,65 @@ class ArtifactValidationResponse(BaseModel):
     rejected_claims: int = 0
 
 
+class ResumeSkillGroupResponse(BaseModel):
+    label: str = ""
+    items: list[str] = Field(default_factory=list)
+
+
+class ResumeExperienceEntryResponse(BaseModel):
+    employer: str = ""
+    title: str = ""
+    location: str = ""
+    date_range: str = ""
+    bullets: list[str] = Field(default_factory=list)
+
+
+class ResumeEducationEntryResponse(BaseModel):
+    institution: str = ""
+    degree: str = ""
+    location: str = ""
+    date_range: str = ""
+    details: list[str] = Field(default_factory=list)
+
+
+class ResumeCertificationEntryResponse(BaseModel):
+    name: str = ""
+    date: str = ""
+    link: str = ""
+
+
+class RemainingResumeSectionResponse(BaseModel):
+    heading: str = ""
+    lines: list[str] = Field(default_factory=list)
+
+
+class ResumeDocumentResponse(BaseModel):
+    candidate_name: str = ""
+    professional_headline: str = ""
+    contact_lines: list[str] = Field(default_factory=list)
+    summary: str = ""
+    skill_groups: list[ResumeSkillGroupResponse] = Field(default_factory=list)
+    experience: list[ResumeExperienceEntryResponse] = Field(default_factory=list)
+    education: list[ResumeEducationEntryResponse] = Field(default_factory=list)
+    certifications: list[ResumeCertificationEntryResponse] = Field(default_factory=list)
+    remaining_sections: list[RemainingResumeSectionResponse] = Field(default_factory=list)
+
+
+class CoverLetterDocumentResponse(BaseModel):
+    sender_name: str = ""
+    sender_contact_lines: list[str] = Field(default_factory=list)
+    date: str = ""
+    recipient_name: str = ""
+    recipient_title: str = ""
+    recipient_company: str = ""
+    recipient_address: list[str] = Field(default_factory=list)
+    target_role: str = ""
+    greeting: str = ""
+    body_paragraphs: list[str] = Field(default_factory=list)
+    closing: str = ""
+    signature_name: str = ""
+
+
 class ResumeArtifactResponse(BaseModel):
     """The tailored resume artifact and its truth-grounding trace."""
 
@@ -152,6 +211,7 @@ class ResumeArtifactResponse(BaseModel):
     validation: ArtifactValidationResponse = Field(default_factory=ArtifactValidationResponse)
     claims: list[ClaimResponse] = Field(default_factory=list)
     interview_probability: int | None = None
+    document: ResumeDocumentResponse | None = None
 
 
 class CoverLetterArtifactResponse(BaseModel):
@@ -161,6 +221,7 @@ class CoverLetterArtifactResponse(BaseModel):
     latex: str = ""
     validation: ArtifactValidationResponse = Field(default_factory=ArtifactValidationResponse)
     claims: list[ClaimResponse] = Field(default_factory=list)
+    document: CoverLetterDocumentResponse | None = None
 
 
 class AnswerItemResponse(BaseModel):

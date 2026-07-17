@@ -241,6 +241,70 @@ class ArtifactValidation:
 
 
 @dataclass(slots=True)
+class ResumeSkillGroup:
+    label: str
+    items: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class ResumeExperienceEntry:
+    employer: str = ""
+    title: str = ""
+    location: str = ""
+    date_range: str = ""
+    bullets: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class ResumeEducationEntry:
+    institution: str = ""
+    degree: str = ""
+    location: str = ""
+    date_range: str = ""
+    details: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class ResumeCertificationEntry:
+    name: str
+    date: str = ""
+    link: str = ""
+
+
+@dataclass(slots=True)
+class ResumeDocument:
+    """Optional presentation data assembled only from the grounded resume plan."""
+
+    candidate_name: str = ""
+    professional_headline: str = ""
+    contact_lines: list[str] = field(default_factory=list)
+    summary: str = ""
+    skill_groups: list[ResumeSkillGroup] = field(default_factory=list)
+    experience: list[ResumeExperienceEntry] = field(default_factory=list)
+    education: list[ResumeEducationEntry] = field(default_factory=list)
+    certifications: list[ResumeCertificationEntry] = field(default_factory=list)
+    remaining_sections: list[tuple[str, list[str]]] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class CoverLetterDocument:
+    """Optional grounded cover-letter presentation data; blank fields are omitted."""
+
+    sender_name: str = ""
+    sender_contact_lines: list[str] = field(default_factory=list)
+    date: str = ""
+    recipient_name: str = ""
+    recipient_title: str = ""
+    recipient_company: str = ""
+    recipient_address: list[str] = field(default_factory=list)
+    target_role: str = ""
+    greeting: str = ""
+    body_paragraphs: list[str] = field(default_factory=list)
+    closing: str = ""
+    signature_name: str = ""
+
+
+@dataclass(slots=True)
 class ResumeArtifact:
     """The tailored resume artifact and its truth-grounding trace."""
 
@@ -249,6 +313,7 @@ class ResumeArtifact:
     validation: ArtifactValidation
     claims: list[ClaimRecord] = field(default_factory=list)
     interview_probability: int | None = None
+    document: ResumeDocument | None = None
 
 
 @dataclass(slots=True)
@@ -259,6 +324,7 @@ class CoverLetterArtifact:
     latex: str
     validation: ArtifactValidation
     claims: list[ClaimRecord] = field(default_factory=list)
+    document: CoverLetterDocument | None = None
 
 
 @dataclass(slots=True)

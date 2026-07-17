@@ -56,6 +56,25 @@
 .t1-export-menu small { margin-top: 2px; color: var(--text-muted); font-size: var(--text-xs); }
 .t1-page-viewport { min-height: 500px; overflow: auto; background: repeating-linear-gradient(45deg, var(--surface-subtle), var(--surface-subtle) 12px, var(--surface-raised) 12px, var(--surface-raised) 24px); padding: var(--space-6); }
 .t1-page-deck { display: flex; flex-direction: column; align-items: center; gap: var(--space-8); overflow-x: hidden; }
+.t1-document-flow { box-sizing: border-box; width: var(--t1-page-w); background: var(--white); box-shadow: var(--shadow-lg); color: var(--t1-classic-ink); padding: var(--t1-margin-classic); }
+.t1-document-flow.t1-modern { color: var(--t1-modern-ink); padding: var(--t1-margin-modern); }
+.t1-document-flow.t1-classic { font-family: var(--t1-classic-font); font-size: 11pt; line-height: 1.32; }
+.t1-document-flow.t1-modern { font-family: var(--t1-modern-font); font-size: 10.5pt; line-height: 1.45; }
+.t1-doc-headline { margin: 3px 0 0; font-size: 11pt; font-weight: 600; }
+.t1-entry { margin-top: 10px; break-inside: auto; }
+.t1-entry-heading { display: flex; justify-content: space-between; gap: 16px; }
+.t1-entry-heading span { flex: 0 0 auto; text-align: right; }
+.t1-entry-title { margin: 2px 0 4px; font-style: italic; }
+.t1-entry ul, .t1-section-body ul { margin: 4px 0 0; padding-left: 20px; }
+.t1-entry li, .t1-section-body li { margin-bottom: 3px; }
+.t1-skill-groups p { margin-bottom: 4px; }
+.t1-letter-sender { border-bottom: 2px solid var(--t1-modern-accent); margin-bottom: 20px; padding-bottom: 12px; }
+.t1-classic .t1-letter-sender { border-bottom-color: var(--t1-classic-ink); text-align: center; }
+.t1-letter-date, .t1-letter-greeting, .t1-letter-closing, .t1-letter-signature { margin: 18px 0 0; }
+.t1-letter-recipient { display: flex; flex-direction: column; margin-top: 18px; font-style: normal; }
+.t1-letter-role { margin-top: 18px; font-weight: 600; }
+.t1-letter-body p { margin: 14px 0 0; white-space: pre-wrap; }
+.t1-document-verbatim { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 .t1-page-slot { display: flex; max-width: 100%; flex-direction: column; align-items: center; gap: var(--space-2); color: var(--text-muted); font-family: var(--font-mono); font-size: 11px; scroll-margin-top: var(--space-4); }
 .t1-page-slot > .t1-page { zoom: var(--t1-preview-zoom); }
 .t1-page-active > .t1-page { outline: 2px solid var(--accent); outline-offset: 4px; }
@@ -111,22 +130,21 @@
   .t1-preview-bar > button, .t1-export-wrap { flex: 1 1 calc(50% - var(--space-2)); }
   .t1-preview-bar > button { justify-content: center; }
   .t1-page-viewport { overflow-x: hidden; padding: var(--space-4); }
-  .t1-page-slot > .t1-page { width: min(var(--t1-page-w), calc((100vw - 64px) / var(--t1-preview-zoom))); min-height: 0; }
+  .t1-page-slot > .t1-page, .t1-document-flow { width: min(var(--t1-page-w), calc((100vw - 64px) / var(--t1-preview-zoom))); min-height: 0; }
   .t1-print-root { padding: var(--space-4); }
 }
 
 @media print {
   @page { size: letter; margin: 0; }
-  body * { visibility: hidden !important; }
+  body > :not(.t1-print-overlay) { display: none !important; }
+  body, .t1-print-overlay, .t1-print-panel { height: auto !important; min-height: 0 !important; }
+  .t1-print-overlay { position: static !important; background: transparent !important; }
   .t1-print-root, .t1-print-root * { visibility: visible !important; }
-  .t1-print-root { position: absolute; inset: 0; overflow: visible; padding: 0; }
+  .t1-print-root { position: static !important; inset: auto; overflow: visible; padding: 0; }
   .t1-print-controls { display: none !important; }
-  .t1-print-pages { display: block; }
-  .t1-page-slot { display: block; }
-  .t1-page-slot > span { display: none !important; }
-  .t1-page { zoom: 1 !important; width: 8.5in !important; min-height: 11in; box-shadow: none; break-after: page; page-break-after: always; }
-  .t1-page:last-child { break-after: auto; page-break-after: auto; }
-  .t1-section, .t1-page li { break-inside: avoid; }
+  .t1-document-flow { width: auto !important; min-height: 0 !important; box-shadow: none !important; padding: .65in .7in !important; }
+  .t1-document-flow .t1-section, .t1-document-flow li { break-inside: avoid; }
   .t1-section h2 { break-after: avoid; }
-  .t1-page { orphans: 2; widows: 2; }
+  .t1-document-flow { orphans: 2; widows: 2; }
+  .t1-document-flow .t1-entry { break-inside: auto; }
 }

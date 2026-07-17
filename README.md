@@ -4,6 +4,11 @@ A deterministic-first, truth-grounded AI career SaaS. From a candidate's resume
 and a job description it generates an application kit that stays honest to what
 the candidate has actually done.
 
+Resume and Cover Letter artifacts retain backward-compatible text and LaTeX
+fields and can include optional structured presentation data. Classic and
+Modern templates change presentation only; browser Print / Save as PDF uses no
+external service and intentionally excludes application UI messages.
+
 > **Status: Phase 2 backend complete; Design Phase D2 private-local dogfooding polish.**
 > The engine produces a tailored **resume, cover letter, and application answers**
 > and now assembles them into a versioned, truth-grounded **ApplicationKit**

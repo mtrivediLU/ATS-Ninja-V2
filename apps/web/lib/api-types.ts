@@ -81,6 +81,7 @@ export interface ResumeArtifact {
   validation: ArtifactValidation;
   claims: Claim[];
   interview_probability: number | null;
+  document?: ResumeDocument | null;
 }
 
 export interface CoverLetterArtifact {
@@ -88,6 +89,38 @@ export interface CoverLetterArtifact {
   latex: string;
   validation: ArtifactValidation;
   claims: Claim[];
+  document?: CoverLetterDocument | null;
+}
+
+export interface ResumeSkillGroup { label: string; items: string[]; }
+export interface ResumeExperienceEntry { employer: string; title: string; location: string; date_range: string; bullets: string[]; }
+export interface ResumeEducationEntry { institution: string; degree: string; location: string; date_range: string; details: string[]; }
+export interface ResumeCertificationEntry { name: string; date: string; link: string; }
+export interface RemainingResumeSection { heading: string; lines: string[]; }
+export interface ResumeDocument {
+  candidate_name: string;
+  professional_headline: string;
+  contact_lines: string[];
+  summary: string;
+  skill_groups: ResumeSkillGroup[];
+  experience: ResumeExperienceEntry[];
+  education: ResumeEducationEntry[];
+  certifications: ResumeCertificationEntry[];
+  remaining_sections: RemainingResumeSection[];
+}
+export interface CoverLetterDocument {
+  sender_name: string;
+  sender_contact_lines: string[];
+  date: string;
+  recipient_name: string;
+  recipient_title: string;
+  recipient_company: string;
+  recipient_address: string[];
+  target_role: string;
+  greeting: string;
+  body_paragraphs: string[];
+  closing: string;
+  signature_name: string;
 }
 
 export interface AnswerItem {

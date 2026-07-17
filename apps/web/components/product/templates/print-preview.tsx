@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { Printer, X } from "lucide-react";
 import { Button } from "@/components/ui/primitives";
 
@@ -36,10 +37,10 @@ export function PrintPreview({ open, title, filename, onClose, children, onPrint
   }
 
   if (!open) return null;
-  return <div className="t1-print-overlay" role="dialog" aria-modal="true" aria-label={title}>
+  return createPortal(<div className="t1-print-overlay" role="dialog" aria-modal="true" aria-label={title}>
     <div ref={panelRef} className="t1-print-panel">
       <header className="t1-print-controls"><div><h2>{title}</h2><p>Letter size · browser print only</p></div><span className="flex-1" /><Button variant="primary" onClick={print}><Printer aria-hidden="true" className="size-4" />Print / Save as PDF</Button><Button variant="secondary" onClick={onClose}><X aria-hidden="true" className="size-4" />Close</Button></header>
       <div className="t1-print-root">{children}</div>
     </div>
-  </div>;
+  </div>, document.body);
 }

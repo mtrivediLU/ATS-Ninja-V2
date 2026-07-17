@@ -203,13 +203,12 @@ def choose_role_identity(jd_profile: JDProfile, profile: Profile) -> str:
             return role
     if profile.role_identities:
         return profile.role_identities[0]
-    if jd_profile.title and jd_profile.title != "Target Role":
-        return jd_profile.title
     return "Professional"
 
 
 def _headline(jd_profile: JDProfile, role_identity: str, evidence: list[EvidenceItem]) -> str:
-    title = jd_profile.title if jd_profile.title != "Target Role" else role_identity
+    # A target job title is never a substitute for the candidate's supported identity.
+    title = role_identity
     keywords = _dedupe(
         [
             item.real_evidence if item.evidence_tier == "adjacency" and item.real_evidence else item.keyword
@@ -606,8 +605,7 @@ def _build_cover_letter_body(
         return fallback
 
     paragraphs = [p.strip() for p in re.split(r"\n\s*\n", raw.strip()) if p.strip()]
-    body = ["Dear Hiring Manager,"] + paragraphs
-    return _fit_cover_letter_word_count(body)
+    return _fit_cover_letter_word_count(paragraphs)
 
 
 def _logistics_sentence(contacts: ContactInfo, work_mode_text: str) -> str:
@@ -616,7 +614,7 @@ def _logistics_sentence(contacts: ContactInfo, work_mode_text: str) -> str:
         parts.append(f"based in {contacts.location}")
     if contacts.work_authorization:
         parts.append(contacts.work_authorization.lower())
-    parts.append(f"open to {work_mode_text} work mode")
+    parts.append(f"open to {work_mode_text} work")
     if contacts.relocation:
         parts.append(contacts.relocation.lower())
     return ", ".join(parts) if parts else "open to the role's work mode"
@@ -650,13 +648,12 @@ def _fallback_cover_letter_body(
         missing = ", ".join(_dedupe(fast_ramp_items)[:3])
         ramp = (
             f" Where the role calls for {missing}, the approach would be direct: map the tool to the closest "
-            "systems already delivered, validate assumptions quickly, and keep claims grounded in working output."
+            "systems already delivered, validate assumptions quickly, and describe the resulting work accurately."
         )
     work_mode_text = plan.jd_profile.work_mode if plan.jd_profile.work_mode != "unknown" else "the role's"
     contact = plan.contacts
 
     paragraphs = [
-        "Dear Hiring Manager,",
         (
             f"I am interested in the {title} role at {company} because it connects closely with my background in {domain_hook}. "
             f"I bring direct delivery experience with a practical record of turning operational needs into reliable tools."
