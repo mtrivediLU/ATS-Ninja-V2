@@ -7,7 +7,7 @@ import { JobFitWorkspace } from "@/components/product/job-fit-workspace";
 import { useKit } from "@/components/product/kit-context";
 import { OutreachWorkspace } from "@/components/product/outreach-workspace";
 import type { ArtifactSlug } from "@/lib/navigation";
-import { kitTarget } from "@/lib/product";
+import { kitTarget, safeWithheldReason } from "@/lib/product";
 
 const titles: Record<ArtifactSlug, string> = {
   resume: "Resume",
@@ -28,31 +28,31 @@ export function ArtifactRoute({ artifact }: { artifact: ArtifactSlug }) {
 
   if (artifact === "resume") {
     if (!result.resume) return <Unavailable title="Resume" onRetry={() => void refresh()} />;
-    if (result.resume.validation.fatal || result.resume.validation.status === "rejected") return <WithheldArtifact title="Resume" reason={result.resume.validation.warnings[0]} />;
+    if (result.resume.validation.fatal || result.resume.validation.status === "rejected") return <WithheldArtifact title="Resume" reason={safeWithheldReason(result.resume.validation.errors, result.resume.validation.warnings)} />;
     return <DocumentWorkspace kind="resume" artifact={result.resume} company={target.company} role={target.role} />;
   }
   if (artifact === "cover-letter") {
     if (!result.cover_letter) return <Unavailable title="Cover letter" onRetry={() => void refresh()} />;
-    if (result.cover_letter.validation.fatal || result.cover_letter.validation.status === "rejected") return <WithheldArtifact title="Cover letter" reason={result.cover_letter.validation.warnings[0]} />;
+    if (result.cover_letter.validation.fatal || result.cover_letter.validation.status === "rejected") return <WithheldArtifact title="Cover letter" reason={safeWithheldReason(result.cover_letter.validation.errors, result.cover_letter.validation.warnings)} />;
     return <DocumentWorkspace kind="cover-letter" artifact={result.cover_letter} company={target.company} role={target.role} />;
   }
   if (artifact === "answers") {
     if (!result.answers) return <Unavailable title="Application answers" onRetry={() => void refresh()} />;
-    if (result.answers.validation.fatal && !result.answers.items.length) return <WithheldArtifact title="Application answers" reason={result.answers.validation.warnings[0]} />;
+    if (result.answers.validation.fatal && !result.answers.items.length) return <WithheldArtifact title="Application answers" reason={safeWithheldReason(result.answers.validation.errors, result.answers.validation.warnings)} />;
     return <AnswersWorkspace artifact={result.answers} company={target.company} role={target.role} />;
   }
   if (artifact === "job-fit") {
     if (!result.job_fit) return <Unavailable title="Job fit" onRetry={() => void refresh()} />;
-    if (result.job_fit.withheld || result.job_fit.validation.fatal) return <WithheldArtifact title="Job fit" reason={result.job_fit.warnings[0]} />;
+    if (result.job_fit.withheld || result.job_fit.validation.fatal) return <WithheldArtifact title="Job fit" reason={safeWithheldReason(result.job_fit.validation.errors, result.job_fit.warnings)} />;
     return <JobFitWorkspace artifact={result.job_fit} company={target.company} role={target.role} />;
   }
   if (artifact === "interview-prep") {
     if (!result.interview_prep) return <Unavailable title="Interview preparation" onRetry={() => void refresh()} />;
-    if (result.interview_prep.withheld || result.interview_prep.validation.fatal) return <WithheldArtifact title="Interview preparation" reason={result.interview_prep.warnings[0]} />;
+    if (result.interview_prep.withheld || result.interview_prep.validation.fatal) return <WithheldArtifact title="Interview preparation" reason={safeWithheldReason(result.interview_prep.validation.errors, result.interview_prep.warnings)} />;
     return <InterviewWorkspace artifact={result.interview_prep} company={target.company} role={target.role} />;
   }
   if (!result.linkedin_outreach) return <Unavailable title="LinkedIn outreach" onRetry={() => void refresh()} />;
-  if (result.linkedin_outreach.withheld || result.linkedin_outreach.validation.fatal) return <WithheldArtifact title="LinkedIn outreach" reason={result.linkedin_outreach.warnings[0]} />;
+  if (result.linkedin_outreach.withheld || result.linkedin_outreach.validation.fatal) return <WithheldArtifact title="LinkedIn outreach" reason={safeWithheldReason(result.linkedin_outreach.validation.errors, result.linkedin_outreach.warnings)} />;
   return <OutreachWorkspace artifact={result.linkedin_outreach} company={target.company} role={target.role} />;
 }
 

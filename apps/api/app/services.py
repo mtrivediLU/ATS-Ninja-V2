@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from uuid import UUID
 
 from ats_engine import (
@@ -118,6 +119,9 @@ async def process_kit(session: AsyncSession, kit_id: UUID, settings: Settings) -
     kit.status = KitStatus.PROCESSING
     await session.commit()
 
+    # Safe timing only: kit id, elapsed milliseconds, and the llm/deterministic
+    # mode flag. Never the resume, job description, or any generated content.
+    started_at = time.monotonic()
     try:
         application_kit = await asyncio.to_thread(
             generate_application_kit,
@@ -138,11 +142,23 @@ async def process_kit(session: AsyncSession, kit_id: UUID, settings: Settings) -
         # Log only the exception type (no message/traceback) so candidate-derived
         # content in an exception cannot reach server logs; persist a client-safe
         # message with no content. See the audit-remediation privacy fix (4C).
-        logger.error("process_kit: engine generation failed for kit %s (type=%s)", kit_id, type(exc).__name__)
+        elapsed_ms = int((time.monotonic() - started_at) * 1000)
+        logger.error(
+            "process_kit: engine generation failed for kit %s after %sms (type=%s, llm=%s)",
+            kit_id,
+            elapsed_ms,
+            type(exc).__name__,
+            settings.engine_use_llm,
+        )
         kit.status = KitStatus.FAILED
         kit.error = _client_safe_error(exc)
         await session.commit()
         return
+
+    elapsed_ms = int((time.monotonic() - started_at) * 1000)
+    logger.info(
+        "process_kit: kit %s generation completed in %sms (llm=%s)", kit_id, elapsed_ms, settings.engine_use_llm
+    )
 
     kit.result = application_kit_to_dict(application_kit)
     kit.status = KitStatus.COMPLETED

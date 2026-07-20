@@ -17,14 +17,68 @@ export function allClaims(result: ApplicationKit | null): Claim[] {
 }
 
 export function kitTarget(kit: KitRead | null): { company: string; role: string } {
+  // Target company/role is only carried as an explicit field on the LinkedIn
+  // outreach draft and the cover letter document — both are optional,
+  // independently-requested artifacts. Reading only one of them meant the
+  // header showed "unavailable" whenever that one artifact wasn't requested,
+  // even though the other (or the JD parse behind it) had the same
+  // already-extracted value. Check every artifact that carries it before
+  // falling back to "unavailable" — never guess from arbitrary prose.
   const outreach = kit?.result?.linkedin_outreach;
   const draft = outreach?.drafts[0];
   const companyRef = outreach?.target_context.find((ref) => ref.field === "company");
   const roleRef = outreach?.target_context.find((ref) => ref.field === "role");
+  const coverDocument = kit?.result?.cover_letter?.document;
   return {
-    company: draft?.target_company || companyRef?.excerpt || "Target company unavailable",
-    role: draft?.target_role || roleRef?.excerpt || "Application kit",
+    company:
+      draft?.target_company || companyRef?.excerpt || coverDocument?.recipient_company || "Target company unavailable",
+    role: draft?.target_role || roleRef?.excerpt || coverDocument?.target_role || "Application kit",
   };
+}
+
+/**
+ * Turn internal validation error/warning strings into a safe, specific,
+ * user-facing withheld reason with an actionable next step.
+ *
+ * Persisted validation records are diagnostic text for engineers (e.g.
+ * `"completeness: resume has 1 experience entries, source has 6"`) and must
+ * never be shown verbatim — they can reference internal category names and,
+ * in principle, an unusual failure could echo more than intended. `errors`
+ * carries the fatal/rejection reason; `warnings` is a fallback for
+ * non-fatal-but-withheld cases. Returns `undefined` (letting the caller fall
+ * back to the generic message) when no recognized category matches.
+ */
+export function safeWithheldReason(errors: string[], warnings: string[]): string | undefined {
+  const combined = [...errors, ...warnings].join(" ").toLowerCase();
+  if (!combined) return undefined;
+
+  if (combined.includes("completeness:")) {
+    return "Resume structure could not be generated safely: the uploaded text appears structurally incomplete, so one or more sections could not be carried through. Review the extracted Resume text for missing headings or bullet points, or try uploading a text-based PDF, DOCX, or TXT file, then create a new Kit.";
+  }
+  if (
+    combined.includes("unsupported") ||
+    combined.includes("invented") ||
+    combined.includes("tier c term") ||
+    combined.includes("official title altered") ||
+    combined.includes("retired email")
+  ) {
+    return "One or more unsupported claims could not be repaired without risking a fabricated statement. Remove or correct the flagged content in your source Resume, then create a new Kit.";
+  }
+  if (combined.includes("email not present")) {
+    return "Candidate identity details required to validate this artifact were unavailable. Confirm your name and contact details are present in the source Resume, then create a new Kit.";
+  }
+  if (
+    combined.includes("end{document}") ||
+    combined.includes("unbalanced braces") ||
+    combined.includes("resumesubheading") ||
+    combined.includes("resumeitem") ||
+    combined.includes("malformed latex") ||
+    combined.includes("stray macro") ||
+    combined.includes("escaped")
+  ) {
+    return "Resume structure could not be generated safely from the available content. Try uploading a text-based PDF, or use DOCX or TXT, then create a new Kit.";
+  }
+  return undefined;
 }
 
 export function formatDate(value: string): string {

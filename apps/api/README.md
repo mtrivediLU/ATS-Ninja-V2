@@ -59,6 +59,16 @@ The API depends only on a `JobQueue` interface (`app.queue`): `CeleryJobQueue` i
 production, `InlineJobQueue` (in-process) for tests. The DB session factory lives
 on `app.state`, populated by the lifespan (prod) or the test fixtures.
 
+`app.services.process_kit` logs a safe timing line — kit id, elapsed
+milliseconds, and whether `ATS_API_ENGINE_USE_LLM` was on — on every
+completion and failure, never the resume, job description, or generated
+content. Useful for diagnosing a slow Kit: `docker compose logs worker | grep
+'<kit-id>'`. With the LLM path enabled, a slow first provider call (cold
+Ollama model load, or lock contention between the concurrent profile/JD
+extraction calls) adds latency but is independent of whether an artifact ends
+up withheld — those are two different failure classes and the log line
+disambiguates which one you're looking at.
+
 ## Run locally
 
 ```bash

@@ -103,6 +103,103 @@ validates its ZIP package against traversal and decompression limits and ignores
 macros, embedded objects, external links, and metadata. Legacy `.doc` is not
 supported.
 
+#### PDF-upload false Resume withholding (fixed)
+
+**Symptom.** A completed Kit with a real, valid uploaded-PDF resume had its
+Resume artifact withheld with a generic message, and the header showed "Target
+company unavailable" even though the job description clearly named a company.
+
+**Root cause (two independent, stacking defects, neither introduced by nor
+unique to the PDF path, but both first exposed by it):**
+
+1. `pypdf`'s `extract_text()` frequently places a bullet glyph directly against
+   its text with no literal space codepoint (`"•Managed cloud..."`) — the
+   visual gap in the source PDF is glyph positioning, not a space character.
+   The heuristic bullet detector (`ats_engine.parsing.resume._is_bullet`)
+   required a trailing space (`\s+`), so these lines were read as plain header
+   text instead of being attached to their employer. Verified against real
+   sample PDFs: `pypdf`-extracted bullets matched the old regex 0/19 times;
+   the same PDFs run through the pre-existing `pdfplumber`-based extractor
+   (`ats_engine.parsing.pdf`) matched 19/19 — confirming the defect was
+   specific to the new extraction path, not the underlying documents.
+2. `ats_engine.generation.planning._select_experience` silently dropped any
+   experience entry that ended up with zero bullets, while
+   `ats_engine.validation.completeness.validate_completeness` still counted
+   that entry against the source profile. An employer that lost its bullets to
+   defect (1) — or one that is genuinely bulletless in the candidate's own
+   resume (a common convention for brief/early-career roles) — vanished from
+   the rendered Resume while the completeness check still expected it,
+   producing a fatal `"completeness: resume has N experience entries, source
+   has M"` error and a correctly-conservative (but avoidable) withholding.
+
+Separately, the "Target company unavailable" header was a **display bug**, not
+a data problem: `apps/web/lib/product.ts`'s `kitTarget()` read target
+company/role only from the (optional) LinkedIn Outreach artifact. Any Kit that
+didn't request LinkedIn Outreach showed "unavailable" even when the same
+already-extracted value was sitting on the Cover Letter artifact's
+`document.recipient_company` / `target_role`.
+
+**Fix (all narrowly scoped, no validation threshold changed):**
+
+- `ats_engine.parsing.resume._is_bullet`: match `\s*` (not `\s+`) after the
+  marker, consistent with `_clean_bullet`'s existing stripping regex.
+- `ats_engine.parsing.document_extraction.normalize_extracted_text`: insert a
+  space after a bullet-like marker glued to a following letter, so the
+  reviewed extraction preview also reads correctly.
+- `ats_engine.generation.planning._select_experience`: keep an experience
+  entry even with zero bullets (header/dates only) instead of dropping it —
+  `generate_resume_text` already renders that case correctly, and dropping it
+  is exactly the kind of silent content loss `validate_completeness` exists to
+  catch.
+- `apps/web/lib/product.ts` `kitTarget()`: fall back to the Cover Letter
+  document's `recipient_company` / `target_role` before declaring "target
+  company unavailable"; still deterministic, still never guesses from prose.
+- `apps/web/lib/product.ts` `safeWithheldReason()` + `artifact-route.tsx`:
+  the withheld-state reason now reads `validation.errors` (where the fatal
+  reason actually lives — the UI had been reading the near-always-empty
+  `validation.warnings`) and maps recognized categories (`completeness:`,
+  unsupported/invented claims, missing identity, structural/LaTeX) to a safe,
+  specific, actionable message instead of the generic fallback. Truth-critical
+  and structural withholding itself is unchanged; only its explanation
+  improved.
+
+**What did not change:** truth-grounding, anti-fabrication, claim validation,
+`validate_completeness`'s thresholds, the target-role/candidate-identity
+separation, and the no-binary-into-Celery boundary. A resume that is
+genuinely incomplete (an employer with bullets in the source that the
+*rendered* resume drops) still fails `validate_completeness` and is still
+withheld — covered by
+`packages/engine/tests/test_completeness_regression.py::test_genuinely_incomplete_resume_is_still_caught_by_completeness_validation`.
+
+**Processing duration.** The long processing time observed on the original
+affected Kit (~198s) was a separate, additive factor: local development
+defaults to `ATS_API_ENGINE_USE_LLM=true` with an Ollama provider, and one
+extraction call hit a transport timeout before a later attempt succeeded —
+visible in the worker log as `LLM JSON generation failed on attempt 0` followed
+by a `generate_kit[...] succeeded in 200.9s`. This did not cause the
+withholding (the same completeness defect reproduces in well under a second in
+deterministic mode — `ATS_API_ENGINE_USE_LLM=false`); it just made the failing
+Kit slow in addition to being wrong. `apps/api/app/services.py` now logs a
+safe `kit id / elapsed ms / llm flag` timing line on every completion and
+failure (never resume, job description, or generated content) so a future slow
+Kit is diagnosable from logs alone.
+
+**Troubleshooting a withheld Resume:**
+
+- Check the Kit's safe validation reason first: the UI now shows a specific
+  category (structural incompleteness, unsupported claims, missing identity)
+  instead of a generic message.
+- For a structural-incompleteness reason, re-open the "Extracted resume text"
+  preview (upload flow) or the pasted text and confirm every employer that has
+  detail bullets in the original document still has them after extraction —
+  look for a bullet-marker line that reads as plain text.
+- `docker compose logs worker --since=30m | grep '<kit-id>'` shows the safe
+  `generation completed in Nms (llm=...)` line for that Kit; no candidate
+  content is ever logged.
+- A Kit generated before this fix keeps its original (frozen) result — it is
+  not automatically regenerated. Create a new Kit with the same input to get
+  the corrected behavior.
+
 ### Async kit lifecycle (Phase 1, completed)
 
 The API and a separately-runnable worker share one image and the same kit

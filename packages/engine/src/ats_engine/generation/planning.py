@@ -379,11 +379,13 @@ def _select_experience(
             key=lambda bullet: _bullet_score(bullet, keywords),
             reverse=True,
         )
-        chosen: list[str] = []
-        for bullet in scored_bullets:
-            chosen.append(soften_banned_style(bullet))
-        if chosen:
-            entries.append((experience, chosen))
+        chosen: list[str] = [soften_banned_style(bullet) for bullet in scored_bullets]
+        # Keep the entry even with zero bullets (company/title/dates only):
+        # dropping it here would silently discard a verified source-profile
+        # entry that `validate_completeness` still counts, producing a false
+        # completeness failure. `generate_resume_text` renders a bulletless
+        # entry fine (just the header line).
+        entries.append((experience, chosen))
 
     all_originals = [bullet for _, chosen in entries for bullet in chosen]
     # Bullets already carrying two or more JD keywords are targeted as-is;
