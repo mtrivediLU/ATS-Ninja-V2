@@ -112,6 +112,33 @@ COMMON_TECH_TERMS = [
     "d3.js",
     "dax",
     "redshift",
+    # Power Platform / low-code and .NET-adjacent enterprise development —
+    # absent from the original list, which was built from BI/data-engineering
+    # postings and missed an entire category of requirements for roles like
+    # Power Platform developer.
+    "power apps",
+    "power automate",
+    "power pages",
+    "power platform",
+    "dataverse",
+    "model driven apps",
+    "model-driven apps",
+    "pcf",
+    "pcf controls",
+    "sharepoint",
+    "azure functions",
+    "azure function apps",
+    "azure api management",
+    "dynamics 365",
+    ".net framework",
+    "html5",
+    "css",
+    "source control",
+    "branching and merging",
+    "root-cause analysis",
+    "root cause analysis",
+    "liquid",
+    "powershell",
 ]
 
 
@@ -188,10 +215,24 @@ def _parse_jd_heuristic(job_description: str, profile: Profile) -> JDProfile:
         required_qualifications=required[:8],
         preferred_qualifications=preferred[:8],
         responsibilities=responsibilities[:5],
-        technical_keywords=keywords[:18],
+        # 30, not the previous 18: a posting with a genuinely long, specific
+        # requirement list (e.g. a full Power Platform stack) was silently
+        # truncating short-but-critical acronyms like "C#" off the end,
+        # since longer phrases sort first (see _extract_keywords below).
+        technical_keywords=_prioritize_required_keywords(keywords, required)[:30],
         domain=domain,
         ats_platform=ats,
     )
+
+
+def _prioritize_required_keywords(keywords: list[str], required_lines: list[str]) -> list[str]:
+    """Put keywords that literally appear in the required-qualifications text
+    first, so a long candidate list never truncates a short, critical,
+    explicitly-required term (e.g. "C#") in favor of a longer generic one."""
+    required_text = " ".join(required_lines).lower()
+    in_required = [keyword for keyword in keywords if keyword.lower() in required_text]
+    rest = [keyword for keyword in keywords if keyword not in in_required]
+    return in_required + rest
 
 
 def _merge_jd_profile(heuristic: JDProfile, llm_data: dict[str, object]) -> JDProfile:
@@ -247,7 +288,7 @@ def _merge_jd_profile(heuristic: JDProfile, llm_data: dict[str, object]) -> JDPr
         required_qualifications=required,
         preferred_qualifications=preferred,
         responsibilities=merged_list("responsibilities", heuristic.responsibilities, limit=5),
-        technical_keywords=merged_list("technical_keywords", heuristic.technical_keywords, limit=18),
+        technical_keywords=merged_list("technical_keywords", heuristic.technical_keywords, limit=30),
         domain=text_field("domain", heuristic.domain),
         ats_platform=ats_platform,
     )
@@ -428,7 +469,11 @@ def _extract_domain(text: str) -> str:
         ("data", "data"),
     ]
     for needle, domain in domains:
-        if needle in lowered:
+        # Word-boundary match, not a bare substring test: "ai" as a bare
+        # substring matches "maintain", "training", "certain", "domain"
+        # itself, and countless other common words, misclassifying almost
+        # any posting's domain as "AI".
+        if re.search(rf"\b{re.escape(needle)}\b", lowered):
             return domain
     return ""
 

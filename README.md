@@ -215,6 +215,13 @@ bullet glyph often loses against its text (`"•Managed..."` → `"• Managed..
 — see [docs/architecture.md](docs/architecture.md#resume-extraction-local-only)
 for why that mattered for downstream parsing, not just readability.
 
+PDF extraction runs three engines (`pypdf`, `PyMuPDF`, `pdfplumber`) and
+deterministically scores each candidate on structural fidelity — never on
+candidate-content relevance — picking the most faithful one; see
+[docs/architecture.md](docs/architecture.md#multi-engine-pdf-extraction-and-atsdocument-quality-audit-fixed)
+for the extraction-quality scoring, contact-integrity validation, tenure-
+calculation, JD-parsing, and ATS-tailoring fixes this made possible.
+
 ## License
 
 Proprietary. All rights reserved.

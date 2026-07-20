@@ -238,18 +238,72 @@ def _top_keywords(evidence: list[EvidenceItem]) -> list[str]:
     return _dedupe(useful)[:5]
 
 
+_MONTH_NUMBERS = {
+    "jan": 1,
+    "feb": 2,
+    "mar": 3,
+    "apr": 4,
+    "may": 5,
+    "jun": 6,
+    "jul": 7,
+    "aug": 8,
+    "sep": 9,
+    "oct": 10,
+    "nov": 11,
+    "dec": 12,
+}
+
+_MONTH_YEAR = re.compile(
+    r"\b(?:(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+)?((?:19|20)\d{2})\b",
+    flags=re.IGNORECASE,
+)
+
+
+def _parse_month_years(dates_text: str) -> list[tuple[int, int | None]]:
+    """Return every ``(year, month_or_None)`` point found in a dates string, in order."""
+    points: list[tuple[int, int | None]] = []
+    for match in _MONTH_YEAR.finditer(dates_text):
+        month_token = match.group(1)
+        month = _MONTH_NUMBERS.get(month_token[:3].lower()) if month_token else None
+        points.append((int(match.group(2)), month))
+    return points
+
+
 def _career_years(experiences: list[Experience]) -> int | None:
-    years: list[int] = []
+    """Total career span in whole years: earliest start to latest end (or now).
+
+    Month-aware whenever a month is present in the source dates, so a start
+    month later in the calendar year than the end month is not rounded up to
+    a full extra year — "Nov 2017" to "Apr 2026" is 8 years and change, not 9,
+    even though the bare year difference is 9. Falls back to year-only
+    subtraction when no month is available anywhere, which is the best
+    approximation year-only dates support. This is a total span (candidates
+    routinely describe "N years of experience" as first-role-to-now), not a
+    sum of individual role durations, so concurrent/overlapping roles are
+    never double-counted.
+    """
+    points: list[tuple[int, int | None]] = []
     is_current = False
     for experience in experiences:
-        found = re.findall(r"(?:19|20)\d{2}", experience.dates)
-        years.extend(int(year) for year in found)
+        points.extend(_parse_month_years(experience.dates))
         if re.search(r"present|current", experience.dates, flags=re.IGNORECASE):
             is_current = True
-    if not years:
+    if not points:
         return None
-    end = datetime.now().year if is_current else max(years)
-    span = end - min(years)
+
+    start_year, start_month = min(points, key=lambda point: (point[0], point[1] if point[1] is not None else 1))
+    end_year: int
+    end_month: int | None
+    if is_current:
+        now = datetime.now()
+        end_year, end_month = now.year, now.month
+    else:
+        end_year, end_month = max(points, key=lambda point: (point[0], point[1] if point[1] is not None else 12))
+
+    if start_month is not None and end_month is not None:
+        span = ((end_year * 12 + end_month) - (start_year * 12 + start_month)) // 12
+    else:
+        span = end_year - start_year
     return span if span > 0 else None
 
 
@@ -261,6 +315,16 @@ def _experience_highlights(profile: Profile, limit: int = 6) -> str:
             if len(lines) >= limit:
                 return "\n".join(lines)
     return "\n".join(lines) or "No detailed bullets were found in the resume."
+
+
+def _target_title_instruction(target_title: str) -> str:
+    if not _is_real_target_title(target_title):
+        return "No target job title was reliably identified; do not name one."
+    return (
+        f'You may include a brief, clearly-framed "targeting" clause naming the exact target title '
+        f'"{target_title}" (for example, "Targeting {target_title} opportunities"). '
+        "Never phrase it as a title the candidate has held or currently holds."
+    )
 
 
 def _build_summary(
@@ -293,7 +357,9 @@ def _build_summary(
         "Rules: no em dashes, en dashes, or double hyphens. Do not state any number, percentage, or metric "
         "that is not already given above. Avoid cliche resume filler (results-driven, detail-oriented, "
         "passionate about, proven track record, dynamic, innovative, seamless, robust, leveraged, spearheaded, "
-        "architected, orchestrated, streamlined).\n\n"
+        "architected, orchestrated, streamlined). Avoid vague content-free filler like 'core tools' or "
+        "'day-to-day delivery' with nothing specific behind it.\n\n"
+        f"{_target_title_instruction(jd_profile.title)}\n\n"
         f"{PROHIBITED_INVENTION_CLAUSE}\n\n"
         "Return ONLY the summary text, no headers, no quotes."
     )
@@ -320,15 +386,27 @@ def _fallback_summary(
     jd_profile: JDProfile,
     years_span: int | None,
 ) -> str:
-    first = top_keywords[0] if top_keywords else "core tools"
-    second = top_keywords[1] if len(top_keywords) > 1 else "day-to-day delivery"
-    domain = jd_profile.domain or "a range of environments"
     years_clause = f" with {years_span}+ years of experience" if years_span else ""
+    # Only claim a skills clause when there is real evidence to name; "core
+    # tools and day-to-day delivery" as a placeholder for zero matched
+    # keywords reads as content-free filler, which the summary must avoid.
+    if top_keywords:
+        skills = ", ".join(top_keywords[:2])
+        skills_clause = f", with hands-on work in {skills}"
+    else:
+        skills_clause = ""
+    domain_clause = f" Experience spans {jd_profile.domain} work." if jd_profile.domain else ""
+    # A target title is never claimed as held experience — it is framed only
+    # as what the candidate is targeting, in its own clearly separate clause.
+    target_clause = f" Targeting {jd_profile.title} opportunities." if _is_real_target_title(jd_profile.title) else ""
     return (
-        f"{role_identity}{years_clause}, working across {first} and {second}. "
-        f"Brings direct delivery experience aligned with {domain} needs. "
-        f"Focused on shipping reliable, well-scoped work and communicating clearly with stakeholders."
+        f"{role_identity}{years_clause}{skills_clause}.{domain_clause}{target_clause} "
+        "Focused on shipping reliable, well-scoped work and communicating clearly with stakeholders."
     )
+
+
+def _is_real_target_title(title: str) -> bool:
+    return bool(title) and title.strip().lower() != "target role"
 
 
 def _build_skill_groups(

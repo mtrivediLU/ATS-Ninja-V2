@@ -200,6 +200,139 @@ Kit is diagnosable from logs alone.
   not automatically regenerated. Create a new Kit with the same input to get
   the corrected behavior.
 
+#### Multi-engine PDF extraction and ATS/document-quality audit (fixed)
+
+**Symptom.** Real-world resumes exported real PDF-extraction defects into the
+generated Resume: corrupted contact fields (a decorative icon glyph glued
+directly onto the following email/phone/URL with no space), a word broken by
+a genuine PDF line-wrap hyphen surviving unrepaired ("Hi- bernate" instead of
+"Hibernate"), a bullet's wrapped tail fragment overwriting the *next*
+employer's company name, an inflated years-of-experience figure, a cliché
+softener replacing "end-to-end" with "full" (producing a visible
+"full, full-stack" duplication when the source already said "full-stack"
+nearby), and a JD-domain heuristic that misclassified almost any posting as
+"AI" (a bare substring match on "ai" hits "maintain", "training", "certain").
+
+**Root causes (verified against the real reference PDF's safe structural
+statistics, never its raw content in this repository):**
+
+1. `document_extraction.py`'s single-engine `pypdf` extraction glues certain
+   decorative contact-icon glyphs directly onto the following text with no
+   space, and `pypdf.extract_text()`'s line-break placement, when combined
+   with the heuristic resume parser's own wrapped-continuation logic, can
+   silently drop a hyphen-broken word or let a bullet's wrapped tail leak into
+   the next employer's header. The pre-existing `pdfplumber`-based extractor
+   (`parsing/pdf.py`, used elsewhere) and Microsoft's `PyMuPDF` library both
+   handle these documents markedly better.
+2. `ats_engine.generation.planning._career_years` computed elapsed years from
+   bare calendar-year integers, so a start month later in the year than the
+   end month (e.g. "Nov 2017" to "Apr 2026") rounded up to a full extra year.
+3. `ats_engine.validation.repair.soften_banned_style` (and the matching
+   `validate_style` ban list) treated "end-to-end" as a cliché to rewrite as
+   "full" — a plain, factual technical descriptor, not filler.
+4. `ats_engine.parsing.job_description._extract_domain` used a bare substring
+   test instead of a word-boundary match.
+5. `COMMON_TECH_TERMS` (the JD keyword allowlist) was built from
+   BI/data-engineering postings and had no Power-Platform-era vocabulary
+   (Power Apps, Power Automate, Power Pages, Dataverse, SharePoint, Azure
+   Function Apps, PCF, etc.), so JD parsing under-detected requirements for
+   that category of role entirely, and the resulting empty keyword list
+   triggered a content-free "core tools and day-to-day delivery" fallback
+   summary sentence.
+6. Nothing in the pipeline ever stated the target job title truthfully; the
+   resume header is deliberately built only from the candidate's own role
+   identity (correct, to avoid impersonating a title never held), but no
+   *separate*, clearly-framed "targeting" line existed to name the target
+   role safely — matching the JobScan-style "job title not found" finding.
+
+**Fix:**
+
+- `ats_engine.parsing.extraction_quality` (new): deterministic, **content-
+  agnostic** structural scoring — replacement/private-use/control character
+  counts, a glued-word heuristic (`usingPostgreSQL`-style missing-space
+  detection), a glued-bullet-marker heuristic, and a glued-contact-prefix
+  heuristic (an email/URL match whose preceding character isn't whitespace or
+  a normal separator). Never scores by candidate-content relevance.
+- `document_extraction._extract_pdf_multi_engine`: runs `pypdf` (mandatory —
+  it also owns encryption/page-count/page-limit validation), `PyMuPDF`, and
+  `pdfplumber` as extraction candidates, applies a shared line-break-hyphen
+  repair to every candidate, scores them, and selects the best. Returns the
+  selected engine name and a `manual_review_recommended` flag (surfaced as an
+  existing `warnings` entry the upload UI already renders — no new UI
+  component was needed). Verified against the real reference PDF: the old
+  single-engine path corrupted the candidate's email/website with a glued
+  icon-glyph prefix; every multi-engine candidate produces the correct value.
+- `_repair_line_break_hyphens`: joins a word only when the hyphen is
+  immediately followed by a literal line break — the unambiguous PDF-native
+  signal for a word-wrap break — so a legitimate hyphenated compound used
+  mid-line (`well-known`, `end-to-end`, `real-time`, `multi-language`) is
+  never touched (no literal newline sits between the hyphen and the next
+  letter in that case).
+- `ats_engine.parsing.contact_integrity` (new): syntax-only validation of the
+  resolved email/phone/LinkedIn/website — never rewrites or guesses a
+  replacement. Wired into `validate_pipeline_result` under a `"contact:"`
+  prefix, which is **not** in `severity.FATAL_MARKERS`, so a malformed
+  contact field is a visible trust-summary warning, never a withheld
+  artifact.
+- `_career_years`: now month-aware (`(end_year*12+end_month) -
+  (start_year*12+start_month)) // 12`) when a month is present anywhere in
+  the source dates, falling back to plain year subtraction only when no month
+  is available at all. Still a total career span (earliest start to latest
+  end/now), so concurrent or overlapping roles are never double-counted.
+- Removed `"end-to-end"` from both the style-validator ban list and the
+  cliché-softener replacement table (`repair.py`) — narrowly scoped, and
+  unrelated to any truth-grounding/claim-validation logic.
+- `_extract_domain`: word-boundary (`\b...\b`) matching instead of a bare
+  substring test.
+- `COMMON_TECH_TERMS` gained a Power-Platform/`.NET`-adjacent vocabulary
+  block (JD-side keyword *detection* only — this never adds candidate
+  evidence), and JD keyword selection now prioritizes terms that literally
+  appear in the required-qualifications text before falling back to
+  frequency-ranked generic tokens, with the cap raised from 18 to 30 so a
+  long, specific requirement list no longer truncates a short critical
+  acronym like "C#" in favor of longer generic phrases.
+- `_fallback_summary` and the LLM summary prompt both gained a truthful,
+  clearly-separated "Targeting {exact JD title} opportunities." clause
+  (only emitted when a real target title was parsed, never phrased as a held
+  position), and the no-keywords fallback no longer emits "core tools and
+  day-to-day delivery" placeholder text.
+- `ats_engine.evidence.quality_report` (new, `AtsQualityReport`): an
+  **internal-only** diagnostic (`PipelineResult.metadata["ats_quality_report"]`,
+  not part of the `ApplicationKit` contract) — required/preferred coverage
+  percentages computed only from tier-A/B ("proven") evidence, exact
+  target-title presence, section presence, contact integrity, measurable-
+  result count, word count, and unsupported/adjacency/working-knowledge
+  counts. Not a single confidence score, and never counts an unsupported
+  keyword as coverage.
+
+**What did not change:** the evidence gap ladder (proven / adjacency /
+working-knowledge / missing) and its placement rules, `validate_claims`,
+`validate_completeness`'s thresholds, or the target-role/candidate-identity
+separation (the target title is only ever emitted in an explicit "Targeting…"
+clause, never as the candidate's own headline or an experience-section
+title). A term with zero real evidence remains a genuine gap; the new JD
+vocabulary only changes what the JD parser can *detect a requirement for*, not
+what the candidate is credited with.
+
+**Verified live** (Docker, deterministic mode, using the real reference
+resume against a synthetic Power-Platform-style job description, never
+committed): selected extraction engine reported per request; the exported
+Classic and Modern PDFs both render 3 pages with no blank pages, no
+replacement/private-use characters, a single correctly-placed header and
+contact block, the correct employer name in every entry, "8+ years" (not the
+previously inflated "9+ years"), a truthful "Targeting Developer, Power
+Platform opportunities" clause, and no fabricated C#/.NET/SharePoint
+evidence for a candidate whose resume does not support them.
+
+**Known limitation:** the evidence matrix can occasionally surface the same
+underlying tool through two differently-worded JD keywords (e.g. a direct
+"Power Automate" match alongside an adjacency phrase that also names
+"Power Automate" in its own parenthetical) — both mentions are individually
+truthful, but the summary/headline can read as slightly repetitive. This is a
+pre-existing evidence-matrix characteristic, not introduced here, and fixing
+it well requires recognizing that two keywords resolve to the same
+`real_evidence` tool — left for a follow-up rather than risked in this fix.
+
 ### Async kit lifecycle (Phase 1, completed)
 
 The API and a separately-runnable worker share one image and the same kit

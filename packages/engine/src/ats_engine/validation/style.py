@@ -36,7 +36,6 @@ BANNED_WORDS = [
     "pivotal",
     "transformational",
     "high-impact",
-    "end-to-end",
     "enterprise-grade",
     "mission-critical",
     "future-proof",

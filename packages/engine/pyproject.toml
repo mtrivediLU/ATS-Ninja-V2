@@ -18,6 +18,7 @@ keywords = ["ats", "resume", "career", "nlp", "deterministic"]
 dependencies = [
     "pdfplumber>=0.11.0",  # PDF resume text extraction
     "pypdf>=5.0.0",        # bounded, local validation/extraction for upload ingestion
+    "pymupdf>=1.24.0",     # second PDF extraction engine for quality-scored selection
     "python-docx>=1.1.0",  # local OOXML text extraction
     "charset-normalizer>=3.3.0", # safe TXT decoding when UTF-8 is unavailable
     "jinja2>=3.1.0",       # LaTeX artifact templating
@@ -62,5 +63,5 @@ mypy_path = "src"
 strict = true
 # Third-party libraries without bundled type stubs.
 [[tool.mypy.overrides]]
-module = ["pdfplumber", "pdfplumber.*", "diskcache", "docx", "docx.*", "charset_normalizer"]
+module = ["pdfplumber", "pdfplumber.*", "diskcache", "docx", "docx.*", "charset_normalizer", "fitz"]
 ignore_missing_imports = true
