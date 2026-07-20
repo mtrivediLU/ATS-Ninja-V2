@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from dataclasses import asdict
 from typing import Any, cast
 
 from ats_engine.config import EngineSettings
+from ats_engine.evidence.quality_report import build_ats_quality_report
 from ats_engine.generation.answers import generate_answers_text
 from ats_engine.generation.cover_letter import (
     format_cover_letter_output,
@@ -20,6 +22,7 @@ from ats_engine.generation.resume import (
     generate_resume_text,
 )
 from ats_engine.models import ArtifactSelection, JDProfile, Mode, ParsedInput, PipelineResult, Profile
+from ats_engine.parsing.contact_integrity import validate_contact_integrity
 from ats_engine.parsing.input import detect_mode, parse_input
 from ats_engine.parsing.job_description import parse_jd
 from ats_engine.parsing.resume import build_profile
@@ -124,6 +127,17 @@ def run_pipeline(
         result.resume_text = generate_resume_text(resume_plan)
         result.resume_latex = generate_resume_latex(resume_plan)
         result.mode_outputs[Mode.RESUME.value] = format_resume_output(resume_plan, result.resume_latex)
+        # Internal-only diagnostic (not the ApplicationKit contract): a
+        # transparent tally of the grounded evidence matrix already computed
+        # above, never a predicted match score. See evidence/quality_report.py.
+        result.metadata["ats_quality_report"] = asdict(
+            build_ats_quality_report(
+                evidence=resume_plan.evidence,
+                jd_profile=jd_profile,
+                resume_plan=resume_plan,
+                resume_text=result.resume_text,
+            )
+        )
 
     if selection.cover_letter and resume_plan is not None:
         cover_plan = build_cover_letter_plan(resume_plan, profile, provider=prose)
@@ -192,6 +206,12 @@ def validate_pipeline_result(result: PipelineResult, profile: Profile | None = N
         profile = build_profile(result.parsed_input.resume_text)
     errors: list[str] = []
     errors.extend(validate_completeness(result, profile))
+    # Non-fatal by design (the "contact:" prefix is not in FATAL_MARKERS): a
+    # syntactically odd contact field is worth a review warning, not a
+    # withheld artifact — the reviewed text is never rewritten or guessed.
+    errors.extend(
+        [f"contact: {warning}" for warning in validate_contact_integrity(result.parsed_input.contacts).warnings]
+    )
     if result.resume_latex:
         errors.extend([f"resume: {error}" for error in validate_latex(result.resume_latex)])
         errors.extend([f"resume: {error}" for error in validate_style(result.resume_latex)])

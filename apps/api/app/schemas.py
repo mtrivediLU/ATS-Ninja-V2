@@ -124,6 +124,8 @@ class ResumeExtractionResponse(BaseModel):
     page_count: int | None = None
     warnings: list[str] = Field(default_factory=list)
     truncated: bool = False
+    extraction_engine: str = ""
+    manual_review_recommended: bool = False
 
 
 class EvidenceRefResponse(BaseModel):

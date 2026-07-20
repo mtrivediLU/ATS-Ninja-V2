@@ -17,6 +17,8 @@ from zipfile import BadZipFile, ZipFile
 from charset_normalizer import from_bytes
 from pypdf import PdfReader
 
+from ats_engine.parsing.extraction_quality import ExtractionQualityScore, select_best_extraction
+
 MAX_DOCX_MEMBERS = 1_000
 MAX_DOCX_UNCOMPRESSED_BYTES = 25 * 1024 * 1024
 MAX_DOCX_MEMBER_BYTES = 10 * 1024 * 1024
@@ -53,6 +55,8 @@ class ResumeExtraction:
     page_count: int | None
     warnings: tuple[str, ...] = ()
     truncated: bool = False
+    extraction_engine: str = ""
+    manual_review_recommended: bool = False
 
 
 def extract_resume_document(
@@ -73,6 +77,8 @@ def extract_resume_document(
 
     extension = safe_filename.rsplit(".", 1)[1].lower()
     mime_type = (content_type or "").lower().split(";", 1)[0].strip()
+    extraction_engine = ""
+    manual_review_recommended = False
     if extension == "doc":
         raise ResumeExtractionError(
             "legacy_doc_unsupported",
@@ -81,7 +87,8 @@ def extract_resume_document(
     if extension == "pdf":
         if mime_type not in PDF_MIME_TYPES:
             raise ResumeExtractionError("unsupported_file_type", "The file type does not match a PDF document.")
-        text, page_count = _extract_pdf(content, max_pdf_pages)
+        text, page_count, extraction_engine, quality = _extract_pdf_multi_engine(content, max_pdf_pages)
+        manual_review_recommended = quality.manual_review_recommended
         method = "pdf_text"
     elif extension == "docx":
         if mime_type not in DOCX_MIME_TYPES:
@@ -113,6 +120,11 @@ def extract_resume_document(
             "extracted_text_too_long",
             "The extracted resume text is too long. Shorten the document before continuing.",
         )
+    warnings = (
+        ("Extraction quality: manual review of the extracted text is recommended before continuing.",)
+        if manual_review_recommended
+        else ()
+    )
     return ResumeExtraction(
         filename=safe_filename,
         mime_type=_safe_mime_type(extension),
@@ -121,6 +133,9 @@ def extract_resume_document(
         text=normalized,
         character_count=len(normalized),
         page_count=page_count,
+        warnings=warnings,
+        extraction_engine=extraction_engine,
+        manual_review_recommended=manual_review_recommended,
     )
 
 
@@ -156,7 +171,32 @@ def _validate_filename(filename: str | None) -> str:
     return f"{base}.{extension.lower()}"
 
 
-def _extract_pdf(content: bytes, max_pages: int) -> tuple[str, int]:
+_LINE_BREAK_HYPHEN = re.compile(r"([A-Za-z])-\n([A-Za-z])")
+
+
+def _repair_line_break_hyphens(text: str) -> str:
+    """Join a word split only by a PDF-native end-of-line hyphen ("Hi-\\nbernate").
+
+    Fires only when the hyphen is immediately followed by a line break — the
+    unambiguous PDF signal for a word-wrap break — so a legitimate mid-line
+    hyphenated compound (well-known, end-to-end, multi-language) is never
+    touched: those never have a literal newline between the hyphen and the
+    next letter.
+    """
+    return _LINE_BREAK_HYPHEN.sub(r"\1\2", text)
+
+
+def _extract_pdf_multi_engine(content: bytes, max_pages: int) -> tuple[str, int, str, ExtractionQualityScore]:
+    """Extract PDF text with multiple engines and select the highest-fidelity result.
+
+    ``pypdf`` is the mandatory, already-hardened validation path (encryption,
+    page-count, and page-limit checks all happen here and their errors are
+    authoritative). PyMuPDF and pdfplumber are additional best-effort text
+    candidates only: a PDF that pypdf accepts but one of them cannot read is
+    not an error, that candidate is just dropped from the pool. Selection uses
+    only structural fidelity signals (see ``extraction_quality``), never
+    candidate-content relevance.
+    """
     if not content.startswith(b"%PDF-"):
         raise ResumeExtractionError("malformed_pdf", "The uploaded PDF is malformed or does not match its file type.")
     try:
@@ -170,11 +210,53 @@ def _extract_pdf(content: bytes, max_pages: int) -> tuple[str, int]:
             raise ResumeExtractionError("malformed_pdf", "The uploaded PDF has no pages.")
         if page_count > max_pages:
             raise ResumeExtractionError("pdf_page_limit", "The uploaded PDF exceeds the 100-page limit.")
-        return "\n\n".join((page.extract_text() or "") for page in reader.pages), page_count
+        pypdf_text = _repair_line_break_hyphens("\n\n".join((page.extract_text() or "") for page in reader.pages))
     except ResumeExtractionError:
         raise
     except Exception:
         raise ResumeExtractionError("malformed_pdf", "The uploaded PDF could not be read safely.") from None
+
+    candidates: list[tuple[str, str]] = [("pypdf", pypdf_text)]
+    pymupdf_text = _extract_pdf_pymupdf(content, page_count)
+    if pymupdf_text is not None:
+        candidates.append(("pymupdf", _repair_line_break_hyphens(pymupdf_text)))
+    pdfplumber_text = _extract_pdf_pdfplumber(content)
+    if pdfplumber_text is not None:
+        candidates.append(("pdfplumber", _repair_line_break_hyphens(pdfplumber_text)))
+
+    method, text, quality = select_best_extraction(candidates)
+    return text, page_count, method, quality
+
+
+def _extract_pdf_pymupdf(content: bytes, expected_page_count: int) -> str | None:
+    """Best-effort PyMuPDF candidate. Returns ``None`` on any failure or mismatch."""
+    try:
+        import fitz
+    except ImportError:  # pragma: no cover - pymupdf is a declared dependency
+        return None
+    try:
+        with fitz.open(stream=content, filetype="pdf") as document:
+            if document.is_encrypted or document.page_count != expected_page_count:
+                return None
+            return "\n\n".join(page.get_text("text") for page in document)
+    except Exception:
+        return None
+
+
+def _extract_pdf_pdfplumber(content: bytes) -> str | None:
+    """Best-effort pdfplumber candidate. Returns ``None`` on any failure."""
+    try:
+        import pdfplumber
+    except ImportError:  # pragma: no cover - pdfplumber is a declared dependency
+        return None
+    try:
+        with pdfplumber.open(BytesIO(content)) as document:
+            return "\n\n".join(
+                (page.extract_text(x_tolerance=1, y_tolerance=3) or page.extract_text() or "")
+                for page in document.pages
+            )
+    except Exception:
+        return None
 
 
 def _extract_docx(content: bytes) -> str:

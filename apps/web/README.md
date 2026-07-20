@@ -87,6 +87,13 @@ text. Extraction requests are cancellable and stale responses are ignored. The
 browser stores neither the file nor extracted text. There is no OCR or legacy
 `.doc` support; scanned/image-only and encrypted PDFs surface a safe error.
 
+`ResumeExtraction`'s optional `manual_review_recommended` flag from the API
+(the extraction engine's own quality-scoring signal, never a candidate-content
+judgment) already surfaces through the existing `warnings` banner in the
+upload step with no new component needed — the wizard renders every string in
+`extraction.warnings` and switches the banner to its warning tone whenever the
+array is non-empty.
+
 `lib/product.ts`'s `kitTarget()` reads target company/role from whichever
 requested artifact carries it (LinkedIn Outreach, then Cover Letter) instead
 of only the former, so the header does not show "Target company unavailable"

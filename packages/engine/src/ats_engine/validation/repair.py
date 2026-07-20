@@ -43,7 +43,6 @@ _PHRASE_REPLACEMENTS: list[tuple[str, str]] = [
     ("future-proof", "durable"),
     ("mission-critical", "critical"),
     ("enterprise-grade", "production-ready"),
-    ("end-to-end", "full"),
     ("high-impact", "important"),
     ("cloud-native", "cloud-based"),
     ("transformational", "major"),

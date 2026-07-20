@@ -29,6 +29,14 @@ is normalized mechanically only, returned for explicit user review, then sent by
 the browser through the unchanged JSON Kit contract. Uploaded bytes are never
 persisted in PostgreSQL/Redis, passed to Celery, logged, or sent externally.
 
+PDF text runs through three extraction engines (`pypdf`, `PyMuPDF`,
+`pdfplumber`); the response's `extraction_engine` field names whichever one
+scored highest on structural fidelity (never candidate-content relevance),
+and `manual_review_recommended` flags when even the best candidate still
+looks structurally uncertain — both fields are additive/optional and safe to
+ignore for older clients. See
+[docs/architecture.md](../../docs/architecture.md#multi-engine-pdf-extraction-and-atsdocument-quality-audit-fixed).
+
 Creation accepts independent, persisted `include_resume`,
 `include_cover_letter`, `include_application_answers`, `include_job_fit`,
 `include_interview_prep`, and `include_linkedin_outreach` booleans plus optional

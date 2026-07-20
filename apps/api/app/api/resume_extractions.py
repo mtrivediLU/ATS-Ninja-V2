@@ -40,6 +40,8 @@ async def extract_resume(
             page_count=extracted.page_count,
             warnings=list(extracted.warnings),
             truncated=extracted.truncated,
+            extraction_engine=extracted.extraction_engine,
+            manual_review_recommended=extracted.manual_review_recommended,
         )
     except ResumeExtractionError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.message) from None

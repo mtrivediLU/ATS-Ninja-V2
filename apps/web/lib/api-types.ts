@@ -61,6 +61,8 @@ export interface ResumeExtraction {
   page_count: number | null;
   warnings: string[];
   truncated: boolean;
+  extraction_engine?: string;
+  manual_review_recommended?: boolean;
 }
 
 export interface EvidenceRef {
