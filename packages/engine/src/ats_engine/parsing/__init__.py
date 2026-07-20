@@ -7,6 +7,12 @@ facts: extracted employers and bullets are verified against the source text.
 
 from __future__ import annotations
 
+from ats_engine.parsing.document_extraction import (
+    ResumeExtraction,
+    ResumeExtractionError,
+    extract_resume_document,
+    normalize_extracted_text,
+)
 from ats_engine.parsing.input import (
     detect_mode,
     extract_contacts,
@@ -27,14 +33,18 @@ from ats_engine.parsing.resume import (
 
 __all__ = [
     "build_profile",
+    "ResumeExtraction",
+    "ResumeExtractionError",
     "clean_extracted_text",
     "detect_mode",
     "empty_profile",
     "extract_contacts",
+    "extract_resume_document",
     "extract_profile",
     "extract_text_from_pdf",
     "find_metrics",
     "number_lines",
+    "normalize_extracted_text",
     "parse_input",
     "parse_jd",
     "render_numbered_lines",

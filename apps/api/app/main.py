@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import kits
+from app.api import kits, resume_extractions
 from app.api.health import ReadinessResponse, liveness, readiness
 from app.celery_app import celery_app
 from app.config import Settings, get_settings
@@ -38,7 +38,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     first query), so startup never blocks on the database. The Celery dispatcher
     holds no connection; the broker is contacted only when a kit is enqueued.
     """
-    settings = get_settings()
+    settings: Settings = getattr(app.state, "settings", None) or get_settings()
     app.state.settings = settings
 
     if getattr(app.state, "sessionmaker", None) is None:
@@ -65,6 +65,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         version="0.2.0",
         lifespan=lifespan,
     )
+    app.state.settings = settings
 
     app.add_middleware(
         CORSMiddleware,
@@ -81,6 +82,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     v1 = APIRouter(prefix=settings.api_v1_prefix)
     v1.add_api_route("/health", readiness, methods=["GET"], tags=["health"], response_model=ReadinessResponse)
     v1.include_router(kits.router)
+    v1.include_router(resume_extractions.router)
     app.include_router(v1)
 
     return app

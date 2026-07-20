@@ -83,9 +83,25 @@ partial, old-format, and malformed-response fixtures from real Kit history.
 Primary artifact selection is persisted as three explicit booleans while
 `requested_mode` remains backward-compatible (ADR-0017). Local document edits
 are deliberately unsaved and marked as not revalidated because no edit/ground
-endpoint exists. PDF upload, artifact regeneration, authentication, billing,
-and public hosting remain later or out-of-scope work. D2 does not change the API,
-engine, persistence authority, or queue payloads.
+endpoint exists. Artifact regeneration, authentication, billing, and public
+hosting remain later or out-of-scope work. D2 does not change the API, engine,
+persistence authority, or queue payloads.
+
+### Resume extraction (local-only)
+
+`POST /api/v1/resume-extractions` is a separate multipart endpoint for PDF,
+DOCX, and TXT resumes. Its parser implementation lives in the engine parsing
+boundary; the API reads a bounded request, maps only client-safe failures, and
+closes the transient multipart upload. The response contains normalized text and
+safe metadata only. It deliberately does not persist a binary, use a permanent
+upload directory, put document data into a URL, or pass bytes to Redis/Celery.
+
+The frontend presents the returned text for explicit editing and submits that
+reviewed string to the unchanged `POST /api/v1/kits` JSON contract. PDF parsing
+is text-only (no OCR); encrypted or image-only PDFs are rejected. DOCX parsing
+validates its ZIP package against traversal and decompression limits and ignores
+macros, embedded objects, external links, and metadata. Legacy `.doc` is not
+supported.
 
 ### Async kit lifecycle (Phase 1, completed)
 
@@ -118,7 +134,8 @@ GET  /api/v1/kits/{id} → current status; full result once completed
 - **Truth-grounding is preserved**: the engine's validation gates run inside
   `run_pipeline`. As of Phase 2A the worker calls `generate_application_kit`
   (which wraps `run_pipeline` with the grounding gate) and persists a versioned
-  ApplicationKit. No auth, billing, or PDF upload in this phase.
+  ApplicationKit. No auth or billing in this phase; resume extraction is a
+  request-local preflight and never enters the worker payload.
 
 ### ApplicationKit + grounded generation (Phase 2A, completed)
 

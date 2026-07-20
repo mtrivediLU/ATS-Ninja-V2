@@ -1,4 +1,4 @@
-import type { KitCreateInput, KitList, KitRead } from "@/lib/api-types";
+import type { KitCreateInput, KitList, KitRead, ResumeExtraction } from "@/lib/api-types";
 
 export const API_BASE_URL = (
   process.env.NEXT_PUBLIC_API_BASE_URL ??
@@ -61,6 +61,16 @@ export function createKit(payload: KitCreateInput, signal?: AbortSignal): Promis
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
+    signal,
+  });
+}
+
+export function extractResume(file: File, signal?: AbortSignal): Promise<ResumeExtraction> {
+  const form = new FormData();
+  form.append("file", file, file.name);
+  return request<ResumeExtraction>("/api/v1/resume-extractions", {
+    method: "POST",
+    body: form,
     signal,
   });
 }

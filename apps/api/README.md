@@ -11,14 +11,23 @@ settings plumbing.
 
 - `GET /health` — liveness (unversioned, for infra probes)
 - `GET /api/v1/health` — readiness (reports the engine version)
-- `POST /api/v1/kits` — submit resume + JD; persists a pending kit, enqueues
+- `POST /api/v1/resume-extractions` — transient multipart PDF, DOCX, or TXT
+  extraction; returns safe metadata plus editable text and stores no binary
+- `POST /api/v1/kits` — submit reviewed resume text + JD; persists a pending kit, enqueues
   generation, returns `202` with the kit
 - `GET /api/v1/kits/{id}` — kit status and, once completed, its result
 - `GET /api/v1/kits?limit=&offset=` — list kits (newest first)
 
-**Not yet implemented:** authentication, credits/billing, PDF-upload ingestion,
-LinkedIn access, contact discovery, or message sending. No placeholder endpoints
+**Not yet implemented:** authentication, credits/billing, OCR, legacy `.doc`
+ingestion, LinkedIn access, contact discovery, or message sending. No placeholder endpoints
 pretend these exist.
+
+Resume extraction accepts files up to 10 MB and is deliberately separate from
+Kit creation. It validates extensions, browser MIME where supplied, bytes, PDF
+structure, and DOCX ZIP bounds; it rejects encrypted and image-only PDFs. Text
+is normalized mechanically only, returned for explicit user review, then sent by
+the browser through the unchanged JSON Kit contract. Uploaded bytes are never
+persisted in PostgreSQL/Redis, passed to Celery, logged, or sent externally.
 
 Creation accepts independent, persisted `include_resume`,
 `include_cover_letter`, `include_application_answers`, `include_job_fit`,

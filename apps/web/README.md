@@ -17,7 +17,8 @@ D2 retains the D0 **Signal** foundation and D1 real workflows, then adds the
 trust, evidence, editing, recovery, accessibility, and responsive polish needed
 for private local dogfooding:
 
-- three-step New Kit workflow with form validation and six independent outputs
+- three-step New Kit workflow with form validation, six independent outputs,
+  and Paste text / Upload file resume modes
 - optional application questions and typed LinkedIn outreach context
 - real `POST /api/v1/kits`, cancellable lifecycle polling, and terminal states
 - trust-first and content views for all six artifact workspaces, with counts and
@@ -72,6 +73,19 @@ cp apps/web/.env.example apps/web/.env.local
 ```
 
 No candidate input is stored in `localStorage` or placed in a query string.
+
+## Resume upload and review
+
+The New Kit input step supports a plain-text paste path and a local file path.
+The file picker/drop zone accepts text-based PDF, DOCX, and TXT files up to
+10 MB. The browser sends a file only to `POST /api/v1/resume-extractions`, then
+shows its returned text in an editable preview. The candidate must review that
+text; only the reviewed text is submitted using the existing Kit JSON request.
+
+Replacing, removing, or switching sources confirms before discarding reviewed
+text. Extraction requests are cancellable and stale responses are ignored. The
+browser stores neither the file nor extracted text. There is no OCR or legacy
+`.doc` support; scanned/image-only and encrypted PDFs surface a safe error.
 
 ## Artifact selection and polling
 

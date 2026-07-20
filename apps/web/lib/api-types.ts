@@ -49,6 +49,20 @@ export interface KitCreateInput {
   outreach_context?: OutreachContextInput;
 }
 
+export type ResumeExtractionMethod = "pdf_text" | "docx_text" | "plain_text";
+
+export interface ResumeExtraction {
+  filename: string;
+  mime_type: string;
+  size_bytes: number;
+  extraction_method: ResumeExtractionMethod;
+  text: string;
+  character_count: number;
+  page_count: number | null;
+  warnings: string[];
+  truncated: boolean;
+}
+
 export interface EvidenceRef {
   source: string;
   locator: string;
