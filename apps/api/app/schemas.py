@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from ats_engine import normalize_persisted_result
@@ -481,6 +481,21 @@ class ApplicationKitResponse(BaseModel):
     interview_prep: InterviewPrepArtifactResponse | None = None
     linkedin_outreach: LinkedInOutreachArtifactResponse | None = None
     warnings: list[str] = Field(default_factory=list)
+
+
+class DocumentExportRequest(BaseModel):
+    """Request a local, request-scoped PDF export of a completed kit's artifact.
+
+    A local edit's text is accepted only for the explicit duration of this
+    request — it is never persisted, never written to the stored Kit, and
+    never logged.
+    """
+
+    kit_id: UUID
+    artifact_type: Literal["resume", "cover_letter"] = "resume"
+    template_id: Literal["classic", "modern"] = "classic"
+    content_source: Literal["generated", "local_edit"] = "generated"
+    local_edit_text: str = Field(default="", max_length=100_000)
 
 
 class KitRead(BaseModel):

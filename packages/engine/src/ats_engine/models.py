@@ -145,6 +145,17 @@ class JDProfile:
     technical_keywords: list[str] = field(default_factory=list)
     domain: str = ""
     ats_platform: str = "unknown"
+    # Segments captured for transparency/reporting only — Resume tailoring
+    # (evidence matrix, summary, skills) intentionally reads only title,
+    # responsibilities, required/preferred qualifications, and
+    # technical_keywords, never these. Keeping them off that path is what
+    # stops a posting's benefits/compensation/D&I paragraphs from leaking
+    # into keyword matching.
+    education_experience_requirements: list[str] = field(default_factory=list)
+    security_language_requirements: list[str] = field(default_factory=list)
+    employment_conditions: list[str] = field(default_factory=list)
+    compensation_benefits: list[str] = field(default_factory=list)
+    organizational_boilerplate: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -164,6 +175,7 @@ class EvidenceItem:
     allowed_placement: str
     strength: str
     planned_placement: str
+    category: str = "other"
 
 
 @dataclass(slots=True)

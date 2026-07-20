@@ -147,10 +147,29 @@ changes. No candidate content is stored in localStorage/sessionStorage.
 Copy/download actions identify whether they use generated, applied local, or
 currently unsaved local text. Text is available for every export; the engine
 provided LaTeX remains optional for resume/cover-letter; Interview Preparation
-exports Markdown. No rendered PDF is promised or produced.
+exports Markdown.
 
 Download filenames are bounded and sanitized from available target context.
 Generated content never leaves the browser for copy/download actions.
+
+### Resume/Cover Letter template PDF download
+
+The template workspace's primary **Download PDF** button
+(`components/product/templates/template-preview.tsx`) calls
+`POST /api/v1/document-exports/pdf` directly and saves the response as a real
+binary file — no browser print dialog, no external service. It sends
+`content_source: "local_edit"` and the current draft text only when the
+active source actually is a local edit (never persisted server-side by that
+request); otherwise it exports the generated, already-validated Kit content.
+The button disables itself and shows a spinner for the duration of the
+export (no duplicate in-flight exports) and announces success or a specific
+failure reason through the existing toast system. The downloaded filename is
+never computed in the frontend: it is read from the API's
+`Content-Disposition` header, which is the single source of truth for the
+`ApplicantName_JobTitle_CompanyName_<Resume|Cover_Letter>[_Classic|_Modern].pdf`
+convention (`ats_engine.generation.filenames.build_export_filename`). Print /
+Save as PDF, plain-text, and LaTeX export remain available from a secondary
+"More export options" menu next to the primary button.
 
 ## History behavior
 
@@ -204,9 +223,9 @@ docker compose config
 
 ## Intentionally unsupported
 
-D2 does not implement PDF/DOCX upload, server-persisted/revalidated edits,
-per-artifact regeneration, rendered PDF download, history mutations,
-authentication, billing, pricing, credits, analytics/tracking, LinkedIn
-access/sending, public hosting, or external research. It is private-local
+D2 does not implement server-persisted/revalidated edits, per-artifact
+regeneration, history mutations, authentication, billing, pricing, credits,
+analytics/tracking, LinkedIn access/sending, public hosting, or external
+research. It is private-local
 dogfooding polish, not public-SaaS work. Later work must extend typed API/client
 boundaries without moving domain logic into the browser.

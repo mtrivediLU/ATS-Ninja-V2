@@ -409,6 +409,43 @@ def _is_real_target_title(title: str) -> bool:
     return bool(title) and title.strip().lower() != "target role"
 
 
+# Fixed display priority for the Phase-3 requirement categories (see
+# evidence.matrix.classify_requirement_category): role-defining categories
+# first (platform/web/integration/cloud/database), general engineering
+# categories next, "soft" categories last. A category with no evidence-backed
+# skill for this candidate simply never produces a group — this is not a
+# hardcoded "Power Platform resume" layout, it is the same ordering rule
+# applied to whatever categories this JD and candidate actually produced.
+_CATEGORY_ORDER = [
+    "platform",
+    "web development",
+    "integration",
+    "cloud",
+    "database",
+    "framework",
+    "programming language",
+    "source control",
+    "business analysis",
+    "operations and support",
+    "documentation",
+    "communication",
+]
+_CATEGORY_LABELS = {
+    "platform": "Platform & Automation",
+    "web development": "Web Development",
+    "integration": "APIs & Integrations",
+    "cloud": "Cloud & DevOps",
+    "database": "Databases & Data",
+    "framework": "Frameworks",
+    "programming language": "Programming Languages",
+    "source control": "Source Control",
+    "business analysis": "Business Analysis",
+    "operations and support": "Operations & Support",
+    "documentation": "Documentation",
+    "communication": "Communication",
+}
+
+
 def _build_skill_groups(
     evidence: list[EvidenceItem],
     profile: Profile,
@@ -432,11 +469,32 @@ def _build_skill_groups(
         if skill.lower() not in {item.lower() for item in core + additional}
     ]
 
+    # Evidence order already puts required-tier matches before preferred-tier
+    # matches (build_evidence_matrix appends required keywords first), so
+    # bucketing by category while preserving that order keeps mandatory
+    # supported requirements ahead of preferred ones within each group too.
+    category_by_skill = {
+        (item.real_evidence or item.keyword).lower(): item.category
+        for item in evidence
+        if item.evidence_tier in {"A", "B", "adjacency"}
+    }
+    buckets: dict[str, list[str]] = {}
+    uncategorized: list[str] = []
+    for skill in core:
+        category = category_by_skill.get(skill.lower(), "other")
+        if category in _CATEGORY_LABELS:
+            buckets.setdefault(category, []).append(skill)
+        else:
+            uncategorized.append(skill)
+
     groups: list[tuple[str, list[str]]] = []
-    if core:
-        groups.append(("Core Skills", core))
-    if additional:
-        groups.append(("Additional Skills", additional))
+    for category in _CATEGORY_ORDER:
+        if buckets.get(category):
+            groups.append((_CATEGORY_LABELS[category], buckets[category]))
+
+    trailing_additional = uncategorized + additional
+    if trailing_additional:
+        groups.append(("Additional Skills", trailing_additional))
     if working:
         groups.append(("Working Knowledge", working))
     return groups

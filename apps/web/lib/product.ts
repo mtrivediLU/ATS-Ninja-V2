@@ -112,7 +112,12 @@ export async function copyText(text: string): Promise<void> {
 
 export function downloadText(text: string, filename: string, mime = "text/plain;charset=utf-8"): void {
   if (!text) throw new Error("Nothing is available to download.");
-  const url = URL.createObjectURL(new Blob([text], { type: mime }));
+  downloadBlob(new Blob([text], { type: mime }), filename);
+}
+
+/** Triggers a direct browser download of an already-fetched blob (e.g. a PDF). */
+export function downloadBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
   anchor.download = filename;

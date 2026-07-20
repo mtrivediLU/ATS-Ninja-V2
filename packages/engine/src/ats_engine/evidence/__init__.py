@@ -6,6 +6,7 @@ from ats_engine.evidence.adjacency import TOOL_CATEGORIES, category_tools, find_
 from ats_engine.evidence.matrix import (
     build_evidence_matrix,
     classify_keyword,
+    classify_requirement_category,
     interview_probability,
 )
 
@@ -14,6 +15,7 @@ __all__ = [
     "build_evidence_matrix",
     "category_tools",
     "classify_keyword",
+    "classify_requirement_category",
     "find_category",
     "interview_probability",
 ]

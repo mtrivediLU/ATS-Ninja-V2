@@ -7,13 +7,14 @@ export const API_BASE_URL = (
 ).replace(/\/$/, "");
 
 export class ApiError extends Error {
-  constructor(
-    message: string,
-    readonly status: number | null,
-    readonly kind: "unavailable" | "invalid" | "not-found" | "server",
-  ) {
+  readonly status: number | null;
+  readonly kind: "unavailable" | "invalid" | "not-found" | "server";
+
+  constructor(message: string, status: number | null, kind: "unavailable" | "invalid" | "not-found" | "server") {
     super(message);
     this.name = "ApiError";
+    this.status = status;
+    this.kind = kind;
   }
 }
 
@@ -82,4 +83,65 @@ export function getKit(kitId: string, signal?: AbortSignal): Promise<KitRead> {
 export function listKits(limit = 20, offset = 0, signal?: AbortSignal): Promise<KitList> {
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
   return request<KitList>(`/api/v1/kits?${params}`, { signal });
+}
+
+export type DocumentExportPayload = {
+  kit_id: string;
+  artifact_type: "resume" | "cover_letter";
+  template_id: "classic" | "modern";
+  content_source: "generated" | "local_edit";
+  local_edit_text?: string;
+};
+
+const FILENAME_FROM_DISPOSITION = /filename="([^"]+)"/;
+
+/**
+ * Direct local PDF export: a real binary download, not a print dialog.
+ * Bypasses `request<T>` (JSON-only) since the success body is a PDF blob; the
+ * error path still parses the same safe `{ detail }` shape as every other
+ * endpoint, and the standardized filename comes from the server's
+ * Content-Disposition header — this stays the single source of truth for the
+ * naming convention rather than duplicating it in TypeScript.
+ */
+export async function exportDocumentPdf(
+  payload: DocumentExportPayload,
+  signal?: AbortSignal,
+): Promise<{ blob: Blob; filename: string }> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/api/v1/document-exports/pdf`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/pdf" },
+      body: JSON.stringify(payload),
+      cache: "no-store",
+      signal,
+    });
+  } catch {
+    throw new ApiError("The local API could not be reached. Check that the Docker stack is running.", null, "unavailable");
+  }
+
+  if (!response.ok) {
+    let detail = "The PDF could not be generated.";
+    try {
+      const body: unknown = await response.json();
+      if (
+        typeof body === "object" &&
+        body !== null &&
+        "detail" in body &&
+        typeof body.detail === "string" &&
+        body.detail.length <= 300
+      ) {
+        detail = body.detail;
+      }
+    } catch {
+      // A proxy or unavailable service may return HTML/plain text. Never render it.
+    }
+    const kind = response.status === 404 ? "not-found" : response.status < 500 ? "invalid" : "server";
+    throw new ApiError(detail, response.status, kind);
+  }
+
+  const blob = await response.blob();
+  const disposition = response.headers.get("content-disposition") ?? "";
+  const filename = FILENAME_FROM_DISPOSITION.exec(disposition)?.[1] || "document.pdf";
+  return { blob, filename };
 }

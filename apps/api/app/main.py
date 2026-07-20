@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import kits, resume_extractions
+from app.api import document_exports, kits, resume_extractions
 from app.api.health import ReadinessResponse, liveness, readiness
 from app.celery_app import celery_app
 from app.config import Settings, get_settings
@@ -73,6 +73,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        # Content-Disposition is not on the CORS-safelisted response-header
+        # list, so the browser's fetch() silently returns null for it unless
+        # it is explicitly exposed — the direct PDF download's standardized
+        # filename depends on the frontend being able to read this header.
+        expose_headers=["Content-Disposition"],
     )
 
     # Unversioned liveness for infra health checks.
@@ -83,6 +88,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     v1.add_api_route("/health", readiness, methods=["GET"], tags=["health"], response_model=ReadinessResponse)
     v1.include_router(kits.router)
     v1.include_router(resume_extractions.router)
+    v1.include_router(document_exports.router)
     app.include_router(v1)
 
     return app

@@ -333,6 +333,138 @@ pre-existing evidence-matrix characteristic, not introduced here, and fixing
 it well requires recognizing that two keywords resolve to the same
 `real_evidence` tool — left for a follow-up rather than risked in this fix.
 
+#### Grounded ATS tailoring, typed requirement categories, and direct PDF download (fixed/added)
+
+Extends the multi-engine extraction/ATS-quality audit above with deeper JD
+segmentation, a typed requirement-category model, evidence-driven skill-group
+ordering, ATS-quality-report warnings, and — the new capability — a direct,
+selectable-text PDF download that bypasses the browser's print dialog
+entirely.
+
+**JD segmentation (`parsing/job_description.py`).** Enterprise/government
+postings routinely bury the title behind a metadata-label preamble
+(`Requisition Number:`, `Position Type:`), phrase the mandatory-qualifications
+heading as an instruction ("What you need to succeed" / "In addition, you
+have:") rather than the word "required," and use a hyphenated "Nice-to-have"
+heading that a plain `"nice to have" in text` substring check never matches.
+Three concrete bugs here were found and fixed:
+
+- Section-heading detection matched a heading word anywhere in a line
+  (`heading in lowered`), so a responsibility bullet that merely mentions
+  "...to meet business requirements" mid-sentence was mistaken for a
+  "Requirements:" heading and silently pulled every later responsibility
+  bullet into the required-qualifications list. Detection is now
+  prefix-anchored (`line.startswith(heading)`), matching how a real heading
+  is actually written.
+- Title extraction only scanned the first 8 lines, so a long D&I/metadata
+  preamble pushed the real title heading out of range; the scan window is
+  now 40 lines and skips `Label:  Value` metadata lines outright.
+- Company extraction's weak "first plausible short line" fallback is now
+  preceded by a generic, line-scoped repeated-proper-noun detector (a real
+  employer name is mentioned repeatedly through a posting; a one-off section
+  heading is not) — this correctly resolves postings that never carry an
+  explicit "Company:" field.
+
+A new keyword-frequency safeguard strips organizational/D&I/benefits/
+recruitment-process lines before the frequency-based keyword fallback runs,
+and drops any bare token that is only a fragment of an already-found longer
+keyword (so "Power Platform" is not joined by spurious standalone "power"
+and "platform" gap entries). `JDProfile` gained five new, deliberately
+inert segmentation fields (`education_experience_requirements`,
+`security_language_requirements`, `employment_conditions`,
+`compensation_benefits`, `organizational_boilerplate`) for transparency —
+Resume tailoring itself continues to read only title, responsibilities, and
+required/preferred qualifications, which is what keeps a posting's benefits
+paragraph from ever influencing keyword matching.
+
+**Responsibilities as a primary tailoring input.** `build_evidence_matrix`
+previously matched required/preferred keywords only against the
+required/preferred-qualifications bullets. A keyword named only in the
+day-to-day responsibilities (e.g. "perform root-cause analysis on issues,"
+never restated in the qualifications list) never reached the requirement map
+at all. It now does, added as an extra required-tier entry — but only when
+that exact keyword is not already claimed by an explicit required or
+preferred designation, so a noisy heading-less responsibilities guess can
+never re-rank something the posting itself already called out as preferred.
+
+**Typed requirement categories (`evidence/matrix.py`).** `EvidenceItem`
+gained a `category` field (`platform`, `programming language`, `framework`,
+`integration`, `cloud`, `database`, `web development`, `source control`,
+`business analysis`, `operations and support`, `documentation`,
+`communication`, `work conditions`, `other`), assigned by
+`classify_requirement_category()` via word-boundary keyword-pattern
+matching — this is a separate, coarser classification from
+`evidence/adjacency.py`'s `TOOL_CATEGORIES` (which groups tools for honest
+substitute-tool phrasing), used here only for skills-section grouping and
+requirement-map display.
+
+**Evidence-driven skill-group ordering (`generation/planning.py`).**
+`_build_skill_groups` previously emitted one flat "Core Skills" bucket. It
+now buckets each evidence-backed skill by its JD-derived category and emits
+groups in a fixed category-priority order (role-defining categories first,
+general engineering categories next), skipping any category with no
+evidence for this candidate — never a hardcoded "Power Platform resume"
+layout, the same ordering rule applied to whatever categories this JD and
+candidate actually produced. Anything not tied to a JD-matched category still
+appears, in "Additional Skills"/"Working Knowledge" — no candidate skill is
+ever dropped.
+
+**ATS quality report (`evidence/quality_report.py`).** Two additions:
+`duplicate_keyword_warnings` flags when one real piece of evidence answers
+two or more differently-worded JD keywords (the "Power Automate" answering
+both a direct match and an adjacency phrase case noted as a known limitation
+above — now surfaced as a warning instead of silently invisible, though the
+underlying cosmetic repetition itself is unchanged). `generic_language_warnings`
+re-scans the rendered text for the same banned-cliche/generic-filler
+vocabulary generation already actively blocks, as an audit-visibility check
+rather than a new restriction. A pre-existing bug in `exact_target_title_present`
+was also found and fixed: it checked only the headline and work-mode line,
+but the "Targeting {title} opportunities" clause lives in the summary — the
+report was reporting "title absent" even when the summary said otherwise.
+
+**Direct PDF download.** See [ADR-0018](../adr/0018-local-pdf-rendering.md)
+for the architecture (`ats_engine.generation.html_renderer` + WeasyPrint in
+`apps/api` only) and [ADR-0004](../adr/0004-defer-binary-pdf-rendering.md)
+for why that split preserves the engine's zero-native-dependency property.
+`POST /api/v1/document-exports/pdf` renders the persisted, already-validated
+Kit result (or a request-scoped local edit, never persisted) to a real,
+selectable-text, single-column PDF and returns it with a standardized
+`Content-Disposition` filename
+(`ApplicantName_JobTitle_CompanyName_<Resume|Cover_Letter>[_Classic|_Modern].pdf`,
+`ats_engine.generation.filenames.build_export_filename`). The frontend's
+"Download PDF" button (`template-preview.tsx`) calls this directly — no
+print dialog — with duplicate-click prevention and success/failure toasts;
+Print / Save as PDF, plain-text, and LaTeX export remain available from a
+secondary "More export options" menu.
+
+**Two regressions found only by a live, real end-to-end run (not caught by
+any existing test) and fixed:**
+
+- `Access-Control-Expose-Headers` did not include `Content-Disposition`.
+  `Content-Disposition` is not on the browser's CORS-safelisted
+  response-header list, so `fetch()` silently returned `null` for it on the
+  frontend even though curl/httpx and every server-side test could always
+  see it — the download worked, but every file was named `document.pdf`
+  until this was added to the API's CORS middleware.
+- The JobFit/InterviewPrep/LinkedInOutreach truth-grounding validators
+  (`job_fit/validation.py`, `interview_prep/validation.py`,
+  `linkedin_outreach/validation.py`) each had two bugs in their
+  narrative-vs-requirement clause matching, invisible until a real JD
+  produced the exact keyword shapes that trigger them: (1) `_contexts()`
+  split narrative text on every literal `.`, so a keyword spelled with an
+  internal period (`.NET Framework`) self-fragmented, stripping the leading
+  `.` the match required and causing an honest "acknowledge this gap"
+  sentence to read as if the gap were never mentioned at all; (2) the
+  strength-word lexicon includes the bare word "experience," so a gap
+  literally named "user experience" self-triggered (and, because several
+  gaps share one "Genuine gaps: X, Y, Z." sentence, cross-contaminated its
+  neighbors in the same list too) a false "genuine gap presented as a
+  strength" rejection — withholding JobFit and InterviewPrep entirely for a
+  real, honestly-generated, deterministic narrative that never overclaimed
+  anything. Fixed by only splitting on a terminator followed by whitespace
+  (a real sentence boundary) and by scrubbing every listed requirement's own
+  name out of a shared clause before scanning it for strength language.
+
 ### Async kit lifecycle (Phase 1, completed)
 
 The API and a separately-runnable worker share one image and the same kit
@@ -595,7 +727,7 @@ Migrated into `ats_engine`, preserving behavior, with strong typing and tests:
 | scikit-learn TF-IDF for keyword extraction | **Rejected** | Degenerate on a single document; replaced by an equivalent dependency-light extractor (ADR-0002). |
 | Real candidate PII in tests + hardcoded local paths | **Rejected** | Privacy; replaced with synthetic fixtures. |
 | `generate_tailored_resume` (LangChain `LLMChain`) | **Rejected** | Dead/superseded by the planning engine. |
-| WeasyPrint/ReportLab binary PDF rendering | **Deferred** | Heavy native deps conflict with portability; the LaTeX artifact already serves as the downloadable output. Revisit when server-side rasterization is a real requirement. |
+| WeasyPrint/ReportLab binary PDF rendering | **Deferred, then partially adopted** | Heavy native deps conflict with engine portability; the LaTeX artifact served as the downloadable output until direct PDF download became a real requirement. WeasyPrint now renders PDFs in `apps/api` only — `packages/engine` still has zero binary dependencies (ADR-0018). |
 | Streamlit magic string `streamlit_default` | **Rejected** | Replaced by an explicit `default_mode` parameter. |
 | `_is_fatal_validation_error` in the UI | **Migrated (relocated)** | Domain policy moved into `ats_engine.validation.severity`. |
 
@@ -619,6 +751,8 @@ Recorded as ADRs under [`docs/adr/`](adr/):
 - [ADR-0014](adr/0014-application-kit-v2-job-fit.md) — ApplicationKit v2 and grounded JobFitArtifact.
 - [ADR-0015](adr/0015-application-kit-v3-interview-prep.md) — ApplicationKit v3 and grounded InterviewPrepArtifact.
 - [ADR-0016](adr/0016-application-kit-v4-linkedin-outreach.md) — ApplicationKit v4 and grounded LinkedInOutreachArtifact.
+- [ADR-0017](adr/0017-independent-artifact-selection.md) — Persist independent artifact selection (six independently-requestable artifacts).
+- [ADR-0018](adr/0018-local-pdf-rendering.md) — Local server-side PDF rendering (WeasyPrint in `apps/api` only) for direct Resume/Cover Letter download.
 
 ## 7. Future / planned work (not yet implemented)
 

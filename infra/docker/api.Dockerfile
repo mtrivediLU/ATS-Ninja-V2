@@ -10,6 +10,20 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
+# WeasyPrint (local PDF rasterization for the Resume/Cover Letter download,
+# apps/api only — see docs/adr/0018-local-pdf-rendering.md) needs these native
+# libraries; fonts-liberation supplies metric-compatible Times New Roman/Arial
+# substitutes so the exported PDF's typography is stable across environments.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpango-1.0-0 \
+    libpangocairo-1.0-0 \
+    libcairo2 \
+    libgdk-pixbuf-2.0-0 \
+    libffi8 \
+    shared-mime-info \
+    fonts-liberation \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install the engine first (its own dependency graph is more stable than the
 # app's), then the API. Installing the engine before the API lets pip resolve
 # the `ats-engine` requirement from the local build rather than an index.

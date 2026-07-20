@@ -15,7 +15,7 @@ import { Banner, Button, Card, Field, Textarea } from "@/components/ui/primitive
 import type { AnswerArtifact, CoverLetterArtifact, ResumeArtifact } from "@/lib/api-types";
 import { copyText, safeFilename } from "@/lib/product";
 
-export function DocumentWorkspace({ kind, artifact, company, role }: { kind: "resume" | "cover-letter"; artifact: ResumeArtifact | CoverLetterArtifact; company: string; role: string }) {
+export function DocumentWorkspace({ kind, artifact, company, role, kitId }: { kind: "resume" | "cover-letter"; artifact: ResumeArtifact | CoverLetterArtifact; company: string; role: string; kitId: string }) {
   const { notify } = useFeedback();
   const [view, setView] = useArtifactView();
   const editor = useLocalTextEditor(artifact.text);
@@ -36,7 +36,7 @@ export function DocumentWorkspace({ kind, artifact, company, role }: { kind: "re
 
   return <div>
     <ArtifactToolbar title={title} validation={artifact.validation} claims={artifact.claims} text={visibleText} latex={artifact.latex} filename={filename} view={view} onViewChange={setView} editing={editor.editing} editable dirty={editor.dirty} edited={editor.edited} templates onBeginEdit={() => { setView("content"); editor.beginEdit(); }} onApplyLocalEdits={apply} onExitEdit={() => editor.exit()} onDiscardChanges={editor.discard} onReset={editor.reset} onCompare={() => setCompare((open) => !open)} />
-    {view === "trust" ? <TrustSummary title={title} claims={artifact.claims} validation={artifact.validation} text={editor.applied} manuallyEdited={editor.edited} onOpenContent={() => setView("content")} /> : view === "template" ? <TemplatePreview artifact={kind} text={visibleText} latex={artifact.latex} company={company} role={role} edited={editor.editing || editor.edited} resumeDocument={resumeDocument} coverLetterDocument={coverLetterDocument} onReturnToArtifact={() => setView("content")} /> : <div className="mx-auto mt-5 max-w-[820px]">
+    {view === "trust" ? <TrustSummary title={title} claims={artifact.claims} validation={artifact.validation} text={editor.applied} manuallyEdited={editor.edited} onOpenContent={() => setView("content")} /> : view === "template" ? <TemplatePreview artifact={kind} text={visibleText} latex={artifact.latex} company={company} role={role} edited={editor.editing || editor.edited} resumeDocument={resumeDocument} coverLetterDocument={coverLetterDocument} onReturnToArtifact={() => setView("content")} kitId={kitId} /> : <div className="mx-auto mt-5 max-w-[820px]">
       {artifact.validation.repaired_claims > 0 && <Banner tone="warning" title={`${artifact.validation.repaired_claims} claim${artifact.validation.repaired_claims === 1 ? " was" : "s were"} repaired.`}>The engine removed unsupported content. Open Evidence to review the persisted reason; no removed wording is restored here.</Banner>}
       {editor.editing ? <><Editor title={title} value={editor.draft} onChange={editor.setDraft} dirty={editor.dirty} /><StickyActionBar><Button className="flex-1" onClick={apply}>Apply local edits</Button><Button className="flex-1" variant="secondary" onClick={() => { if (!editor.dirty || window.confirm("Discard unsaved changes and exit edit mode?")) editor.discard(); }}>Exit edit mode</Button></StickyActionBar></> : <>
         {editor.edited && <Banner tone="warning" className="mt-4" title="Edited since generation.">This local version is not revalidated and will be lost on reload. Copy and download are explicitly labelled as local edits.</Banner>}

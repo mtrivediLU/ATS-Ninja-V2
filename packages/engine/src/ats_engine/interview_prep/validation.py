@@ -41,11 +41,23 @@ def normalized_text(text: str) -> str:
 
 def _contexts(text: str, term: str) -> list[str]:
     normalized_term = normalized_text(term).strip()
+    # Split only at a terminator immediately followed by whitespace: a term
+    # spelled with an internal period (".NET Framework") would otherwise
+    # self-fragment at that period, stripping the leading "." the match below
+    # requires and silently losing surrounding context (e.g. "acknowledge").
     return [
         clause
-        for clause in re.split(r"[.!?;\n]+", normalized_text(text))
+        for clause in re.split(r"(?<=[.!?;])\s+|\n+", normalized_text(text))
         if normalized_term and normalized_term in clause
     ]
+
+
+def _scrub_terms(context: str, terms: list[str]) -> str:
+    scrubbed = context
+    for term in terms:
+        if term:
+            scrubbed = scrubbed.replace(term, " ")
+    return scrubbed
 
 
 def _asserts(context: str, pattern: re.Pattern[str]) -> bool:
@@ -87,16 +99,25 @@ def validate_interview_prep(
         if expected is None or expected.classification is not focus.classification:
             errors.append(f"Focus classification contradicts JobFit: {focus.topic}.")
 
+    all_terms = [normalized_text(other.requirement).strip() for other in job_fit.requirements]
     for item in job_fit.requirements:
         contexts = _contexts(combined, item.requirement)
-        if item.classification is RequirementClassification.ADJACENT and any(_asserts(c, _UPGRADE) for c in contexts):
+        # Requirements sharing one clause (e.g. a "Genuine gaps: X, Y, Z."
+        # sentence) each see the whole clause as their context, including
+        # neighboring requirement names. A name like "user experience"
+        # contains the generic trigger word "experience", so without
+        # scrubbing every listed requirement's own name (not just this one's),
+        # honestly naming it would also falsely flag its neighbors in the
+        # same sentence.
+        scrubbed = [_scrub_terms(c, all_terms) for c in contexts]
+        if item.classification is RequirementClassification.ADJACENT and any(_asserts(c, _UPGRADE) for c in scrubbed):
             errors.append(f"Adjacent capability upgraded to expertise: {item.requirement}.")
         if item.classification is RequirementClassification.WORKING_KNOWLEDGE and any(
-            _asserts(c, _PRODUCTION_UPGRADE) for c in contexts
+            _asserts(c, _PRODUCTION_UPGRADE) for c in scrubbed
         ):
             errors.append(f"Working knowledge upgraded to production experience: {item.requirement}.")
         if item.classification is RequirementClassification.GENUINE_GAP and any(
-            _asserts(c, _STRENGTH) for c in contexts
+            _asserts(c, _STRENGTH) for c in scrubbed
         ):
             errors.append(f"Genuine gap presented as candidate experience: {item.requirement}.")
 

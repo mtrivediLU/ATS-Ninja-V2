@@ -139,6 +139,21 @@ COMMON_TECH_TERMS = [
     "root cause analysis",
     "liquid",
     "powershell",
+    # Non-tool requirement phrases that recur across enterprise/government
+    # postings (business-analysis, integration, support, documentation) —
+    # missing from the original list, which only named products/languages.
+    "business requirements",
+    "user experience",
+    "ux",
+    "technical documentation",
+    "system integration",
+    "system integrations",
+    "application support",
+    "production support",
+    "plug-ins",
+    "plug-in",
+    "plugins",
+    "custom apis",
 ]
 
 
@@ -182,30 +197,67 @@ def _parse_jd_heuristic(job_description: str, profile: Profile) -> JDProfile:
     text = job_description or ""
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     title = _extract_title(text, lines)
-    company = _extract_company(text, lines)
+    company = _extract_company(text, lines, title)
     required = _extract_section_items(
         lines,
-        ["required", "requirements", "qualifications", "must have", "what we are looking for"],
+        [
+            "required",
+            "requirements",
+            "qualifications",
+            "must have",
+            "what we are looking for",
+            # Postings phrase the mandatory-qualifications heading as a
+            # question or an instruction rather than the word "required"
+            # (e.g. a "What you need to succeed" / "In addition, you have:"
+            # pair) often enough that matching only "required"/"qualifications"
+            # silently produced an empty required list for them.
+            "what you need to succeed",
+            "in addition, you have",
+            "in addition you have",
+        ],
         # "qualifications" alone would otherwise also match a "Preferred
         # qualifications:" heading, absorbing the preferred section's bullets
         # into the required list. A stop heading always ends the section, even
         # though it shares a word with a start heading.
-        stop_headings=["preferred", "nice to have", "bonus"],
+        stop_headings=["preferred", "nice to have", "nice-to-have", "bonus"],
     )
-    preferred = _extract_section_items(lines, ["preferred", "nice to have", "bonus"])
+    preferred = _extract_section_items(
+        lines,
+        # A hyphenated "Nice-to-have" heading does not contain the substring
+        # "nice to have" (space, not hyphen), so it silently matched nothing.
+        ["preferred", "nice to have", "nice-to-have", "bonus"],
+    )
     responsibilities = _extract_section_items(
         lines, ["responsibilities", "what you will do", "duties", "role", "your day to day", "day to day"]
     )
-    keywords = _extract_keywords(text, profile)
+    education_experience = _extract_section_items(
+        lines,
+        ["education and experience", "your education and experience", "combined education and work experience"],
+    )
+    security_language = _extract_section_items(lines, ["language requirement", "security", "official languages"])
+    employment_conditions = _extract_section_items(
+        lines, ["what you need to know", "hybrid work model", "work arrangement"]
+    )
+    compensation_benefits = _extract_section_items(
+        lines, ["what you can expect", "salary", "compensation and benefits", "benefits"]
+    )
+    boilerplate = _extract_boilerplate_lines(lines)
+
+    clean_text = _strip_boilerplate_lines(lines, boilerplate)
+    # The employer's own name (and the target title's words) must never
+    # surface as a "technical keyword" gap — a fragment like "Bank" repeated
+    # throughout the posting is the company's name, not a missing skill.
+    org_words = {word.lower() for word in re.findall(r"[A-Za-z]+", f"{title} {company}")}
+    keywords = _extract_keywords(text, clean_text, profile, exclude_tokens=org_words)
     work_mode = _extract_work_mode(text)
     location = _extract_location(text, lines)
     domain = _extract_domain(text)
     ats = _extract_ats_platform(text)
 
     if not required:
-        required = _sentences_with_keywords(text, keywords[:6])
+        required = _sentences_with_keywords(clean_text, keywords[:6])
     if not responsibilities:
-        responsibilities = _sentences_with_keywords(text, keywords[:5])[:5]
+        responsibilities = _sentences_with_keywords(clean_text, keywords[:5])[:8]
 
     return JDProfile(
         title=title or "Target Role",
@@ -214,7 +266,13 @@ def _parse_jd_heuristic(job_description: str, profile: Profile) -> JDProfile:
         location=location,
         required_qualifications=required[:8],
         preferred_qualifications=preferred[:8],
-        responsibilities=responsibilities[:5],
+        # 8, not the previous 5: an intro paragraph or a "More specifically,
+        # you will:" sub-heading line routinely occupies the first slot or
+        # two under a responsibilities heading before the real bulleted
+        # duties start, so a tight cap silently dropped genuine
+        # responsibilities (now a primary tailoring input, not just an
+        # interview-prep source — see build_evidence_matrix).
+        responsibilities=responsibilities[:8],
         # 30, not the previous 18: a posting with a genuinely long, specific
         # requirement list (e.g. a full Power Platform stack) was silently
         # truncating short-but-critical acronyms like "C#" off the end,
@@ -222,6 +280,11 @@ def _parse_jd_heuristic(job_description: str, profile: Profile) -> JDProfile:
         technical_keywords=_prioritize_required_keywords(keywords, required)[:30],
         domain=domain,
         ats_platform=ats,
+        education_experience_requirements=education_experience[:8],
+        security_language_requirements=security_language[:8],
+        employment_conditions=employment_conditions[:8],
+        compensation_benefits=compensation_benefits[:8],
+        organizational_boilerplate=boilerplate[:20],
     )
 
 
@@ -287,7 +350,7 @@ def _merge_jd_profile(heuristic: JDProfile, llm_data: dict[str, object]) -> JDPr
         location=text_field("location", heuristic.location),
         required_qualifications=required,
         preferred_qualifications=preferred,
-        responsibilities=merged_list("responsibilities", heuristic.responsibilities, limit=5),
+        responsibilities=merged_list("responsibilities", heuristic.responsibilities, limit=8),
         technical_keywords=merged_list("technical_keywords", heuristic.technical_keywords, limit=30),
         domain=text_field("domain", heuristic.domain),
         ats_platform=ats_platform,
@@ -304,7 +367,14 @@ def _extract_title(text: str, lines: list[str]) -> str:
         if match:
             return _clean_title(match.group(1))
 
-    for line in lines[:8]:
+    # A long "Label:  Value" metadata block (requisition number, position
+    # type/length, location, closing date) or a D&I preamble routinely pushes
+    # the actual title heading past the first handful of lines in enterprise
+    # postings, so the scan window is generous; "Label: Value" metadata lines
+    # are skipped outright since a title line is never phrased that way.
+    for line in lines[:40]:
+        if ":" in line:
+            continue
         lowered = line.lower()
         if any(word in lowered for word in ["engineer", "developer", "analyst", "scientist", "architect"]):
             if len(line) <= 90 and not line.endswith("."):
@@ -312,7 +382,7 @@ def _extract_title(text: str, lines: list[str]) -> str:
     return ""
 
 
-def _extract_company(text: str, lines: list[str]) -> str:
+def _extract_company(text: str, lines: list[str], title: str = "") -> str:
     patterns = [
         r"(?:company|organization|employer)\s*[:\-]\s*([^\n|]+)",
         r"\bat\s+([A-Z][A-Za-z0-9 &.,-]{2,60})\s+(?:is|we are|seeks|seeking|hiring)",
@@ -325,10 +395,16 @@ def _extract_company(text: str, lines: list[str]) -> str:
     for line in lines[:6]:
         if line.lower().startswith("about "):
             return _trim_company(line[6:])
+
+    title_words = {word.lower() for word in re.findall(r"[A-Za-z]+", title)}
+    repeated = _extract_repeated_proper_noun(text, title_words)
+    if repeated:
+        return _trim_company(repeated)
+
     for line in lines[1:8]:
         cleaned = line.strip()
         lowered = cleaned.lower()
-        if not cleaned or len(cleaned) > 80:
+        if not cleaned or len(cleaned) > 80 or ":" in cleaned:
             continue
         if lowered.startswith(("job ", "location", "$")) or "out of 5" in lowered:
             continue
@@ -341,17 +417,79 @@ def _extract_company(text: str, lines: list[str]) -> str:
     return ""
 
 
+_HEADING_WORDS = {
+    "equity",
+    "diversity",
+    "inclusion",
+    "requirements",
+    "qualifications",
+    "responsibilities",
+    "education",
+    "experience",
+    "certifications",
+    "language",
+    "hybrid",
+    "work",
+    "model",
+}
+
+
+_ARTICLE_PREFIX = re.compile(r"^(?:the|a|an)\s+", re.IGNORECASE)
+
+
+def _extract_repeated_proper_noun(text: str, title_words: set[str] | None = None) -> str:
+    """Find a company name generically: a multi-word Capitalized Phrase that
+    repeats several times through the body of the posting.
+
+    A real employer name is mentioned repeatedly ("The Acme Trust Corp has...",
+    "Acme Trust Corp's role...", "...at the Acme Trust Corp"); a one-off
+    section heading is not. This catches postings that never label the
+    company with an explicit "Company:" field or "About <Name>" heading.
+    Matching is line-scoped (space/tab only, no newline) so it never merges
+    words across unrelated adjacent metadata lines; a leading article is
+    stripped before counting so "The Acme Trust Corp" and "Acme Trust Corp"
+    count as the same candidate instead of splitting votes with the shorter,
+    more frequent but less specific "The Acme".
+    """
+    exclude = title_words or set()
+    counts: Counter[str] = Counter()
+    for match in re.finditer(r"\b(?:[A-Z][a-zA-Z.]+(?:[ \t]+(?:of|the|and))?[ \t]+){1,3}[A-Z][a-zA-Z.]+\b", text):
+        phrase = re.sub(r"\s+", " ", match.group(0)).strip()
+        core = _ARTICLE_PREFIX.sub("", phrase)
+        words = core.split()
+        if len(words) < 2 or len(phrase) > 50:
+            continue
+        lowered_words = {word.lower() for word in words}
+        if lowered_words & _HEADING_WORDS or lowered_words <= exclude:
+            continue
+        counts[core] += 1
+    if not counts:
+        return ""
+    candidate, count = counts.most_common(1)[0]
+    return candidate if count >= 2 else ""
+
+
 def _extract_section_items(lines: list[str], headings: list[str], stop_headings: list[str] | None = None) -> list[str]:
     items: list[str] = []
     active = False
     for line in lines:
-        lowered = line.lower().strip(":")
+        cleaned_prefix = re.sub(r"^[\-*•]\s*", "", line.lower()).strip(":")
         # A stop heading always ends the section first, even if the same line
         # also happens to contain one of our own (generic) start headings.
-        if active and stop_headings and any(stop in lowered for stop in stop_headings) and len(line) < 80:
+        if (
+            active
+            and stop_headings
+            and any(cleaned_prefix.startswith(stop) for stop in stop_headings)
+            and len(line) < 80
+        ):
             active = False
             continue
-        if any(heading in lowered for heading in headings) and len(line) < 80:
+        # ``startswith``, not "contains": a body bullet that merely mentions a
+        # heading word mid-sentence (e.g. "...to meet business requirements")
+        # must never be mistaken for a "Requirements" section heading and
+        # swallow every following responsibility bullet into required
+        # qualifications. A real heading word always opens the line.
+        if any(cleaned_prefix.startswith(heading) for heading in headings) and len(line) < 80:
             active = True
             continue
         if active and re.match(r"^[A-Z][A-Za-z /&-]{2,40}:?$", line) and len(line) < 60:
@@ -363,8 +501,11 @@ def _extract_section_items(lines: list[str], headings: list[str], stop_headings:
     return items
 
 
-def _extract_keywords(text: str, profile: Profile) -> list[str]:
+def _extract_keywords(
+    text: str, clean_text: str, profile: Profile, exclude_tokens: set[str] | None = None
+) -> list[str]:
     lowered = text.lower()
+    exclude = exclude_tokens or set()
     candidates = set(COMMON_TECH_TERMS)
     candidates.update(profile.tier_a.keys())
     candidates.update(profile.tier_b.keys())
@@ -378,13 +519,25 @@ def _extract_keywords(text: str, profile: Profile) -> list[str]:
             if display not in found:
                 found.append(display)
 
-    tokens = re.findall(r"\b[A-Za-z][A-Za-z0-9+#.-]{2,}\b", lowered)
+    # Frequency-based discovery (anything repeated and not an explicit tech
+    # term) runs on boilerplate-stripped text only: organizational/D&I/
+    # benefits/recruitment-process paragraphs repeat words like "Bank",
+    # "diversity", or "recruitment" often enough to otherwise leak into the
+    # keyword list as a fake "technical requirement" and a fake gap.
+    tokens = re.findall(r"\b[A-Za-z][A-Za-z0-9+#.-]{2,}\b", clean_text.lower())
     counts = Counter(tokens)
     for token, count in counts.most_common(20):
-        if count > 1 and token not in _GENERIC_KEYWORD_TOKENS:
-            display = _display_keyword(token, profile)
-            if display not in found:
-                found.append(display)
+        if count <= 1 or token in _GENERIC_KEYWORD_TOKENS or token in exclude:
+            continue
+        # A bare token that is already just a fragment of a longer keyword
+        # the whitelist scan already found (e.g. "power"/"platform" once
+        # "power platform" is already in ``found``) is redundant noise in the
+        # requirement map, not a second, distinct requirement.
+        if any(token in existing.lower() for existing in found):
+            continue
+        display = _display_keyword(token, profile)
+        if display not in found:
+            found.append(display)
     return found
 
 
@@ -415,6 +568,18 @@ _GENERIC_KEYWORD_TOKENS = {
     "knowledge",
     "techniques",
     "processes",
+    "have",
+    "requirements",
+    "positions",
+    "years",
+    "candidates",
+    "provide",
+    "ensure",
+    "apply",
+    "applicants",
+    "position",
+    "opportunity",
+    "opportunities",
 }
 
 
@@ -476,6 +641,46 @@ def _extract_domain(text: str) -> str:
         if re.search(rf"\b{re.escape(needle)}\b", lowered):
             return domain
     return ""
+
+
+# Substrings that mark a line as organizational messaging rather than a real
+# requirement, responsibility, or logistics fact — diversity/inclusion and
+# accommodation language, benefits/compensation marketing, and boilerplate
+# recruitment-process copy. Matched case-insensitively against the whole line
+# so it works whether or not the line sits under a recognized heading.
+_BOILERPLATE_KEYWORDS = (
+    "diversity",
+    "inclusion",
+    "equity, ",
+    "accommodation",
+    "self-identify",
+    "indigenous",
+    "disabilit",
+    "racialized",
+    "visible minorit",
+    "pension plan",
+    "defined-benefit pension",
+    "vacation entitlement",
+    "vacation days",
+    "benefits package",
+    "we wish to thank",
+    "only candidates selected",
+    "top employer",
+    "barrier-free",
+    "let our team know",
+    "recruitment process",
+    "gender identity",
+    "sexual orientation",
+)
+
+
+def _extract_boilerplate_lines(lines: list[str]) -> list[str]:
+    return [line for line in lines if any(marker in line.lower() for marker in _BOILERPLATE_KEYWORDS)]
+
+
+def _strip_boilerplate_lines(lines: list[str], boilerplate: list[str]) -> str:
+    boilerplate_set = set(boilerplate)
+    return "\n".join(line for line in lines if line not in boilerplate_set)
 
 
 def _extract_ats_platform(text: str) -> str:
