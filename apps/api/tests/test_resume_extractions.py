@@ -75,6 +75,28 @@ async def test_extracts_pdf_in_page_order(client: object) -> None:
 
 
 @pytest.mark.asyncio
+async def test_extracts_pdf_bullet_glued_to_text_gets_a_restored_space(client: object) -> None:
+    """PDF text extraction commonly places a bullet glyph directly against its
+    text (no literal space codepoint, since the visual gap is glyph
+    positioning). Regression for the false Resume-withholding defect: the
+    extracted, reviewable text must read as a normal bullet line."""
+    response = await client.post(
+        "/api/v1/resume-extractions",
+        files={
+            "file": (
+                "resume.pdf",
+                _text_pdf("*Managed cloud infrastructure across two regions."),
+                "application/pdf",
+            )
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "* Managed cloud infrastructure across two regions." in body["text"]
+
+
+@pytest.mark.asyncio
 async def test_extracts_docx_paragraphs_lists_and_tables(client: object) -> None:
     response = await client.post(
         "/api/v1/resume-extractions",

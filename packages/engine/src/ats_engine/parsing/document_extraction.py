@@ -124,6 +124,9 @@ def extract_resume_document(
     )
 
 
+_BULLET_MARKER_NO_GAP = re.compile(r"^(\s*[\-*•])([A-Za-z])", flags=re.MULTILINE)
+
+
 def normalize_extracted_text(text: str) -> str:
     """Perform bounded mechanical cleanup without changing candidate claims."""
     normalized = unicodedata.normalize("NFC", text).replace("\r\n", "\n").replace("\r", "\n")
@@ -132,6 +135,13 @@ def normalize_extracted_text(text: str) -> str:
         character for character in normalized if character in "\n\t" or unicodedata.category(character)[0] != "C"
     )
     normalized = "\n".join(line.rstrip() for line in normalized.split("\n"))
+    # PDF text extraction commonly reconstructs a bullet glyph immediately
+    # against its text ("•Managed cloud infrastructure") because the visual
+    # gap is glyph positioning, not a literal space character. Restore the
+    # gap so the reviewed text reads correctly and downstream bullet
+    # detection sees a normal marker; letters only, so numeric leads like
+    # "-5%" are left untouched.
+    normalized = _BULLET_MARKER_NO_GAP.sub(r"\1 \2", normalized)
     return re.sub(r"\n{4,}", "\n\n\n", normalized).strip()
 
 

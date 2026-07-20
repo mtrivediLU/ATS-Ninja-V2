@@ -87,6 +87,13 @@ text. Extraction requests are cancellable and stale responses are ignored. The
 browser stores neither the file nor extracted text. There is no OCR or legacy
 `.doc` support; scanned/image-only and encrypted PDFs surface a safe error.
 
+`lib/product.ts`'s `kitTarget()` reads target company/role from whichever
+requested artifact carries it (LinkedIn Outreach, then Cover Letter) instead
+of only the former, so the header does not show "Target company unavailable"
+just because Outreach wasn't requested. `safeWithheldReason()` maps a withheld
+artifact's persisted validation errors to one of a small set of safe,
+actionable messages instead of a generic fallback.
+
 ## Artifact selection and polling
 
 The frontend sends all six persisted include flags explicitly. The API retains

@@ -634,4 +634,11 @@ def _heuristic_contact(text: str) -> dict[str, str]:
 
 
 def _is_bullet(line: str) -> bool:
-    return bool(re.match(r"^\s*[\-*•]\s+", line))
+    # `\s*` (not `\s+`) after the marker: PDF text extraction frequently
+    # reconstructs a bullet glyph immediately adjacent to its text with no
+    # literal space character (the visual gap comes from glyph positioning,
+    # not a space codepoint). Requiring trailing whitespace here caused
+    # genuine bullets to be misread as plain header text, which then made
+    # their whole entry look bulletless downstream. `_clean_bullet` below
+    # already strips the marker with `\s*` for the same reason.
+    return bool(re.match(r"^\s*[\-*•]\s*\S", line))

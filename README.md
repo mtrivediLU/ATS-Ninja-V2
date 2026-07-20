@@ -210,7 +210,10 @@ directory. No external conversion service or OCR is used. Encrypted PDFs are
 rejected; image-only/scanned PDFs receive a clear no-readable-text message.
 Legacy `.doc` is not supported; save it as DOCX, PDF, or TXT first. Extraction
 does only mechanical Unicode/line-ending cleanup and does not tailor, rewrite,
-or infer resume claims.
+or infer resume claims. One of those mechanical steps restores the space a PDF
+bullet glyph often loses against its text (`"•Managed..."` → `"• Managed..."`)
+— see [docs/architecture.md](docs/architecture.md#resume-extraction-local-only)
+for why that mattered for downstream parsing, not just readability.
 
 ## License
 
