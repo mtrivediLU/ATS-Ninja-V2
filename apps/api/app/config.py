@@ -47,6 +47,13 @@ class Settings(BaseSettings):
     # generation stays fully deterministic and offline.
     engine_use_llm: bool = True
 
+    # Resume extraction accepts a binary only for the lifetime of one HTTP
+    # request. These bounds protect that short-lived parsing work; the reviewed
+    # text still goes through the normal JSON Kit contract.
+    resume_upload_max_bytes: int = 10 * 1024 * 1024
+    resume_upload_max_pdf_pages: int = 100
+    resume_text_max_characters: int = 100_000
+
 
 @lru_cache
 def get_settings() -> Settings:

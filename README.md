@@ -101,6 +101,10 @@ uvicorn app.main:app --reload --app-dir apps/api            # API on :8000
 - Readiness (reports engine version): `GET http://localhost:8000/api/v1/health`
 - Submit a kit: `POST http://localhost:8000/api/v1/kits` with
   `{"resume_text": "...", "job_description": "...", "requested_mode": "resume and cover letter"}`
+- Extract a local resume file: `POST http://localhost:8000/api/v1/resume-extractions`
+  as `multipart/form-data` with a `file` field. It accepts PDF, DOCX, and TXT,
+  returns editable plain text and safe metadata, and never changes the Kit JSON
+  contract.
 - Poll a kit: `GET http://localhost:8000/api/v1/kits/{id}`
 - OpenAPI docs: `http://localhost:8000/docs`
 
@@ -191,6 +195,22 @@ Never commit real API keys, credentials, `.env` files, private resumes /
 candidate documents, generated kits, or local caches. `.env.example` files
 document configuration shape only. Secrets come from the environment via typed
 settings.
+
+### Resume file extraction
+
+The New Kit flow has **Paste text** and **Upload file** modes. Upload accepts a
+text-based PDF, DOCX, or TXT file up to 10 MB. The API validates bytes and
+container structure, extracts text locally, and returns a preview for the
+candidate to edit. The reviewed text—not the original file—is the only value
+submitted to `POST /api/v1/kits`.
+
+Uploads are held only for the extraction request: no binary is persisted in
+PostgreSQL, Redis, a worker payload, browser storage, or a permanent upload
+directory. No external conversion service or OCR is used. Encrypted PDFs are
+rejected; image-only/scanned PDFs receive a clear no-readable-text message.
+Legacy `.doc` is not supported; save it as DOCX, PDF, or TXT first. Extraction
+does only mechanical Unicode/line-ending cleanup and does not tailor, rewrite,
+or infer resume claims.
 
 ## License
 

@@ -78,7 +78,7 @@ class KitCreate(BaseModel):
     required or stored beyond what the resume text itself contains.
     """
 
-    resume_text: str = Field(min_length=1, description="Candidate resume as plain text.")
+    resume_text: str = Field(min_length=1, max_length=100_000, description="Candidate resume as plain text.")
     job_description: str = Field(min_length=1, description="Target job description as plain text.")
     requested_mode: str = Field(default="", description="Optional generation intent, e.g. 'resume and cover letter'.")
     questions_text: str = Field(default="", description="Optional application/screening questions.")
@@ -110,6 +110,20 @@ class KitCreate(BaseModel):
         default=None,
         description="Optional recipient, relationship, and application facts supplied by the user.",
     )
+
+
+class ResumeExtractionResponse(BaseModel):
+    """Text and intentionally narrow metadata from a transient file upload."""
+
+    filename: str
+    mime_type: str
+    size_bytes: int
+    extraction_method: str
+    text: str
+    character_count: int
+    page_count: int | None = None
+    warnings: list[str] = Field(default_factory=list)
+    truncated: bool = False
 
 
 class EvidenceRefResponse(BaseModel):
