@@ -17,6 +17,12 @@ settings plumbing.
   generation, returns `202` with the kit
 - `GET /api/v1/kits/{id}` — kit status and, once completed, its result
 - `GET /api/v1/kits?limit=&offset=` — list kits (newest first)
+- `POST /api/v1/document-exports/pdf` — synchronous, request-scoped local PDF
+  export of a completed kit's Resume or Cover Letter (generated content or an
+  explicitly-supplied local edit, never persisted); returns `application/pdf`
+  with a standardized `Content-Disposition` filename. See
+  [docs/architecture.md](../../docs/architecture.md#grounded-ats-tailoring-typed-requirement-categories-and-direct-pdf-download-fixedadded)
+  and [ADR-0018](../../docs/adr/0018-local-pdf-rendering.md).
 
 **Not yet implemented:** authentication, credits/billing, OCR, legacy `.doc`
 ingestion, LinkedIn access, contact discovery, or message sending. No placeholder endpoints

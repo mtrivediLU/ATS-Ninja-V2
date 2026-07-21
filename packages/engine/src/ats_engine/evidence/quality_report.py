@@ -6,6 +6,7 @@ from ats_engine.generation.latex_renderer import parse_resume_sections
 from ats_engine.models import EvidenceItem, JDProfile, ResumePlan
 from ats_engine.parsing.contact_integrity import ContactIntegrityReport, validate_contact_integrity
 from ats_engine.parsing.resume import find_metrics
+from ats_engine.validation.style import BANNED_WORDS
 
 """A deterministic, internal ATS-coverage report for the generated Resume.
 
@@ -38,6 +39,8 @@ class AtsQualityReport:
     adjacency_count: int
     working_knowledge_count: int
     formatting_warnings: tuple[str, ...] = field(default_factory=tuple)
+    duplicate_keyword_warnings: tuple[str, ...] = field(default_factory=tuple)
+    generic_language_warnings: tuple[str, ...] = field(default_factory=tuple)
 
 
 def build_ats_quality_report(
@@ -86,20 +89,80 @@ def build_ats_quality_report(
         adjacency_count=sum(1 for item in evidence if item.evidence_tier == "adjacency"),
         working_knowledge_count=sum(1 for item in evidence if item.evidence_tier == "C"),
         formatting_warnings=tuple(formatting_warnings),
+        duplicate_keyword_warnings=_duplicate_keyword_warnings(evidence),
+        generic_language_warnings=_generic_language_warnings(resume_text),
     )
+
+
+def _duplicate_keyword_warnings(evidence: list[EvidenceItem]) -> tuple[str, ...]:
+    """Flag one real tool answering two or more differently-worded JD keywords.
+
+    Not a truth-grounding problem (both claims are honest), but it reads as
+    cosmetic repetition on the rendered Resume — worth surfacing so a human
+    can judge whether to consolidate the phrasing, never silently hidden.
+    """
+    keywords_by_evidence: dict[str, list[str]] = {}
+    for item in evidence:
+        if item.evidence_tier not in {"A", "B", "adjacency"} or not item.real_evidence:
+            continue
+        keywords_by_evidence.setdefault(item.real_evidence.strip().lower(), []).append(item.keyword)
+
+    warnings: list[str] = []
+    for real_evidence, keywords in keywords_by_evidence.items():
+        distinct = sorted({keyword.lower() for keyword in keywords})
+        if len(distinct) > 1:
+            warnings.append(f"'{real_evidence}' answers multiple JD keywords ({', '.join(distinct)})")
+    return tuple(warnings)
+
+
+_GENERIC_PHRASES = (
+    "core tools",
+    "day-to-day delivery",
+    "day to day delivery",
+    "aligned with ai needs",
+    "results-driven",
+    "results driven",
+    "detail-oriented",
+    "detail oriented",
+    "team player",
+    "hard worker",
+    "go-getter",
+    "self-starter",
+    "think outside the box",
+    "wear many hats",
+    "hit the ground running",
+)
+
+
+def _generic_language_warnings(resume_text: str) -> tuple[str, ...]:
+    """Audit-visibility scan for content-free filler that should never have survived generation.
+
+    Generation already actively blocks these (validation/style.py,
+    generation/planning.py's fallback-summary rules), so this should almost
+    always come back empty; it exists so a regression is visible in the
+    report itself rather than only discoverable by reading rendered prose.
+    """
+    if not resume_text:
+        return ()
+    lowered = resume_text.lower()
+    found = [phrase for phrase in (*BANNED_WORDS, *_GENERIC_PHRASES) if phrase in lowered]
+    return tuple(sorted(set(found)))
 
 
 def _target_title_present(target_title: str, resume_plan: ResumePlan) -> bool:
     """Whether the exact target title appears in a truthful, non-history context.
 
-    Only checks the headline/work-mode line, which are always framed as the
-    candidate's target ("Targeting X opportunities..."), never the rendered
-    experience section — the title must never be mistaken for a past role.
+    Only checks the headline, work-mode line, and summary — the three fields
+    that are always framed as the candidate's target ("Targeting X
+    opportunities..." lives in the summary; see
+    generation/planning.py's _fallback_summary/_target_title_instruction) —
+    never the rendered experience section, so the title can never be mistaken
+    for a past role.
     """
     title = (target_title or "").strip().lower()
     if not title or title == "target role":
         return False
-    haystack = f"{resume_plan.headline} {resume_plan.work_mode_line}".lower()
+    haystack = f"{resume_plan.headline} {resume_plan.work_mode_line} {resume_plan.summary}".lower()
     return title in haystack
 
 

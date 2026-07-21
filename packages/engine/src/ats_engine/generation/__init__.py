@@ -13,6 +13,12 @@ from ats_engine.generation.cover_letter import (
     generate_cover_letter_latex,
     generate_cover_letter_text,
 )
+from ats_engine.generation.filenames import build_export_filename, sanitize_filename_component
+from ats_engine.generation.html_renderer import (
+    render_cover_letter_html,
+    render_plain_text_html,
+    render_resume_html,
+)
 from ats_engine.generation.pipeline import (
     mode_from_text,
     resolve_artifact_selection,
@@ -34,6 +40,7 @@ from ats_engine.generation.resume import (
 __all__ = [
     "build_answer_plan",
     "build_cover_letter_plan",
+    "build_export_filename",
     "build_resume_plan",
     "choose_role_identity",
     "format_cover_letter_output",
@@ -44,7 +51,11 @@ __all__ = [
     "generate_resume_latex",
     "generate_resume_text",
     "mode_from_text",
+    "render_cover_letter_html",
+    "render_plain_text_html",
+    "render_resume_html",
     "resolve_artifact_selection",
     "run_pipeline",
+    "sanitize_filename_component",
     "validate_pipeline_result",
 ]

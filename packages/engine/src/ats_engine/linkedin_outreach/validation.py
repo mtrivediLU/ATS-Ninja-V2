@@ -102,11 +102,23 @@ def relationship_errors(text: str, context: OutreachContext) -> list[str]:
 
 def _contexts(text: str, term: str) -> list[str]:
     normalized_term = normalized_text(term).strip()
+    # Split only at a terminator immediately followed by whitespace: a term
+    # spelled with an internal period (".NET Framework") would otherwise
+    # self-fragment at that period, stripping the leading "." the match below
+    # requires.
     return [
         clause
-        for clause in re.split(r"[.!?;\n]+", normalized_text(text))
+        for clause in re.split(r"(?<=[.!?;])\s+|\n+", normalized_text(text))
         if normalized_term and normalized_term in clause
     ]
+
+
+def _scrub_terms(context: str, terms: list[str]) -> str:
+    scrubbed = context
+    for term in terms:
+        if term:
+            scrubbed = scrubbed.replace(term, " ")
+    return scrubbed
 
 
 def _affirmative_upgrade(clause: str, pattern: re.Pattern[str]) -> bool:
@@ -137,18 +149,24 @@ def validate_linkedin_outreach(
         if _PERFECT_FIT.search(normalized):
             errors.append("Outreach claims complete alignment despite genuine gaps.")
 
+    all_terms = [normalized_text(other.requirement).strip() for other in job_fit.requirements]
     for item in job_fit.requirements:
         contexts = _contexts(combined, item.requirement)
+        # Requirements sharing one clause each see the whole clause as their
+        # context, including neighboring requirement names; scrub every
+        # listed requirement's own name (not just this one's) so one gap's
+        # name containing a generic trigger word never falsely flags another.
+        scrubbed = [_scrub_terms(clause, all_terms) for clause in contexts]
         if item.classification is RequirementClassification.ADJACENT and any(
-            _affirmative_upgrade(clause, _EXPERTISE) for clause in contexts
+            _affirmative_upgrade(clause, _EXPERTISE) for clause in scrubbed
         ):
             errors.append(f"Adjacent capability upgraded to expertise: {item.requirement}.")
         if item.classification is RequirementClassification.WORKING_KNOWLEDGE and any(
-            _affirmative_upgrade(clause, _PRODUCTION) for clause in contexts
+            _affirmative_upgrade(clause, _PRODUCTION) for clause in scrubbed
         ):
             errors.append(f"Working knowledge upgraded to production experience: {item.requirement}.")
         if item.classification is RequirementClassification.GENUINE_GAP and any(
-            _affirmative_upgrade(clause, _STRENGTH) for clause in contexts
+            _affirmative_upgrade(clause, _STRENGTH) for clause in scrubbed
         ):
             errors.append(f"Genuine gap presented as a strength: {item.requirement}.")
 

@@ -29,12 +29,12 @@ export function ArtifactRoute({ artifact }: { artifact: ArtifactSlug }) {
   if (artifact === "resume") {
     if (!result.resume) return <Unavailable title="Resume" onRetry={() => void refresh()} />;
     if (result.resume.validation.fatal || result.resume.validation.status === "rejected") return <WithheldArtifact title="Resume" reason={safeWithheldReason(result.resume.validation.errors, result.resume.validation.warnings)} />;
-    return <DocumentWorkspace kind="resume" artifact={result.resume} company={target.company} role={target.role} />;
+    return <DocumentWorkspace kind="resume" artifact={result.resume} company={target.company} role={target.role} kitId={kit.id} />;
   }
   if (artifact === "cover-letter") {
     if (!result.cover_letter) return <Unavailable title="Cover letter" onRetry={() => void refresh()} />;
     if (result.cover_letter.validation.fatal || result.cover_letter.validation.status === "rejected") return <WithheldArtifact title="Cover letter" reason={safeWithheldReason(result.cover_letter.validation.errors, result.cover_letter.validation.warnings)} />;
-    return <DocumentWorkspace kind="cover-letter" artifact={result.cover_letter} company={target.company} role={target.role} />;
+    return <DocumentWorkspace kind="cover-letter" artifact={result.cover_letter} company={target.company} role={target.role} kitId={kit.id} />;
   }
   if (artifact === "answers") {
     if (!result.answers) return <Unavailable title="Application answers" onRetry={() => void refresh()} />;

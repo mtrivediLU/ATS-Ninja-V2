@@ -1,8 +1,14 @@
 # ADR-0004 — Defer binary PDF rendering; ship LaTeX artifacts in Phase 0
 
-- Status: Accepted
+- Status: Accepted; exit condition exercised by [ADR-0018](0018-local-pdf-rendering.md)
 - Date: 2026-07-09
 - Phase: 0
+
+> **2026-07-20 update:** the "revisit when server-side PDF output is a
+> concrete product requirement" condition below was met — see ADR-0018. The
+> engine-purity decision in this ADR still stands exactly as written: binary
+> PDF rendering (WeasyPrint) lives only in `apps/api`, never in
+> `packages/engine`.
 
 ## Context
 

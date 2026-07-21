@@ -28,7 +28,8 @@ external service and intentionally excludes application UI messages.
 > privately usable local workflows: real Kit submission and polling, all six
 > ApplicationKit v4 workspaces, trust-first summaries, bounded evidence
 > inspection, unvalidated local editing/compare/reset, safe local
-> copy/download, recovery handling, and server-backed history. Authentication
+> copy/download, a direct locally-rendered Resume/Cover Letter PDF download,
+> recovery handling, and server-backed history. Authentication
 > and public SaaS concerns remain intentionally absent.
 > See [docs/architecture.md](docs/architecture.md).
 
@@ -221,6 +222,21 @@ candidate-content relevance — picking the most faithful one; see
 [docs/architecture.md](docs/architecture.md#multi-engine-pdf-extraction-and-atsdocument-quality-audit-fixed)
 for the extraction-quality scoring, contact-integrity validation, tenure-
 calculation, JD-parsing, and ATS-tailoring fixes this made possible.
+
+### Grounded ATS tailoring and direct PDF download
+
+Job-description parsing separates real requirements/responsibilities from
+organizational boilerplate (D&I, benefits, recruitment-process copy), and a
+typed requirement category (platform, programming language, cloud, database,
+web development, source control, business analysis, and more) drives an
+evidence-ordered Technical Skills layout — never a hardcoded template, always
+derived from what the candidate's own evidence and the JD actually produced.
+The Resume and Cover Letter templates now support a direct **Download PDF**
+button — a real, request-scoped, locally-rendered binary PDF with a
+standardized `ApplicantName_JobTitle_CompanyName_<Artifact>[_Template].pdf`
+filename, no browser print dialog, no external service. See
+[docs/architecture.md](docs/architecture.md#grounded-ats-tailoring-typed-requirement-categories-and-direct-pdf-download-fixedadded)
+and [ADR-0018](docs/adr/0018-local-pdf-rendering.md).
 
 ## License
 
