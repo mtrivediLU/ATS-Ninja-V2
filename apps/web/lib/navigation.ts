@@ -73,15 +73,11 @@ export function navigationGroups(hasCurrentKit: boolean, kitId?: string): Naviga
       items: [
         {
           id: "overview",
-          label: "Kit overview",
+          label: "Application Kit",
           href: hasCurrentKit && kitId ? `/kits/${kitId}` : undefined,
           icon: LayoutDashboard,
           currentKitOnly: true,
         },
-        ...artifactNavigation.map((item) => ({
-          ...item,
-          href: hasCurrentKit && kitId ? `/kits/${kitId}/${item.id}` : undefined,
-        })),
         {
           id: "evidence",
           label: "Evidence",

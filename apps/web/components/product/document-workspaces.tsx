@@ -13,6 +13,7 @@ import { useArtifactView } from "@/components/product/use-artifact-view";
 import { useLocalTextEditor, useUnsavedChangeProtection } from "@/components/product/use-local-text-editor";
 import { Banner, Button, Card, Field, Textarea } from "@/components/ui/primitives";
 import type { AnswerArtifact, CoverLetterArtifact, ResumeArtifact } from "@/lib/api-types";
+import { formatAnswersText } from "@/lib/artifact-content";
 import { copyText, safeFilename } from "@/lib/product";
 
 export function DocumentWorkspace({ kind, artifact, company, role, kitId }: { kind: "resume" | "cover-letter"; artifact: ResumeArtifact | CoverLetterArtifact; company: string; role: string; kitId: string }) {
@@ -50,7 +51,7 @@ export function DocumentWorkspace({ kind, artifact, company, role, kitId }: { ki
 export function AnswersWorkspace({ artifact, company, role }: { artifact: AnswerArtifact; company: string; role: string }) {
   const { notify } = useFeedback();
   const [view, setView] = useArtifactView();
-  const generated = formatAnswers(artifact);
+  const generated = formatAnswersText(artifact);
   const editor = useLocalTextEditor(generated);
   const [compare, setCompare] = useState(false);
   useUnsavedChangeProtection(editor.dirty);
@@ -78,9 +79,4 @@ export function AnswersWorkspace({ artifact, company, role }: { artifact: Answer
 
 function Editor({ title, value, onChange, dirty }: { title: string; value: string; onChange: (value: string) => void; dirty: boolean }) {
   return <div className="mt-4"><Banner tone="warning" title="Editing locally.">Manual edits are not revalidated against evidence, are never sent to the API, and disappear on reload.</Banner><Field label={`${title} local text`} htmlFor={`${title.toLowerCase().replaceAll(" ", "-")}-editor`} hint={dirty ? "Unsaved local changes" : "No unsaved local changes"} className="mt-4"><Textarea id={`${title.toLowerCase().replaceAll(" ", "-")}-editor`} value={value} onChange={(event) => onChange(event.target.value)} className="min-h-[520px] font-mono text-sm" /></Field></div>;
-}
-
-function formatAnswers(artifact: AnswerArtifact): string {
-  const text = artifact.items.map((item) => `${item.question}\n${item.answer}`).join("\n\n");
-  return text || artifact.text;
 }
