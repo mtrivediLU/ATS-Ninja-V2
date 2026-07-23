@@ -10,7 +10,7 @@ export function KitStateBoundary({ children }: { children: React.ReactNode }) {
   if (loading && !kit) return <LoadingKit />;
   if (error && !kit) return <RecoveryState state="unavailable" actions={<><RetryButton onClick={() => void refresh()} /><Link href="/history" className={buttonClassName()}>Return to history</Link></>} />;
   if (!kit) return <RecoveryState state="malformed" actions={<><RetryButton onClick={() => void refresh()} /><Link href="/history" className={buttonClassName()}>Return to history</Link></>} />;
-  if (kit.status === "pending" || kit.status === "processing") return <RecoveryState state={delayed ? "slow" : kit.status} pulse actions={<Link href="/history" className={buttonClassName("secondary")}>Return to history</Link>} />;
+  if ((kit.status === "pending" || kit.status === "processing") && !kit.result) return <RecoveryState state={delayed ? "slow" : kit.status} pulse actions={<Link href="/history" className={buttonClassName("secondary")}>Return to history</Link>} />;
   if (kit.status === "failed") return <RecoveryState state="failed" actions={<><Link href="/kits/new" className={buttonClassName("primary")}>Create another Kit</Link><Link href="/history" className={buttonClassName()}>Return to history</Link></>} />;
   if (!kit.result) return <RecoveryState state="malformed" actions={<><RetryButton onClick={() => void refresh()} /><Link href="/history" className={buttonClassName()}>Return to history</Link></>} />;
   return <>{children}</>;

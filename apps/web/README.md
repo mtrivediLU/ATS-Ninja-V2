@@ -11,7 +11,32 @@ older Kits. Classic and Modern render the same source content. Print / Save as
 PDF uses one flowing print-only document root, excluding all application
 warnings and controls. Local edits stay local and are not revalidated.
 
-## Current scope: Design Phase D2
+## Current scope: Design Phase K1
+
+K1 makes `/kits/[kitId]` the completed-Kit workspace: one continuous, scrollable
+page with a compact Kit header, sticky quick actions, a persisted-trust strip,
+primary Resume and Cover Letter cards, and inline summaries for all remaining
+artifacts. Resume PDF, Cover Letter PDF, Copy all answers, Copy recommended
+outreach, View Job Fit gaps, Start interview review, and Review warnings are
+one-click actions from this page. Common review expands inline without a route
+change; the six existing artifact routes remain advanced, distraction-free
+workspaces for deeper editing, comparison, printing, and export.
+
+The page reads the existing `KitProvider` result and starts no per-card request
+or polling loop. Only one large artifact detail mounts at a time; the selected
+Classic/Modern template is shared in React session state with the advanced
+template workspace and never stored in browser storage. The quick PDF control
+reuses the existing direct export endpoint and server `Content-Disposition`
+filename. K1 does not change API, engine, evidence, ATS, or fit logic.
+
+The workspace is responsive at desktop, tablet, and mobile: document cards
+stack below desktop, quick document actions become a mobile bar above bottom
+navigation, and the existing evidence surface remains a panel/drawer/sheet.
+Expandable regions use semantic controls, focus movement/restoration, Escape,
+and reduced-motion-safe transitions. Known limitation: local edits are still
+owned by the advanced workspace and intentionally disappear on reload.
+
+### D2 foundations retained
 
 D2 retains the D0 **Signal** foundation and D1 real workflows, then adds the
 trust, evidence, editing, recovery, accessibility, and responsive polish needed
@@ -49,7 +74,7 @@ only aggregates existing trace records for presentation.
 | --- | --- |
 | `/` | Private local landing and first-use state |
 | `/kits/new` | New Kit inputs, independent output selection, review, submission |
-| `/kits/[kitId]` | Real Kit lifecycle and overview |
+| `/kits/[kitId]` | Unified Application Kit results workspace and lifecycle states |
 | `/kits/[kitId]/resume` | Resume read/local-edit/copy/text/LaTeX/evidence |
 | `/kits/[kitId]/cover-letter` | Cover letter workspace |
 | `/kits/[kitId]/answers` | Structured application answers |

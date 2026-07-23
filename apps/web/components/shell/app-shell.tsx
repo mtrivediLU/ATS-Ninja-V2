@@ -2,12 +2,12 @@
 
 import { usePathname } from "next/navigation";
 import { type ReactNode, useMemo, useState } from "react";
-import { ArtifactTabs } from "@/components/shell/artifact-tabs";
 import { EvidencePanel } from "@/components/shell/evidence-panel";
 import { MobileBottomNav, MobileNavDrawer } from "@/components/shell/mobile-nav";
 import { Sidebar } from "@/components/shell/sidebar";
 import { WorkspaceHeader } from "@/components/shell/workspace-header";
 import { KitProvider, useKit } from "@/components/product/kit-context";
+import { TemplateSelectionProvider } from "@/components/product/template-selection";
 import { Drawer } from "@/components/ui/drawer";
 import { Banner } from "@/components/ui/primitives";
 import { kitStatusPresentation } from "@/lib/status";
@@ -33,9 +33,9 @@ export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const kitId = kitIdFromPath(pathname);
   return (
-    <KitProvider kitId={kitId}>
+    <TemplateSelectionProvider><KitProvider kitId={kitId}>
       <AppShellContent>{children}</AppShellContent>
-    </KitProvider>
+    </KitProvider></TemplateSelectionProvider>
   );
 }
 
@@ -44,7 +44,6 @@ function AppShellContent({ children }: { children: ReactNode }) {
   const [navOpen, setNavOpen] = useState(false);
   const { kitId, kit, evidenceOpen, setEvidenceOpen, closeEvidence, openEvidence, connectionRestored, error } = useKit();
   const target = kitTarget(kit);
-  const completed = kit?.status === "completed" && Boolean(kit.result);
   const meta = useMemo(
     () =>
       kitId
@@ -70,7 +69,6 @@ function AppShellContent({ children }: { children: ReactNode }) {
           onMenu={() => setNavOpen(true)}
           onEvidence={() => setEvidenceOpen(!evidenceOpen)}
         />
-        {kitId && completed && <ArtifactTabs kitId={kitId} />}
         <div className="flex min-h-0 flex-1">
           <main id="main-content" className="min-w-0 flex-1 overflow-x-hidden px-4 py-6 pb-[calc(var(--bottomnav-h)+24px)] sm:px-6 md:pb-6">
             <div className="mx-auto max-w-[1200px]">{error && kit && <Banner tone="warning" className="mb-4" title="Temporary retrieval interruption.">The last known Kit state remains visible. Check the local API, then use retry retrieval if the interruption persists.</Banner>}{connectionRestored && <Banner tone="info" className="mb-4" title="Connection restored.">The latest Kit state was retrieved from the local API.</Banner>}{children}</div>

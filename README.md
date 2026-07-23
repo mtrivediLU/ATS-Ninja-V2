@@ -1,5 +1,15 @@
 # ATS-Ninja-V2
 
+## K1 unified Application Kit workspace
+
+Completed Kits now open at `/kits/[kitId]` as one scrollable results workspace.
+It places one-click Resume and Cover Letter PDF downloads, answer/outreach copy,
+Job Fit gaps, interview review, and evidence warnings alongside all six
+artifact summaries. Inline expansion avoids route changes for everyday review;
+the individual artifact routes are retained as advanced workspaces. This is a
+frontend-only composition over the existing Kit result, PDF export endpoint,
+trust/evidence records, and lifecycle poller—no backend business rules changed.
+
 A deterministic-first, truth-grounded AI career SaaS. From a candidate's resume
 and a job description it generates an application kit that stays honest to what
 the candidate has actually done.

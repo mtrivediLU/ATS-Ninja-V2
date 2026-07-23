@@ -97,6 +97,9 @@
   --header-h: 60px;
   --bottomnav-h: 60px;
   --content-max: 1200px;
+  --quickbar-h: 56px;
+  --artifact-row-min-h: 76px;
+  --expansion-dur: 220ms;
 
   --dur-fast: 120ms;
   --dur-base: 180ms;
@@ -228,6 +231,42 @@
 
   .scrollbar-none::-webkit-scrollbar {
     display: none;
+  }
+}
+
+@layer components {
+  .k1-quick-actions {
+    position: sticky;
+    top: 0.75rem;
+    z-index: 20;
+  }
+
+  .k1-expansion {
+    animation: k1-expand var(--expansion-dur) var(--ease-out);
+  }
+
+  @keyframes k1-expand {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  @media (max-width: 639px) {
+    .k1-quick-actions {
+      position: fixed;
+      right: 0.75rem;
+      bottom: calc(var(--bottomnav-h) + env(safe-area-inset-bottom) + 0.5rem);
+      left: 0.75rem;
+      top: auto;
+      z-index: var(--z-header);
+    }
+
+    .k1-quick-actions > div {
+      justify-content: center;
+    }
+
+    .k1-quick-actions button:nth-child(n + 3) {
+      display: none;
+    }
   }
 }
 

@@ -10,7 +10,7 @@ display. The web template view has one dedicated, flowing print root for the
 selected document; controls, trust UI, and fallback notices are deliberately
 excluded from Print / Save as PDF. No external PDF service is used.
 
-Status: **Phase 2 backend complete; Design Phase D2 private-local dogfooding polish**. This
+Status: **Phase 2 backend complete; Design Phase K1 unified-results private-local dogfooding polish**. This
 document distinguishes what is **completed**, what **architecture is
 established**, and what is **future** planned work. It never describes
 unimplemented functionality as done.
@@ -53,6 +53,21 @@ application shells. Three deployable/importable units plus infra and docs:
 │  No web framework. No LLM-vendor SDK. Zero Streamlit imports.          │
 └────────────────────────────────────────────────────────────────────────┘
 ```
+
+### Frontend workflows (Design Phase K1)
+
+K1 keeps the D2 provider, local-edit, evidence, and full-artifact workspaces,
+but makes `/kits/[kitId]` the completed-Kit workspace. It derives six artifact
+summaries, trust counts, and warning state from the one `KitProvider` result;
+there are no per-card fetches, no additional poller, no browser evidence
+classification, and no browser ATS/fit calculation. Common actions expand in
+place, while the prior artifact routes remain advanced/deep-link paths.
+
+The shared Quick PDF control still invokes the existing PDF export endpoint;
+template selection is presentation-only React session state shared by unified
+and advanced document views. Candidate content is not added to browser storage
+or URLs. K1 is frontend composition only: no API contract, engine, persistence,
+queue, database, or evidence-rule change.
 
 ### Frontend workflows (Design Phase D2)
 
