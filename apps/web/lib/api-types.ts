@@ -91,6 +91,37 @@ export interface ArtifactValidation {
   rejected_claims: number;
 }
 
+export type ChangeType =
+  | "summary"
+  | "targeting_clause"
+  | "bullet"
+  | "skill"
+  | "cover_letter_paragraph"
+  | "grounding_removal";
+export type ChangeOperation = "added" | "rewritten" | "reordered" | "omitted" | "removed";
+export type ChangeStatus = "proposed" | "accepted" | "rejected";
+export type ScoreConfidence = "high" | "medium" | "low";
+export type FitCategory = "strong_fit" | "good_fit" | "partial_fit" | "stretch_role" | "low_alignment";
+export type ChangeActionKind = "accept" | "reject" | "restore";
+
+export interface ChangeRecord {
+  id: string;
+  artifact: string;
+  change_type: ChangeType;
+  operation: ChangeOperation;
+  original_text: string;
+  tailored_text: string;
+  reason: string;
+  status: ChangeStatus;
+  reversible: boolean;
+  matched_keywords: string[];
+  evidence: EvidenceRef[];
+  ats_impact: string;
+  ats_impact_delta: number;
+  confidence: ScoreConfidence;
+  linked_claim_ids: string[];
+}
+
 export interface ResumeArtifact {
   text: string;
   latex: string;
@@ -98,6 +129,7 @@ export interface ResumeArtifact {
   claims: Claim[];
   interview_probability: number | null;
   document?: ResumeDocument | null;
+  change_ledger: ChangeRecord[];
 }
 
 export interface CoverLetterArtifact {
@@ -106,6 +138,7 @@ export interface CoverLetterArtifact {
   validation: ArtifactValidation;
   claims: Claim[];
   document?: CoverLetterDocument | null;
+  change_ledger: ChangeRecord[];
 }
 
 export interface ResumeSkillGroup { label: string; items: string[]; }
@@ -349,6 +382,62 @@ export interface LinkedInOutreachArtifact {
   withheld: boolean;
 }
 
+export interface AtsMatchScore {
+  score: number;
+  matched_keywords: string[];
+  missing_keywords: string[];
+  total_keywords: number;
+  required_matched: number;
+  required_total: number;
+  preferred_matched: number;
+  preferred_total: number;
+}
+
+export interface AtsQualityReportPayload {
+  required_term_count: number;
+  required_supported_count: number;
+  required_coverage_percent: number;
+  preferred_term_count: number;
+  preferred_supported_count: number;
+  preferred_coverage_percent: number;
+  exact_target_title_present: boolean;
+  section_presence: Record<string, boolean>;
+  contact_issue_count: number;
+  contact_issues: string[];
+  measurable_result_count: number;
+  word_count: number;
+  unsupported_requirement_count: number;
+  adjacency_count: number;
+  working_knowledge_count: number;
+  formatting_warnings: string[];
+  duplicate_keyword_warnings: string[];
+  generic_language_warnings: string[];
+}
+
+export interface MatchReport {
+  original_ats_match: AtsMatchScore;
+  tailored_ats_match: AtsMatchScore | null;
+  alignment_score: number;
+  fit_band: string;
+  fit_category: FitCategory;
+  confidence: ScoreConfidence;
+  confidence_reasons: string[];
+  strongest_matches: string[];
+  genuine_gaps: string[];
+  must_have_gaps: string[];
+  keywords_matched_original: string[];
+  keywords_surfaced_by_tailoring: string[];
+  keywords_still_missing: string[];
+  recommendation: string;
+  kit_summary: string;
+  quality_report: AtsQualityReportPayload;
+  disclaimer: string;
+}
+
+export interface StageTimings {
+  stages_ms: Record<string, number>;
+}
+
 export interface ApplicationKit {
   schema_version: string;
   engine_version: string;
@@ -363,7 +452,20 @@ export interface ApplicationKit {
   job_fit: JobFitArtifact | null;
   interview_prep: InterviewPrepArtifact | null;
   linkedin_outreach: LinkedInOutreachArtifact | null;
+  match_report: MatchReport | null;
+  stage_timings: StageTimings;
+  revision: number;
   warnings: string[];
+}
+
+export interface ChangeActionItemInput {
+  change_id: string;
+  action: ChangeActionKind;
+}
+
+export interface ChangeActionRequestInput {
+  expected_revision: number;
+  actions: ChangeActionItemInput[];
 }
 
 export interface KitRead {
@@ -376,6 +478,8 @@ export interface KitRead {
   include_job_fit: boolean;
   include_interview_prep: boolean;
   include_linkedin_outreach: boolean;
+  revision: number;
+  parent_kit_id: string | null;
   result: ApplicationKit | null;
   error: string | null;
   created_at: string;
