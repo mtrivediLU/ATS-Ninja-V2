@@ -104,6 +104,56 @@ metadata is logged.
 - v4 kits keep their schema and are shown through the compatibility boundary
   with a regenerate prompt.
 
+## Corrections and hardening (PR #19 review)
+
+A review found the scoring and placement were not yet delivering an honest,
+recruiter-useful result. The following are now implemented and tested.
+
+### Weighted match-score formula
+
+`score_resume` computes a genuinely weighted score, not a count ratio:
+
+    score = 100 * (sum of weights of credited keywords) / (sum of all keyword weights)
+
+Required keywords (weight 2.0) contribute more than preferred/other keywords
+(1.0), so matching only the required keyword of a 2+1 pair yields 66.67%, not
+50%. Credit is boolean per unique normalized keyword, so repetition never raises
+the score, and `Java` never matches `JavaScript` (word-boundary matching).
+
+### Evidence tiers and semantic-transfer boundaries
+
+Keyword credit follows an explicit evidence-to-keyword policy:
+
+1. **Directly supported** (tier A/B/C): the exact term appears with real
+   candidate evidence; it earns strict keyword-match credit.
+2. **Strongly transferable** (`ats_engine.evidence.transfer`): the candidate's
+   evidence demonstrates the capability with different wording (e.g. a developer
+   who writes unit/integration tests, reviews code, runs CI/CD, and resolves
+   defects, applying to a "unit testing"/"test automation" requirement). A small,
+   explicit, reviewable map produces a **truthful umbrella phrase** ("software
+   testing and quality practices"), surfaced in the skills section and credited
+   toward evidence-based role alignment — but **not** toward strict keyword-match
+   for the exact JD term, so no score is inflated by a capability not directly
+   shown. Named tools/practices (Selenium, Cypress, JUnit, performance/security
+   testing, ...) are `forbidden_specifics` and are **never** produced by transfer;
+   they remain honest gaps unless stated directly.
+3. **Weak/ambiguous**: not placed automatically; treated as a gap.
+4. **Unsupported**: never added and never credited.
+
+Transfer is deterministic and bounded (no free-form inference): it fires only for
+listed JD terms when the candidate's own bullets/skills carry an explicit,
+word-boundary-matched capability signal.
+
+### Smart placement
+
+JD keyword detection gained testing/quality and general web-development
+vocabulary so those requirements reach the evidence matrix at all. Placement
+remains deterministic: skills for concise supported skills, summary for a small
+number of role-alignment themes, experience for contextual evidence, with the
+umbrella phrase used only where transfer permits. Repetition and JD-echo cannot
+raise a score; anti-stuffing (`ats_engine.validation.naturalness`) is wired into
+generation (bullet safety, duplicate-bullet removal, varied fallback closings).
+
 ## Deviations from the Fable proposal
 
 - The match report reuses the existing requirement-coverage policy for alignment

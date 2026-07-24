@@ -42,6 +42,22 @@ export default function ScoringPage() {
             </dd>
           </div>
         </dl>
+        <p className="mt-3 text-sm text-ink-secondary">
+          Keyword scores are weighted: a required keyword counts for more than a preferred one, and each
+          keyword counts once, so repeating a term or pasting the job description never raises a score.
+        </p>
+      </Card>
+
+      <Card>
+        <h2 className="text-md font-semibold">Transferable capabilities</h2>
+        <p className="mt-2 text-sm text-ink-secondary">
+          You can hold a capability a job asks for even when your resume uses different wording. For a role
+          that is part development and part testing, genuine testing work (writing unit and integration tests,
+          code reviews, CI/CD quality gates, resolving defects) is surfaced honestly as an umbrella capability
+          such as &ldquo;software testing and quality practices&rdquo;. That lifts your role alignment and makes
+          the capability visible to a recruiter, but it never invents a specific tool. A named tool you do not
+          have (for example Selenium or performance testing) stays an honest gap, never added to your resume.
+        </p>
       </Card>
 
       <Card>

@@ -72,6 +72,48 @@ revision.
 - The persisted structured document (`ResumeDocument`/`CoverLetterDocument`) is
   the reversible state; no opaque Python object is ever serialized.
 
+## Corrections and hardening (PR #19 review)
+
+### Whole-document change impact
+
+Per-change ATS impact is computed **counterfactually against the complete
+document** — `score(document with the change) - score(document without it)` —
+not by scoring an isolated snippet. A keyword that already appears elsewhere
+contributes zero impact, and a grounding removal is honestly non-positive
+(removing a fabrication never raises the real keyword match).
+
+### Stable-baseline reconstruction
+
+Reject/restore is drift-free because the delivered artifact is rebuilt from the
+immutable ledger records, never by mutating already-mutated document state. The
+cover-letter body is reconstructed from the index-ordered paragraph records
+(dropping only rejected ones), so a reject followed by a restore reproduces
+exactly the document that existed before — the earlier destructive filter that
+made restore impossible is removed. Bullet records carry the **raw** candidate
+wording (captured before style softening) so a rejected bullet restores the
+candidate's own words. Reversibility and reason are explicit per record type: a
+`grounding_removal` is permanent with a removal-specific reason, while skill
+surfacing is transparency-only (managed via regeneration), never mislabelled as a
+grounding removal.
+
+### Full revalidation on every batch
+
+After applying a batch the artifact is rebuilt from the current revision: it is
+re-grounded per unit (refreshing the ClaimRecord/evidence trace from scratch, so
+no revision-zero claims survive), re-rendered to both plain text and LaTeX, and
+revalidated (grounding + style + naturalness + LaTeX + JD-append). If the rebuilt
+artifact would be fatally invalid or ungrounded the batch is refused atomically —
+statuses roll back, nothing is persisted, and the revision does not advance.
+
+### Atomic revision concurrency
+
+The revision is advanced by a single conditional UPDATE guarded on
+`revision = expected_revision`, with the affected-row count verified to be
+exactly one. Two simultaneous requests for the same revision can no longer both
+succeed: the loser's UPDATE affects zero rows and returns 409, never overwriting
+the winner. A PostgreSQL-gated concurrency test proves exactly one of two
+concurrent requests wins.
+
 ## Deviations from the Fable proposal
 
 - Reversible bullet mapping comes from planning-time instrumentation
