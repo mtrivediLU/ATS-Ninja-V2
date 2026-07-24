@@ -7,43 +7,57 @@ from ats_engine.generation.document_render import (
     render_cover_letter_text_from_document,
     render_resume_text_from_document,
 )
+from ats_engine.generation.latex_renderer import cover_letter_to_latex, resume_to_latex
 from ats_engine.generation.planning import split_targeting_clause
 from ats_engine.kit.contract import (
     ApplicationKit,
     ArtifactKind,
+    ArtifactStatus,
+    ArtifactValidation,
     ChangeRecord,
     ChangeStatus,
     ChangeType,
+    ClaimRecord,
     CoverLetterArtifact,
+    CoverLetterDocument,
     MatchReport,
     ResumeArtifact,
     ResumeDocument,
     WeightedKeyword,
 )
-from ats_engine.kit.grounding import EvidenceContext, build_evidence_context, ground_text
+from ats_engine.kit.grounding import EvidenceContext, GroundingOutcome, build_evidence_context, ground_text
 from ats_engine.models import Profile
 from ats_engine.parsing.job_description import parse_jd
 from ats_engine.parsing.resume import build_profile
 from ats_engine.scoring.match_report import build_kit_summary, build_weighted_keywords, score_resume
-from ats_engine.validation.naturalness import validate_naturalness
+from ats_engine.validation.latex import validate_latex
+from ats_engine.validation.naturalness import detect_jd_echo, jd_appended_to_resume, validate_naturalness
+from ats_engine.validation.severity import is_fatal_validation_error
 from ats_engine.validation.style import validate_style
 
 """Safe, persisted change actions over the v5 change ledger (see ADR-0020).
 
-An action batch is deterministic, LLM-free, and idempotent. It always rebuilds
-the delivered artifacts from a stable baseline (the ledger records' own tailored
-and original text) rather than cumulatively mutating already-mutated text, so a
-reject followed by the same reject — or an accept applied twice — never drifts.
+An action batch is deterministic, LLM-free, idempotent, and **atomic**. It always
+rebuilds the delivered artifacts from a stable, immutable baseline — the ledger
+records' own original and tailored text — rather than cumulatively mutating
+already-mutated document state, so reject/restore is drift-free and a rejected
+unit can always be reconstructed exactly.
+
+After applying the batch to a rebuilt document the whole artifact is re-rendered
+(text **and** LaTeX), re-grounded per unit (refreshing the claim/evidence trace,
+never retaining revision-zero claims), and revalidated (grounding + style +
+naturalness + LaTeX). If the rebuilt artifact would be fatally invalid or
+ungrounded the batch is refused atomically: nothing is persisted and the revision
+does not advance.
 
 Safety rules:
 
 - An irreversible record (a truth-grounding removal) can only be accepted; a
   reject or restore against it is refused. Fabricated text stays gone.
-- Rejecting a rewrite restores the candidate's original text byte-for-byte.
+- Rejecting a rewrite restores the candidate's original text.
 - Rejecting an added unit (summary, targeting clause, cover paragraph) removes it.
-- After a batch, the artifacts are re-rendered, re-grounded, re-validated, and
-  the tailored keyword-match score, keyword coverage, and kit summary are
-  recomputed. The revision is incremented once per successful batch.
+- The tailored keyword-match score, keyword coverage, and kit summary are
+  recomputed; the revision increments once per successful batch.
 """
 
 ACTION_ACCEPT = "accept"
@@ -67,6 +81,13 @@ class ChangeActionResult:
     @property
     def ok(self) -> bool:
         return not self.conflict and not self.errors
+
+
+@dataclass(slots=True)
+class _RebuildOutcome:
+    text: str
+    fatal: bool
+    errors: list[str] = field(default_factory=list)
 
 
 def apply_change_actions(
@@ -93,7 +114,9 @@ def apply_change_actions(
     if errors:
         return ChangeActionResult(kit=kit, errors=errors)
 
-    # Apply statuses (idempotent: setting the same status twice is a no-op).
+    # Snapshot statuses so we can roll back if the rebuilt artifact is invalid.
+    previous_status = {record_id: record.status for record_id, record in records.items()}
+
     for action in actions:
         record = records[action.change_id]
         if action.action == ACTION_ACCEPT:
@@ -112,15 +135,26 @@ def apply_change_actions(
     tier_by_keyword = {item.keyword.casefold().strip(): item.evidence_tier for item in evidence}
     context = build_evidence_context(profile, jd_profile)
 
+    rebuild_errors: list[str] = []
     new_resume_text: str | None = None
     if kit.resume is not None and kit.resume.document is not None:
-        new_resume_text = _rebuild_resume(kit.resume, context)
+        outcome = _rebuild_resume(kit.resume, context, job_description)
+        new_resume_text = outcome.text
+        if outcome.fatal:
+            rebuild_errors.extend(outcome.errors)
     if kit.cover_letter is not None and kit.cover_letter.document is not None:
-        _rebuild_cover_letter(kit.cover_letter, context)
+        outcome = _rebuild_cover_letter(kit.cover_letter, context)
+        if outcome.fatal:
+            rebuild_errors.extend(outcome.errors)
 
-    # Recompute the tailored keyword-match score and kit summary from the
-    # re-rendered resume. Alignment/confidence are evidence-based and unchanged
-    # by content edits, so only the tailored figures move.
+    if rebuild_errors:
+        # Atomic refusal: roll back statuses; the caller must not persist.
+        for record_id, status in previous_status.items():
+            records[record_id].status = status
+        return ChangeActionResult(
+            kit=kit, errors=["The change could not be applied without invalidating the artifact.", *rebuild_errors]
+        )
+
     if kit.match_report is not None and new_resume_text is not None:
         _recompute_match_report(kit.match_report, new_resume_text, keywords, profile, tier_by_keyword)
 
@@ -151,8 +185,10 @@ def _validate_actions(actions: list[ChangeAction], records: dict[str, ChangeReco
     return errors
 
 
-def _rebuild_resume(resume: ResumeArtifact, context: EvidenceContext) -> str:
-    """Rebuild the resume document from ledger statuses, re-render, and re-ground."""
+# --------------------------------------------------------------------------- #
+# Resume rebuild (stable baseline -> ledger state -> re-render -> re-ground)
+# --------------------------------------------------------------------------- #
+def _rebuild_resume(resume: ResumeArtifact, context: EvidenceContext, job_description: str) -> _RebuildOutcome:
     document = resume.document
     assert document is not None
     ledger = {record.id: record for record in resume.change_ledger}
@@ -167,32 +203,131 @@ def _rebuild_resume(resume: ResumeArtifact, context: EvidenceContext) -> str:
         text = record.original_text if record.status is ChangeStatus.REJECTED else record.tailored_text
         _set_bullet(document, record.id, text)
 
-    rendered = render_resume_text_from_document(document)
-    rendered = _reground(rendered, ArtifactKind.RESUME, context)
-    resume.text = rendered
-    _revalidate_warnings(resume, rendered)
-    return rendered
+    # Re-ground every editable unit and refresh the claim trace from scratch, so
+    # no revision-zero claims survive a content change.
+    claims: list[ClaimRecord] = []
+    repaired = 0
+    rejected = 0
+    if document.summary:
+        outcome = ground_text(
+            document.summary, artifact=ArtifactKind.RESUME, context=context, id_prefix="resume-rev-summary"
+        )
+        document.summary = outcome.clean_text
+        claims, repaired, rejected = _merge_outcome(outcome, claims, repaired, rejected)
+    for exp_index, entry in enumerate(document.experience):
+        cleaned: list[str] = []
+        for bullet_index, bullet in enumerate(entry.bullets):
+            if not bullet.strip():
+                cleaned.append(bullet)
+                continue
+            outcome = ground_text(
+                bullet,
+                artifact=ArtifactKind.RESUME,
+                context=context,
+                id_prefix=f"resume-rev-exp{exp_index}-bullet{bullet_index}",
+                granularity="span",
+            )
+            cleaned.append(outcome.clean_text)
+            claims, repaired, rejected = _merge_outcome(outcome, claims, repaired, rejected)
+        entry.bullets = cleaned
+
+    text = render_resume_text_from_document(document)
+    latex = resume_to_latex(text, _resume_user_info(document))
+
+    errors = _structural_errors(text, latex, job_description)
+    fatal = rejected > 0 or any(is_fatal_validation_error(error) for error in errors)
+    _apply_validation(resume, claims=claims, repaired=repaired, rejected=rejected, fatal=fatal, text=text, latex=latex)
+    return _RebuildOutcome(text=text, fatal=fatal, errors=errors)
 
 
-def _rebuild_cover_letter(cover: CoverLetterArtifact, context: EvidenceContext) -> None:
+def _rebuild_cover_letter(cover: CoverLetterArtifact, context: EvidenceContext) -> _RebuildOutcome:
     document = cover.document
     assert document is not None
-    rejected_paragraphs = {
-        record.tailored_text
-        for record in cover.change_ledger
-        if record.change_type is ChangeType.COVER_LETTER_PARAGRAPH and record.status is ChangeStatus.REJECTED
-    }
-    document.body_paragraphs = [
-        paragraph for paragraph in document.body_paragraphs if paragraph not in rejected_paragraphs
-    ]
-    rendered = render_cover_letter_text_from_document(document)
-    rendered = _reground(rendered, ArtifactKind.COVER_LETTER, context)
-    cover.text = rendered
-    _revalidate_warnings(cover, rendered)
+
+    # Reconstruct body paragraphs from the immutable ledger records in index
+    # order, dropping only rejected ones. This never destroys a paragraph, so a
+    # reject followed by a restore reproduces the exact prior document.
+    paragraph_records = sorted(
+        (r for r in cover.change_ledger if r.change_type is ChangeType.COVER_LETTER_PARAGRAPH),
+        key=lambda record: _paragraph_index(record.id),
+    )
+    if paragraph_records:
+        document.body_paragraphs = [
+            record.tailored_text for record in paragraph_records if record.status is not ChangeStatus.REJECTED
+        ]
+
+    claims: list[ClaimRecord] = []
+    repaired = 0
+    rejected = 0
+    cleaned_paragraphs: list[str] = []
+    for index, paragraph in enumerate(document.body_paragraphs):
+        outcome = ground_text(
+            paragraph, artifact=ArtifactKind.COVER_LETTER, context=context, id_prefix=f"cover-rev-p{index}"
+        )
+        cleaned_paragraphs.append(outcome.clean_text)
+        claims, repaired, rejected = _merge_outcome(outcome, claims, repaired, rejected)
+    document.body_paragraphs = cleaned_paragraphs
+
+    text = render_cover_letter_text_from_document(document)
+    latex = cover_letter_to_latex(text, _cover_user_info(document))
+
+    errors = [f"cover letter latex: {error}" for error in validate_latex(latex)]
+    fatal = rejected > 0 or any(is_fatal_validation_error(error) for error in errors)
+    _apply_validation(cover, claims=claims, repaired=repaired, rejected=rejected, fatal=fatal, text=text, latex=latex)
+    return _RebuildOutcome(text=text, fatal=fatal, errors=errors)
+
+
+# --------------------------------------------------------------------------- #
+# Helpers
+# --------------------------------------------------------------------------- #
+def _merge_outcome(
+    outcome: GroundingOutcome, claims: list[ClaimRecord], repaired: int, rejected: int
+) -> tuple[list[ClaimRecord], int, int]:
+    claims.extend(outcome.claims)
+    return claims, repaired + outcome.repaired, rejected + outcome.rejected
+
+
+def _structural_errors(text: str, latex: str, job_description: str) -> list[str]:
+    """Structural + anti-stuffing checks that can make a rebuilt resume unusable."""
+    errors = [f"resume latex: {error}" for error in validate_latex(latex)]
+    if jd_appended_to_resume(text, job_description):
+        errors.append("stuffing: the resume echoes a large block of the job description verbatim")
+    return errors
+
+
+def _apply_validation(
+    artifact: ResumeArtifact | CoverLetterArtifact,
+    *,
+    claims: list[ClaimRecord],
+    repaired: int,
+    rejected: int,
+    fatal: bool,
+    text: str,
+    latex: str,
+) -> None:
+    """Replace the artifact's claim trace, validation, rendered text, and LaTeX.
+
+    Revision-zero claims and rendered output are discarded — everything is rebuilt
+    from the current revision's content.
+    """
+    warnings: list[str] = []
+    warnings.extend(f"style: {error}" for error in validate_style(text))
+    warnings.extend(f"naturalness: {message}" for message in validate_naturalness(text, []))
+    status = ArtifactStatus.REJECTED if fatal else (ArtifactStatus.REPAIRED if repaired else ArtifactStatus.GENERATED)
+    artifact.claims = claims
+    artifact.text = "" if fatal else text
+    artifact.latex = "" if fatal else latex
+    artifact.validation = ArtifactValidation(
+        status=status,
+        fatal=fatal,
+        errors=[] if not fatal else ["revision: rebuilt artifact failed validation"],
+        warnings=warnings,
+        repaired_claims=repaired,
+        rejected_claims=rejected,
+    )
 
 
 def _effective_added(record: ChangeRecord | None) -> str:
-    """The delivered text of an added unit: its tailored text unless rejected."""
     if record is None:
         return ""
     return "" if record.status is ChangeStatus.REJECTED else record.tailored_text
@@ -211,23 +346,19 @@ def _set_bullet(document: ResumeDocument, location_id: str, text: str) -> None:
             bullets[bullet_index] = text
 
 
-def _reground(text: str, artifact: ArtifactKind, context: EvidenceContext) -> str:
-    """Re-run the grounding gate over changed text as a safety net.
-
-    Restoring candidate-original text or removing generated text can never
-    introduce a fabrication, so this normally returns ``text`` unchanged; it
-    exists so a change action can never ship ungrounded content.
-    """
-    outcome = ground_text(text, artifact=artifact, context=context, id_prefix=f"{artifact.value}-revision")
-    return outcome.clean_text
+def _paragraph_index(location_id: str) -> int:
+    try:
+        return int(location_id.rsplit("::p", 1)[-1])
+    except (ValueError, IndexError):
+        return 0
 
 
-def _revalidate_warnings(artifact: ResumeArtifact | CoverLetterArtifact, text: str) -> None:
-    """Refresh non-fatal style/naturalness warnings on the artifact after a change."""
-    warnings = [warning for warning in artifact.validation.warnings if not warning.startswith("revision:")]
-    for message in (*validate_style(text), *validate_naturalness(text, [])):
-        warnings.append(f"revision: {message}")
-    artifact.validation.warnings = warnings
+def _resume_user_info(document: ResumeDocument) -> dict[str, str]:
+    return {"name": document.candidate_name, "headline": document.professional_headline}
+
+
+def _cover_user_info(document: CoverLetterDocument) -> dict[str, str]:
+    return {"name": document.sender_name}
 
 
 def _recompute_match_report(
@@ -262,5 +393,6 @@ __all__ = [
     "ChangeAction",
     "ChangeActionResult",
     "apply_change_actions",
+    "detect_jd_echo",
     "split_targeting_clause",
 ]

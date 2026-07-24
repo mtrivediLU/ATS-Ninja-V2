@@ -311,3 +311,59 @@ def test_unknown_change_id_is_rejected() -> None:
     )
     assert not result.ok
     assert any("Unknown change id" in e for e in result.errors)
+
+
+def test_cover_letter_reject_then_restore_reproduces_baseline() -> None:
+    kit = generate_application_kit(
+        resume_text=SYNTHETIC_RESUME,
+        job_description=SYNTHETIC_JD,
+        use_llm=False,
+        include_resume=True,
+        include_cover_letter=True,
+    )
+    assert kit.cover_letter is not None and kit.cover_letter.document is not None
+    baseline = list(kit.cover_letter.document.body_paragraphs)
+    target = next(
+        r for r in kit.cover_letter.change_ledger if r.change_type is ChangeType.COVER_LETTER_PARAGRAPH and r.reversible
+    )
+    rejected = apply_change_actions(
+        kit=kit,
+        resume_text=SYNTHETIC_RESUME,
+        job_description=SYNTHETIC_JD,
+        actions=[ChangeAction(target.id, "reject")],
+        expected_revision=0,
+    )
+    assert rejected.ok
+    assert len(rejected.kit.cover_letter.document.body_paragraphs) == len(baseline) - 1
+    restored = apply_change_actions(
+        kit=rejected.kit,
+        resume_text=SYNTHETIC_RESUME,
+        job_description=SYNTHETIC_JD,
+        actions=[ChangeAction(target.id, "restore")],
+        expected_revision=1,
+    )
+    assert restored.ok
+    # Reject followed by restore reproduces exactly the document that existed before.
+    assert restored.kit.cover_letter.document.body_paragraphs == baseline
+
+
+def test_change_action_refreshes_claims_latex_and_revalidates() -> None:
+    kit = generate_application_kit(
+        resume_text=SYNTHETIC_RESUME, job_description=SYNTHETIC_JD, use_llm=False, include_resume=True
+    )
+    assert kit.resume is not None
+    result = apply_change_actions(
+        kit=kit,
+        resume_text=SYNTHETIC_RESUME,
+        job_description=SYNTHETIC_JD,
+        actions=[ChangeAction("resume::summary", "accept")],
+        expected_revision=0,
+    )
+    assert result.ok
+    resume = result.kit.resume
+    # Rendered representations are regenerated from the current revision.
+    assert resume.text
+    assert resume.latex.startswith("\\documentclass")
+    # Validation is refreshed (status is a valid post-rebuild state, never fatal here).
+    assert resume.validation.status.value in {"generated", "repaired"}
+    assert resume.validation.fatal is False
