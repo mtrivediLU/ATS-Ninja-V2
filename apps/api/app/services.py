@@ -4,6 +4,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
+from typing import Any, cast
 from uuid import UUID
 
 from ats_engine import (
@@ -20,7 +21,8 @@ from ats_engine import (
     resolve_artifact_selection,
 )
 from ats_engine.generation import mode_from_text
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
@@ -217,9 +219,14 @@ async def apply_kit_change_actions(
 ) -> ChangeActionOutcome:
     """Apply a batch of accept/reject/restore actions to a completed v5 kit.
 
-    Deterministic and LLM-free. Optimistic concurrency: the batch is refused with
-    a conflict if ``expected_revision`` does not match the stored revision. On
-    success the updated result is persisted and the revision incremented once.
+    Deterministic and LLM-free. **Atomic** optimistic concurrency: the JSON
+    artifact, revision, and timestamp are written by a single conditional UPDATE
+    guarded on ``revision = expected_revision``. If exactly one row is not
+    affected, another request advanced the revision first and this batch is
+    refused with a 409 conflict. Two simultaneous requests for the same revision
+    therefore cannot both succeed — the loser never overwrites the winner. On
+    PostgreSQL this is a genuine atomic compare-and-set; the Python-side revision
+    check below is only a fast, friendly pre-check for the common serial case.
     """
     kit = await session.get(Kit, kit_id)
     if kit is None:
@@ -228,12 +235,14 @@ async def apply_kit_change_actions(
         return ChangeActionOutcome(status="not_completed", kit=kit)
     if not is_application_kit_v5(kit.result):
         return ChangeActionOutcome(status="not_completed", kit=kit, errors=["Change actions require a v5 kit."])
+    if kit.revision != expected_revision:
+        return ChangeActionOutcome(status="conflict", kit=kit, errors=["Revision conflict."])
 
     normalized = normalize_persisted_result(kit.result)
     if normalized is None:
         return ChangeActionOutcome(status="not_completed", kit=kit)
     application_kit = application_kit_from_dict(normalized)
-    application_kit.revision = kit.revision  # DB row is the authoritative revision.
+    application_kit.revision = expected_revision
 
     result = await asyncio.to_thread(
         apply_change_actions,
@@ -248,11 +257,26 @@ async def apply_kit_change_actions(
     if result.errors:
         return ChangeActionOutcome(status="invalid", kit=kit, errors=result.errors)
 
-    kit.result = application_kit_to_dict(result.kit)
-    kit.revision = result.kit.revision
+    new_revision = result.kit.revision
+    new_result = application_kit_to_dict(result.kit)
+    # Atomic compare-and-set: only the request whose expected_revision still
+    # matches the stored revision wins; a concurrent winner leaves rowcount 0.
+    updated = cast(
+        "CursorResult[Any]",
+        await session.execute(
+            update(Kit)
+            .where(Kit.id == kit_id, Kit.revision == expected_revision)
+            .values(result=new_result, revision=new_revision, updated_at=func.now())
+        ),
+    )
+    if updated.rowcount != 1:
+        await session.rollback()
+        return ChangeActionOutcome(status="conflict", kit=kit, errors=["Revision conflict."])
     await session.commit()
+    # Reload the ORM object eagerly so the sync response serializer never triggers
+    # a lazy load outside the async context.
     await session.refresh(kit)
-    logger.info("apply_kit_change_actions: kit %s advanced to revision %s", kit_id, kit.revision)
+    logger.info("apply_kit_change_actions: kit %s advanced to revision %s", kit_id, new_revision)
     return ChangeActionOutcome(status="ok", kit=kit)
 
 

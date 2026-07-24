@@ -626,3 +626,17 @@ async def test_pdf_export_uses_current_revision(client: httpx.AsyncClient) -> No
     )
     assert export.status_code == 200
     assert export.headers["content-type"] == "application/pdf"
+
+
+async def test_stale_expected_revision_second_request_conflicts(client: httpx.AsyncClient) -> None:
+    # Two requests both expecting revision 0: the first advances to 1, the second
+    # (still expecting 0) must be refused with 409 by the atomic revision guard.
+    body = await _create_completed_kit(client)
+    kit_id = body["id"]
+    reversible = next(r for r in body["result"]["resume"]["change_ledger"] if r["reversible"])
+    action = {"expected_revision": 0, "actions": [{"change_id": reversible["id"], "action": "accept"}]}
+    first = await client.post(f"/api/v1/kits/{kit_id}/change-actions", json=action)
+    assert first.status_code == 200
+    assert first.json()["revision"] == 1
+    second = await client.post(f"/api/v1/kits/{kit_id}/change-actions", json=action)
+    assert second.status_code == 409
