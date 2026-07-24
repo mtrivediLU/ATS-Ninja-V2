@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, DateTime, String, Text, Uuid, func
+from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -47,6 +47,13 @@ class Kit(Base):
     # Output (serialized KitResult) and failure detail.
     result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # v5 lineage + revision. ``revision`` is the authoritative optimistic-
+    # concurrency counter for change actions (0 at creation, +1 per applied
+    # batch). ``parent_kit_id`` links a regenerated kit to the kit it was
+    # regenerated from; the source kit is never overwritten.
+    revision: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    parent_kit_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True, index=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(

@@ -3,14 +3,20 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from dataclasses import dataclass, field
 from uuid import UUID
 
 from ats_engine import (
+    ChangeAction,
     OutreachAudience,
     OutreachContext,
     OutreachIntent,
+    application_kit_from_dict,
     application_kit_to_dict,
+    apply_change_actions,
     generate_application_kit,
+    is_application_kit_v5,
+    normalize_persisted_result,
     resolve_artifact_selection,
 )
 from ats_engine.generation import mode_from_text
@@ -19,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
 from app.models import Kit
-from app.schemas import KitCreate, KitStatus
+from app.schemas import ChangeActionItem, KitCreate, KitStatus
 
 """Kit application service.
 
@@ -191,6 +197,109 @@ def _outreach_context(raw: dict[str, object] | None) -> OutreachContext | None:
         personalization_note=str(raw.get("personalization_note", "")),
         portfolio_url=str(raw.get("portfolio_url", "")),
     )
+
+
+@dataclass(slots=True)
+class ChangeActionOutcome:
+    """Result of applying a change-action batch, mapped to an HTTP status by the router."""
+
+    status: str  # "ok" | "not_found" | "not_completed" | "conflict" | "invalid"
+    kit: Kit | None = None
+    errors: list[str] = field(default_factory=list)
+
+
+async def apply_kit_change_actions(
+    session: AsyncSession,
+    kit_id: UUID,
+    *,
+    expected_revision: int,
+    actions: list[ChangeActionItem],
+) -> ChangeActionOutcome:
+    """Apply a batch of accept/reject/restore actions to a completed v5 kit.
+
+    Deterministic and LLM-free. Optimistic concurrency: the batch is refused with
+    a conflict if ``expected_revision`` does not match the stored revision. On
+    success the updated result is persisted and the revision incremented once.
+    """
+    kit = await session.get(Kit, kit_id)
+    if kit is None:
+        return ChangeActionOutcome(status="not_found")
+    if kit.status != KitStatus.COMPLETED or kit.result is None:
+        return ChangeActionOutcome(status="not_completed", kit=kit)
+    if not is_application_kit_v5(kit.result):
+        return ChangeActionOutcome(status="not_completed", kit=kit, errors=["Change actions require a v5 kit."])
+
+    normalized = normalize_persisted_result(kit.result)
+    if normalized is None:
+        return ChangeActionOutcome(status="not_completed", kit=kit)
+    application_kit = application_kit_from_dict(normalized)
+    application_kit.revision = kit.revision  # DB row is the authoritative revision.
+
+    result = await asyncio.to_thread(
+        apply_change_actions,
+        kit=application_kit,
+        resume_text=kit.resume_text,
+        job_description=kit.job_description,
+        actions=[ChangeAction(item.change_id, item.action) for item in actions],
+        expected_revision=expected_revision,
+    )
+    if result.conflict:
+        return ChangeActionOutcome(status="conflict", kit=kit, errors=result.errors)
+    if result.errors:
+        return ChangeActionOutcome(status="invalid", kit=kit, errors=result.errors)
+
+    kit.result = application_kit_to_dict(result.kit)
+    kit.revision = result.kit.revision
+    await session.commit()
+    await session.refresh(kit)
+    logger.info("apply_kit_change_actions: kit %s advanced to revision %s", kit_id, kit.revision)
+    return ChangeActionOutcome(status="ok", kit=kit)
+
+
+async def delete_kit(session: AsyncSession, kit_id: UUID) -> bool:
+    """Hard-delete a local kit row. Returns False when the kit does not exist.
+
+    Never logs candidate content — only the kit id.
+    """
+    kit = await session.get(Kit, kit_id)
+    if kit is None:
+        return False
+    await session.delete(kit)
+    await session.commit()
+    logger.info("delete_kit: kit %s deleted", kit_id)
+    return True
+
+
+async def regenerate_kit(session: AsyncSession, kit_id: UUID) -> Kit | None:
+    """Create a new pending kit from a source kit's stored inputs and selection.
+
+    The new kit links to the source via ``parent_kit_id`` and starts at revision
+    0. The source kit is never modified. The caller enqueues generation.
+    """
+    source = await session.get(Kit, kit_id)
+    if source is None:
+        return None
+    new_kit = Kit(
+        status=KitStatus.PENDING,
+        resume_text=source.resume_text,
+        job_description=source.job_description,
+        requested_mode=source.requested_mode,
+        questions_text=source.questions_text,
+        include_resume=source.include_resume,
+        include_cover_letter=source.include_cover_letter,
+        include_application_answers=source.include_application_answers,
+        include_job_fit=source.include_job_fit,
+        include_interview_prep=source.include_interview_prep,
+        include_linkedin_outreach=source.include_linkedin_outreach,
+        outreach_context=source.outreach_context,
+        parent_kit_id=source.id,
+        revision=0,
+    )
+    session.add(new_kit)
+    await session.commit()
+    await session.refresh(new_kit)
+    logger.info("regenerate_kit: kit %s regenerated from %s", new_kit.id, kit_id)
+    return new_kit
 
 
 async def mark_kit_failed(session: AsyncSession, kit_id: UUID, error: str) -> None:
