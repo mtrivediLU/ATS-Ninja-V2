@@ -20,6 +20,7 @@ from ats_engine.models import (
 )
 from ats_engine.parsing.resume import find_metrics, term_in_text
 from ats_engine.providers.base import LLMProvider, generate_json, generate_text, run_concurrently
+from ats_engine.validation.naturalness import bullet_safety_errors, dedupe_bullets, select_summary_closing
 from ats_engine.validation.repair import soften_banned_style
 from ats_engine.validation.style import validate_style
 
@@ -468,10 +469,11 @@ def _fallback_summary(
     # A target title is never claimed as held experience — it is framed only
     # as what the candidate is targeting, in its own clearly separate clause.
     target_clause = f" Targeting {jd_profile.title} opportunities." if _is_real_target_title(jd_profile.title) else ""
-    return (
-        f"{role_identity}{years_clause}{skills_clause}.{domain_clause}{target_clause} "
-        "Focused on shipping reliable, well-scoped work and communicating clearly with stakeholders."
-    )
+    # Deterministic bounded variation of the closing sentence (>= 6-entry pool),
+    # keyed by a stable candidate/JD seed, so different candidates do not all get
+    # the identical filler while the same input is always reproducible.
+    closing = select_summary_closing(f"{role_identity}|{jd_profile.title}|{jd_profile.company}|{skills_clause}")
+    return f"{role_identity}{years_clause}{skills_clause}.{domain_clause}{target_clause} {closing}"
 
 
 def _is_real_target_title(title: str) -> bool:
@@ -584,6 +586,10 @@ def _select_experience(
             key=lambda bullet: _bullet_score(bullet, keywords),
             reverse=True,
         )
+        # Drop exact near-duplicate candidate bullets (extraction artifacts) before
+        # tailoring, so the same statement is never surfaced twice — deterministic
+        # anti-stuffing that removes only repeated content, never unique wording.
+        scored_bullets = dedupe_bullets(scored_bullets)
         chosen: list[str] = [soften_banned_style(bullet) for bullet in scored_bullets]
         # Keep the entry even with zero bullets (company/title/dates only):
         # dropping it here would silently discard a verified source-profile
@@ -699,7 +705,13 @@ def _bullet_is_valid(candidate: str, original: str, known_skills: list[str]) -> 
     found = {metric.lower() for metric in find_metrics(candidate)}
     if not found.issubset(allowed):
         return False
-    return not _introduces_new_skill(candidate, original, known_skills)
+    if _introduces_new_skill(candidate, original, known_skills):
+        return False
+    # Deterministic naturalness/anti-stuffing gate: rejects first-person, ownership
+    # or seniority escalation, awkward length, and new tools/metrics not in the
+    # original bullet. On any failure the caller keeps the candidate-original
+    # bullet, so this can only preserve truthful wording, never fabricate.
+    return not bullet_safety_errors(candidate, original, known_skills)
 
 
 def _introduces_new_skill(rewritten: str, original: str, known_skills: list[str]) -> bool:

@@ -220,6 +220,9 @@ def bullet_safety_errors(candidate: str, original: str, known_skills: list[str])
     if len(candidate_words) > MAX_BULLET_WORDS:
         errors.append(f"rewrite exceeds {MAX_BULLET_WORDS} words")
 
+    if "—" in candidate or "–" in candidate or "--" in candidate:
+        errors.append("rewrite uses an em dash, en dash, or double hyphen")
+
     if _FIRST_PERSON_RE.search(candidate):
         errors.append("rewrite uses first person")
 

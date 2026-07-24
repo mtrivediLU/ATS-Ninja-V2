@@ -92,3 +92,50 @@ def test_safe_bullet_falls_back_to_original() -> None:
     assert safe_bullet("I spearheaded 500 deployments", "Helped with deployments", []) == "Helped with deployments"
     good = "Optimized the reporting pipeline for the finance team"
     assert safe_bullet(good, "Built the reporting pipeline for finance", []) == good
+
+
+def test_fallback_summary_uses_varied_pool_closing() -> None:
+    # The deterministic fallback summary must end with a closing drawn from the
+    # naturalness pool (wired into generation), not the old fixed sentence.
+    import sys
+
+    sys.path.insert(0, "packages/engine/tests")
+    from ats_engine.generation.planning import build_resume_plan
+    from ats_engine.parsing.job_description import parse_jd
+    from ats_engine.parsing.resume import build_profile
+
+    resume = (
+        "Alex Morgan\nProfessional Experience\nCompany: Acme\nTitle: Engineer\nDates: 2019 - 2024\n"
+        "- Built Python services and SQL reports\nSkills\nPython, SQL\n"
+    )
+    profile = build_profile(resume)
+    jd = parse_jd("Engineer at TechCo. Required: Python, SQL.")
+    plan = build_resume_plan(contacts=profile.contact, jd_profile=jd, profile=profile, provider=None)
+    assert any(plan.summary.rstrip().endswith(closing) for closing in SUMMARY_CLOSINGS)
+    assert "Focused on shipping reliable, well-scoped work" not in plan.summary
+
+
+def test_bullet_validation_is_wired_to_reject_escalation_and_first_person() -> None:
+    from ats_engine.generation.planning import _bullet_is_valid
+
+    # ownership escalation and first person must be rejected by the wired gate.
+    assert (
+        _bullet_is_valid(
+            "Optimized the reporting pipeline for the finance team", "Built the reporting pipeline for finance", []
+        )
+        is True
+    )
+    assert (
+        _bullet_is_valid(
+            "I led the reporting pipeline for the finance team", "Built the reporting pipeline for finance", []
+        )
+        is False
+    )
+    assert (
+        _bullet_is_valid(
+            "Led the reporting pipeline for the finance department team",
+            "Contributed to the reporting pipeline for finance",
+            [],
+        )
+        is False
+    )
