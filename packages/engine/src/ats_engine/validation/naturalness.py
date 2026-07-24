@@ -67,6 +67,14 @@ def _normalize_words(text: str) -> list[str]:
     return _WORD_RE.findall((text or "").lower())
 
 
+def normalized_bullet_key(text: str) -> str:
+    """Stable, case/spacing-insensitive key for duplicate detection of a bullet.
+
+    Two bullets that normalize to the same key are exact near-duplicates (same
+    words in the same order, ignoring case and punctuation spacing)."""
+    return " ".join(_normalize_words(text))
+
+
 def _stable_index(seed: str, count: int) -> int:
     if count <= 0:
         return 0
@@ -82,8 +90,15 @@ def select_summary_closing(seed: str) -> str:
 # 1. Keyword repetition / stuffing
 # --------------------------------------------------------------------------- #
 def _overall_repeat_limit(word_count: int) -> int:
-    """Allowed total occurrences of any one keyword across the whole document."""
-    return max(2, math.ceil(word_count / 150))
+    """Allowed total occurrences of any one keyword across the whole document.
+
+    Calibrated for real delivered documents: a core skill legitimately recurs
+    across a resume's professional summary, its skills section, and several
+    experience bullets, so the floor is deliberately generous. Genuine mechanical
+    stuffing (a keyword jammed many times over) still exceeds it. (The previous
+    ``max(2, ...)`` floor predated any production caller and flagged ordinary
+    expertise, e.g. "python" appearing four times in a developer's resume.)"""
+    return max(6, math.ceil(word_count / 90))
 
 
 def detect_keyword_stuffing(text: str, bullets: list[str], keywords: list[str]) -> list[str]:
@@ -111,11 +126,18 @@ def detect_keyword_stuffing(text: str, bullets: list[str], keywords: list[str]) 
         per_bullet_hits = 0
         for bullet in bullets:
             occurrences = _count_occurrences(bullet, keyword)
-            if occurrences >= 2:
+            # Two mentions in one bullet is often legitimate ("migrated SQL Server
+            # to a SQL warehouse"); three or more of the same keyword in a single
+            # bullet is mechanical repetition.
+            if occurrences >= 3:
                 warnings.append(f"keyword '{keyword}' appears {occurrences} times in a single bullet")
             if occurrences >= 1:
                 per_bullet_hits += 1
-        if bullet_count >= 2 and per_bullet_hits * 2 > bullet_count:
+        # Only flag a keyword that saturates the great majority of bullets, and
+        # only once there are enough bullets for that to be meaningful. A core
+        # competency appearing in two of three bullets is normal expertise, not
+        # stuffing; a term mechanically pasted into five of six bullets is not.
+        if bullet_count >= 5 and per_bullet_hits * 5 > bullet_count * 3:
             warnings.append(f"keyword '{keyword}' appears in {per_bullet_hits} of {bullet_count} bullets")
 
     return warnings
@@ -278,8 +300,34 @@ def safe_bullet(candidate: str, original: str, known_skills: list[str]) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# 4. Top-level prose naturalness (non-fatal warnings)
+# 4. Authoritative production naturalness / anti-stuffing gate
 # --------------------------------------------------------------------------- #
+def production_naturalness_warnings(
+    *,
+    text: str,
+    units: list[str],
+    keywords: list[str],
+    job_description: str,
+) -> list[str]:
+    """The single authoritative anti-stuffing / JD-echo report for delivered prose.
+
+    One entry point used by every production path (initial generation, change
+    actions, regeneration, final delivery) so the checks can never silently drift
+    apart. It receives the complete rendered ``text``, the structured ``units``
+    (resume bullets or cover-letter paragraphs), the actual unified JD ``keywords``
+    vocabulary, and the raw ``job_description``. Findings are naturalness warnings
+    (see the module docstring); they become fatal only when they also trip a
+    truth-critical rule enforced elsewhere (grounding) or an explicit usable-output
+    gate (word count / structural) in the caller.
+    """
+    warnings: list[str] = []
+    warnings.extend(f"stuffing: {message}" for message in detect_keyword_stuffing(text, units, keywords))
+    warnings.extend(
+        f"jd-echo: {message}" for message in detect_jd_echo(text, job_description, keyword_phrases=keywords)
+    )
+    return warnings
+
+
 def validate_naturalness(text: str, keywords: list[str]) -> list[str]:
     """Naturalness warnings for a single piece of generated prose.
 
@@ -312,6 +360,8 @@ __all__ = [
     "detect_keyword_stuffing",
     "jd_appended_to_resume",
     "keyword_present",
+    "normalized_bullet_key",
+    "production_naturalness_warnings",
     "safe_bullet",
     "select_summary_closing",
     "validate_naturalness",

@@ -37,10 +37,32 @@ def validate_completeness(result: PipelineResult, profile: Profile) -> list[str]
     return _dedupe(errors)
 
 
+def resume_completeness_errors(resume_text: str, profile: Profile) -> list[str]:
+    """Completeness errors for a rendered resume text against its source profile.
+
+    The text-only entry point (no ``PipelineResult`` needed) used by the change-
+    action rebuild so a persisted revision is held to the same completeness bar as
+    initial generation: no source employer, distinct bullet, skill, education, or
+    certification may silently disappear."""
+    if not resume_text.strip():
+        return []
+    sections = parse_resume_sections(resume_text)
+    errors = _validate_resume_completeness(sections, profile)
+    errors.extend(_validate_empty_labels(resume_text, "resume"))
+    return _dedupe(errors)
+
+
 def _validate_resume_completeness(sections: dict[str, Any], profile: Profile) -> list[str]:
     errors: list[str] = []
     source_experience_count = len(profile.experiences)
-    source_bullet_count = sum(len(entry.bullets) for entry in profile.experiences)
+    # Count *distinct* source bullets per entry. The rendered resume is re-parsed
+    # by ``parse_resume_sections``, which deduplicates identical bullet lines
+    # within an entry, so comparing against a raw (un-deduplicated) source count
+    # would falsely flag a candidate's own duplicate bullet as lost content and
+    # withhold an otherwise valid resume. Counting distinct bullets keeps the
+    # comparison apples-to-apples: a genuinely dropped *distinct* bullet still
+    # lowers the output count below the source and is still caught below.
+    source_bullet_count = sum(len(_distinct_bullets(entry.bullets)) for entry in profile.experiences)
     source_skill_count = len(_profile_skills(profile))
     output_experience_count = len(sections.get("experience") or [])
     output_bullet_count = sum(len(entry.get("bullets") or []) for entry in sections.get("experience") or [])
@@ -61,6 +83,19 @@ def _validate_resume_completeness(sections: dict[str, Any], profile: Profile) ->
     if profile.certifications and not sections.get("certifications"):
         errors.append("completeness: source certifications exist but rendered resume has no certifications")
     return errors
+
+
+def _distinct_bullets(bullets: list[str]) -> list[str]:
+    """Distinct bullets within one entry, keyed the same way the resume parser
+    deduplicates them (case-insensitive, whitespace-trimmed)."""
+    seen: set[str] = set()
+    distinct: list[str] = []
+    for bullet in bullets:
+        key = (bullet or "").lower().strip()
+        if key and key not in seen:
+            seen.add(key)
+            distinct.append(bullet)
+    return distinct
 
 
 def _profile_skills(profile: Profile) -> set[str]:

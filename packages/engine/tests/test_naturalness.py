@@ -13,22 +13,54 @@ from ats_engine.validation.naturalness import (
 
 
 def test_overall_keyword_density_threshold() -> None:
-    text = "python " * 6  # 6 occurrences, word_count 6 -> limit max(2, ceil(6/150))=2
+    # 12 occurrences in a 12-word text -> limit max(6, ceil(12/90))=6; 12 > 6 flags.
+    text = "python " * 12
     warnings = detect_keyword_stuffing(text, [], ["python"])
     assert any("overall" in w for w in warnings)
 
 
-def test_same_keyword_twice_in_one_bullet() -> None:
-    warnings = detect_keyword_stuffing(
-        "Built python services with python tooling", ["Built python services with python tooling"], ["python"]
-    )
+def test_core_skill_recurrence_is_not_flagged_as_stuffing() -> None:
+    # A core skill that legitimately appears a handful of times across a normal
+    # resume must not be flagged (the pre-wiring floor of 2 did this wrongly).
+    text = (
+        "Python developer. Skills: Python, SQL. Built Python services. Maintained Python data jobs. "
+    ) * 1 + " ".join(["word"] * 120)
+    warnings = detect_keyword_stuffing(text, [], ["python"])
+    assert not any("overall" in w for w in warnings)
+
+
+def test_same_keyword_three_times_in_one_bullet() -> None:
+    bullet = "Built python services with python tooling and python scripts"
+    warnings = detect_keyword_stuffing(bullet, [bullet], ["python"])
     assert any("single bullet" in w for w in warnings)
 
 
-def test_keyword_in_more_than_half_of_bullets() -> None:
+def test_same_keyword_twice_in_one_bullet_is_not_flagged() -> None:
+    # Two legitimate mentions ("SQL Server ... SQL warehouse") are not stuffing.
+    bullet = "Migrated SQL Server databases to a new SQL warehouse"
+    warnings = detect_keyword_stuffing(bullet, [bullet], ["sql"])
+    assert not any("single bullet" in w for w in warnings)
+
+
+def test_keyword_in_almost_every_bullet_is_flagged() -> None:
+    # A keyword mechanically pasted into 5 of 6 bullets is stuffing.
+    bullets = [
+        "used sql a",
+        "used sql b",
+        "used sql c",
+        "used sql d",
+        "used sql e",
+        "did something else",
+    ]
+    warnings = detect_keyword_stuffing(" ".join(bullets), bullets, ["sql"])
+    assert any("of 6 bullets" in w for w in warnings)
+
+
+def test_core_skill_in_a_couple_of_bullets_is_not_flagged() -> None:
+    # Two of three bullets naming a core skill is normal expertise, not stuffing.
     bullets = ["used sql here", "used sql there", "did something else"]
     warnings = detect_keyword_stuffing(" ".join(bullets), bullets, ["sql"])
-    assert any("of 3 bullets" in w for w in warnings)
+    assert not any("bullets" in w for w in warnings)
 
 
 def test_near_duplicate_bullets_flagged_and_deduped() -> None:

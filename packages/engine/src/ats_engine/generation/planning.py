@@ -20,7 +20,11 @@ from ats_engine.models import (
 )
 from ats_engine.parsing.resume import find_metrics, term_in_text
 from ats_engine.providers.base import LLMProvider, generate_json, generate_text, run_concurrently
-from ats_engine.validation.naturalness import bullet_safety_errors, dedupe_bullets, select_summary_closing
+from ats_engine.validation.naturalness import (
+    bullet_safety_errors,
+    normalized_bullet_key,
+    select_summary_closing,
+)
 from ats_engine.validation.repair import soften_banned_style
 from ats_engine.validation.style import validate_style
 
@@ -581,25 +585,27 @@ def _select_experience(
     entries: list[tuple[Experience, list[str], list[str]]] = []
 
     for experience in profile.experiences:
-        scored_bullets = sorted(
-            experience.bullets,
-            key=lambda bullet: _bullet_score(bullet, keywords),
-            reverse=True,
-        )
-        # Drop exact near-duplicate candidate bullets (extraction artifacts) before
-        # tailoring, so the same statement is never surfaced twice — deterministic
-        # anti-stuffing that removes only repeated content, never unique wording.
-        scored_bullets = dedupe_bullets(scored_bullets)
-        chosen: list[str] = [soften_banned_style(bullet) for bullet in scored_bullets]
+        # Preserve the candidate's own bullets and their source order. Two earlier
+        # behaviors are deliberately removed here:
+        #   * Sorting bullets by keyword relevance silently reordered candidate-
+        #     facing content without any ledger record. Presence-based ATS scoring
+        #     is unaffected by order, so the safe, honest default is source order.
+        #   * `dedupe_bullets` dropped exact-duplicate *candidate* bullets before
+        #     the ledger existed, which then failed completeness (source bullet
+        #     count > rendered count) and withheld the whole resume. Candidate-
+        #     authored duplicates are the candidate's own content; keeping them
+        #     loses no fact and keeps completeness intact. Generated duplicate
+        #     prose is handled separately, after rewriting, without ever reducing
+        #     the source bullet count (see `_reject_generated_duplicates`).
+        source_bullets = list(experience.bullets)
+        chosen: list[str] = [soften_banned_style(bullet) for bullet in source_bullets]
         # Keep the entry even with zero bullets (company/title/dates only):
-        # dropping it here would silently discard a verified source-profile
-        # entry that `validate_completeness` still counts, producing a false
-        # completeness failure. `generate_resume_text` renders a bulletless
-        # entry fine (just the header line). ``scored_bullets`` are the raw
-        # candidate bullets (style softening happens in ``chosen``); the raw form
-        # is what the change ledger records as ``original_text`` so a rejected
-        # bullet restores the candidate's own wording, not a softened variant.
-        entries.append((experience, chosen, scored_bullets))
+        # dropping it here would silently discard a verified source-profile entry
+        # that `validate_completeness` still counts. `source_bullets` are the raw
+        # candidate bullets (style softening happens in `chosen`); the raw form is
+        # what the change ledger records as `original_text` so a rejected bullet
+        # restores the candidate's own wording, not a softened variant.
+        entries.append((experience, chosen, source_bullets))
 
     all_originals = [bullet for _, chosen, _ in entries for bullet in chosen]
     # Bullets already carrying two or more JD keywords are targeted as-is;
@@ -612,6 +618,11 @@ def _select_experience(
         rewritten_batch = _rewrite_bullets_batch(batch, jd_profile, keywords, profile, provider)
         for position, index in enumerate(needs_rewrite):
             rewritten_flat[index] = rewritten_batch[position]
+    # Repair *generated* duplication without ever dropping a candidate bullet: if a
+    # rewrite collapses two distinct source bullets into identical prose, restore
+    # the later one's original wording. Genuine candidate-source duplicates are
+    # untouched (they are the candidate's own content and preserve completeness).
+    rewritten_flat = _reject_generated_duplicates(all_originals, rewritten_flat)
 
     selected: list[Experience] = []
     decisions: list[PlanDecision] = []
@@ -649,6 +660,33 @@ def _select_experience(
             )
         )
     return selected, decisions
+
+
+def _reject_generated_duplicates(originals: list[str], rewritten: list[str]) -> list[str]:
+    """Revert any rewrite that introduces a NEW duplicate not present in the source.
+
+    A model rewrite can collapse two genuinely distinct bullets into identical
+    prose, a subtle stuffing artifact. When a rewritten bullet's normalized text
+    collides with an earlier kept bullet but its own original did *not* collide
+    with that bullet's original, the duplication was introduced by generation, so
+    the later bullet is restored to its candidate original. Duplicates that already
+    exist between the *source* bullets are preserved untouched — they are the
+    candidate's own content and dropping them would break completeness.
+    """
+    source_keys = [normalized_bullet_key(text) for text in originals]
+    result = list(rewritten)
+    seen: dict[str, int] = {}
+    for index, text in enumerate(result):
+        key = normalized_bullet_key(text)
+        if not key:
+            continue
+        prior = seen.get(key)
+        if prior is not None and source_keys[index] != source_keys[prior]:
+            # Generated collision between two distinct source bullets: undo it.
+            result[index] = originals[index]
+            key = source_keys[index]
+        seen.setdefault(key, index)
+    return result
 
 
 def _rewrite_bullets_batch(
@@ -728,11 +766,6 @@ def _mentions_tier_c(text: str, profile: Profile) -> bool:
     """Tier C ('working knowledge only') skills must never be claimed as summary/letter substance."""
     lowered = text.lower()
     return any(term_in_text(skill, lowered) for skill in profile.tier_c)
-
-
-def _bullet_score(bullet: str, keywords: list[str]) -> int:
-    lowered = bullet.lower()
-    return sum(2 for keyword in keywords if keyword in lowered) + len(find_metrics(bullet))
 
 
 def _keyword_hits(bullet: str, keywords: list[str]) -> int:
