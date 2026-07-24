@@ -654,6 +654,49 @@ may improve only the bounded strategy summary. The product neither accesses
 LinkedIn nor sends messages. See
 [ADR-0016](adr/0016-application-kit-v4-linkedin-outreach.md).
 
+### ApplicationKit v5: match report + change ledger (completed)
+
+ApplicationKit v5 (`schema application-kit/v5`,
+`orchestration grounded-orchestration/v5`) adds two capabilities without
+weakening any grounding policy. Older kits (v4 and earlier) remain readable and
+are never rewritten in place; regeneration creates a new linked v5 kit instead.
+
+**MatchReport** (`ats_engine.scoring.match_report`) computes three deliberately
+separate scores after grounding and final rendering: the original-resume keyword
+match (submitted resume), the tailored-resume keyword match (final grounded
+resume, absent when the resume was not requested or was withheld), and the
+evidence-based role alignment (reusing `job_fit.policy.requirement_coverage_score`
+so no competing formula exists). The unified keyword vocabulary is built only
+from the job description; a keyword earns credit only when it is present in the
+measured resume *and* the candidate's parsed evidence supports it at tier A/B/C,
+counted once (frequency never helps). It also carries deterministic confidence
+(`high`/`medium`/`low`) with reasons, a `FitCategory` (five honest values,
+boundary-safe ordering), a constructive style-clean recommendation and kit
+summary, and the persisted `AtsQualityReportPayload`. A failure in match-report
+computation never fails an otherwise-safe kit (`match_report=None` plus a bounded
+warning). Per-stage timings (`StageTimings`, plain integer ms) are persisted for
+observability. See [ADR-0019](adr/0019-application-kit-v5-match-report-and-change-ledger.md).
+
+**Change ledger** (`ats_engine.kit.change_ledger`) records every material
+tailoring delta as one stable, location-aware `ChangeRecord`, from instrumented
+`PlanDecision`s (summary, targeting clause, bullet rewrite, skill surfacing) and
+from grounding claim records (each repaired/rejected claim becomes a visible,
+irreversible `grounding_removal`). `ats_engine.kit.change_actions` applies safe,
+idempotent, LLM-free accept/reject/restore actions against the persisted
+structured document, re-renders, re-grounds, re-validates, recomputes the
+tailored score/coverage, and increments a revision. Truth-grounding removals can
+never be restored. The API adds `POST /kits/{id}/change-actions` (optimistic
+concurrency via `expected_revision`, 409 conflict, 422 irreversible), `DELETE
+/kits/{id}`, and `POST /kits/{id}/regenerate`; migration 0006 adds the portable
+`revision` and `parent_kit_id` columns. See
+[ADR-0020](adr/0020-change-action-revision-and-irreversibility-policy.md).
+
+The frontend surfaces three visually and textually distinct scores, the fit
+category and confidence, a production change-ledger component with accept/reject/
+restore and conflict handling, kit lineage with regenerate/delete, and a static
+"How scoring works" page. `interview_probability` is never rendered as a
+percentage.
+
 ### Request/data flow (deterministic pipeline)
 
 ```
@@ -768,6 +811,8 @@ Recorded as ADRs under [`docs/adr/`](adr/):
 - [ADR-0016](adr/0016-application-kit-v4-linkedin-outreach.md) — ApplicationKit v4 and grounded LinkedInOutreachArtifact.
 - [ADR-0017](adr/0017-independent-artifact-selection.md) — Persist independent artifact selection (six independently-requestable artifacts).
 - [ADR-0018](adr/0018-local-pdf-rendering.md) — Local server-side PDF rendering (WeasyPrint in `apps/api` only) for direct Resume/Cover Letter download.
+- [ADR-0019](adr/0019-application-kit-v5-match-report-and-change-ledger.md) — ApplicationKit v5 match report (three honest scores, confidence, fit categories) and change ledger.
+- [ADR-0020](adr/0020-change-action-revision-and-irreversibility-policy.md) — Change-action revision, optimistic concurrency, and grounding-removal irreversibility.
 
 ## 7. Future / planned work (not yet implemented)
 
