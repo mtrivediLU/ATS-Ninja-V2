@@ -91,7 +91,9 @@ jobs:
           version: 9.15.9
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          # Node 24: the web test runner uses `node --experimental-strip-types`,
+          # which is not supported on the Node 20 the runner previously pinned.
+          node-version: "24"
           cache: pnpm
       - name: Install
         run: pnpm install --frozen-lockfile
