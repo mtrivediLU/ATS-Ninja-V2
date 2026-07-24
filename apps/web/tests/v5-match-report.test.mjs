@@ -38,6 +38,25 @@ test("change ledger has accept/reject/restore, batch apply, and conflict/error s
   assert.match(source, /revision \{revision\}/);
 });
 
+test("change ledger renders bounded evidence, type-specific locked reasons, and unique a11y ids", async () => {
+  const source = await read("../components/product/change-ledger.tsx");
+  // Bounded supporting evidence is displayed per record.
+  assert.match(source, /record\.evidence\.map/);
+  assert.match(source, /Supporting evidence/);
+  // Not every non-reversible record is labelled "Grounding removal": the label
+  // and explanation are type-specific.
+  assert.match(source, /record\.change_type === "grounding_removal"/);
+  assert.match(source, /managed through regeneration/);
+  // Unique heading id per ledger instance so two ledgers on one page do not collide.
+  assert.match(source, /const instanceId = /);
+  assert.match(source, /aria-labelledby=\{headingId\}/);
+  // Double submission is prevented while a batch is applying.
+  assert.match(source, /disabled=\{pendingCount === 0 \|\| state === "applying"\}/);
+  // A 409 refreshes current revision; a 422 keeps the user's selection.
+  assert.match(source, /error\.status === 422/);
+  assert.match(source, /error\.status === 409[\s\S]*?await onApplied\(\)/);
+});
+
 test("job fit no longer renders interview_probability as a percentage", async () => {
   const source = await read("../components/product/job-fit-workspace.tsx");
   assert.doesNotMatch(source, /interview_probability/);

@@ -59,6 +59,11 @@ export function ChangeLedger({
   const [state, setState] = useState<"idle" | "applying" | "success" | "error" | "conflict">("idle");
   const [message, setMessage] = useState<string>("");
 
+  // Unique per-ledger id so two ledgers (resume + cover letter) on one page never
+  // collide on heading / aria-labelledby ids.
+  const instanceId = useMemo(() => `ledger-${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`, [title]);
+  const headingId = `${instanceId}-heading`;
+
   const filtered = useMemo(
     () =>
       records.filter(
@@ -98,8 +103,16 @@ export function ChangeLedger({
       await onApplied();
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) {
+        // A concurrent writer advanced the revision. Refresh so the indicator and
+        // records reflect the current state; keep the user's pending selection so
+        // they can reapply against the refreshed revision.
         setState("conflict");
-        setMessage("This kit changed in another tab. Reload it, then reapply your changes.");
+        setMessage("This kit changed since you loaded it. It has been refreshed — review and reapply your changes.");
+        await onApplied();
+      } else if (error instanceof ApiError && error.status === 422) {
+        // Invalid request (e.g. a locked change). Keep the user's selection intact.
+        setState("error");
+        setMessage(error.message);
       } else {
         setState("error");
         setMessage(error instanceof ApiError ? error.message : "The changes could not be applied.");
@@ -109,8 +122,8 @@ export function ChangeLedger({
 
   if (records.length === 0) {
     return (
-      <section className="mt-6" aria-labelledby="change-ledger-heading">
-        <h2 id="change-ledger-heading" className="text-md font-semibold">
+      <section className="mt-6" aria-labelledby={headingId}>
+        <h2 id={headingId} className="text-md font-semibold">
           {title}
         </h2>
         <p className="mt-2 text-sm text-ink-muted">No tailoring changes were recorded for this artifact.</p>
@@ -119,9 +132,9 @@ export function ChangeLedger({
   }
 
   return (
-    <section className="mt-6" aria-labelledby="change-ledger-heading">
+    <section className="mt-6" aria-labelledby={headingId}>
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 id="change-ledger-heading" className="text-md font-semibold">
+        <h2 id={headingId} className="text-md font-semibold">
           {title}
         </h2>
         <span className="font-mono text-xs text-ink-muted" aria-label={`Kit revision ${revision}`}>
@@ -242,9 +255,16 @@ function LedgerRow({
             )}
           </div>
         ) : (
-          <span className="inline-flex items-center gap-1.5 text-xs text-ink-muted" title="Truth-grounding removals cannot be reverted.">
+          <span
+            className="inline-flex items-center gap-1.5 text-xs text-ink-muted"
+            title={
+              record.change_type === "grounding_removal"
+                ? "A truth-grounding removal cannot be restored; doing so would reintroduce unsupported content."
+                : "This change is informational and is managed through regeneration, not individual reversal."
+            }
+          >
             <Lock aria-hidden="true" className="size-3.5" />
-            Locked
+            {record.change_type === "grounding_removal" ? "Permanent" : "Locked"}
           </span>
         )}
       </div>
@@ -268,10 +288,24 @@ function LedgerRow({
         </div>
       )}
 
+      {record.evidence.length > 0 && (
+        <div className="mt-3 rounded-lg border border-border-subtle bg-surface-subtle p-2">
+          <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.05em] text-ink-muted">Supporting evidence</p>
+          <ul className="space-y-1 text-xs text-ink-secondary">
+            {record.evidence.map((ref, index) => (
+              <li key={`${ref.locator}-${index}`}>
+                <span className="text-ink-muted">{ref.source || "candidate resume"}:</span>{" "}
+                {ref.excerpt || ref.locator}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-ink-muted">
         {record.matched_keywords.length > 0 && <span>Keywords: {record.matched_keywords.join(", ")}</span>}
         <span>Confidence: {record.confidence}</span>
-        {!record.reversible && <span>Grounding removal (permanent)</span>}
+        {record.change_type === "grounding_removal" && <span>Truth-grounding removal (cannot be restored)</span>}
       </div>
     </Card>
   );
