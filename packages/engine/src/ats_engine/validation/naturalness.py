@@ -94,6 +94,9 @@ def detect_keyword_stuffing(text: str, bullets: list[str], keywords: list[str]) 
     obvious near-duplicate bullets.
     """
     warnings: list[str] = []
+    # Near-duplicate bullets are a stuffing signal independent of the unified
+    # keyword set, so this check runs even when no keywords are supplied.
+    warnings.extend(_near_duplicate_bullet_warnings(bullets))
     if not keywords:
         return warnings
 
@@ -115,7 +118,6 @@ def detect_keyword_stuffing(text: str, bullets: list[str], keywords: list[str]) 
         if bullet_count >= 2 and per_bullet_hits * 2 > bullet_count:
             warnings.append(f"keyword '{keyword}' appears in {per_bullet_hits} of {bullet_count} bullets")
 
-    warnings.extend(_near_duplicate_bullet_warnings(bullets))
     return warnings
 
 
