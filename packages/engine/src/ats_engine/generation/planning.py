@@ -14,6 +14,7 @@ from ats_engine.models import (
     EvidenceItem,
     Experience,
     JDProfile,
+    PlanDecision,
     Profile,
     ResumePlan,
 )
@@ -64,12 +65,14 @@ def build_resume_plan(
         }
     )
     summary = cast(str, results["summary"])
-    experience = cast("list[Experience]", results["experience"])
+    experience, bullet_decisions = cast("tuple[list[Experience], list[PlanDecision]]", results["experience"])
     residual_gap = _first_gap(evidence)
     probability = interview_probability(evidence)
     analysis = _analysis_lines(evidence, residual_gap, jd_profile)
     headline = _headline(jd_profile, role_identity, evidence)
     work_mode_line = _work_mode_line(jd_profile)
+
+    plan_decisions = _summary_decisions(summary, jd_profile) + _skill_decisions(skill_groups) + bullet_decisions
 
     return ResumePlan(
         contacts=contacts,
@@ -87,7 +90,73 @@ def build_resume_plan(
         residual_gap=residual_gap,
         interview_probability=probability,
         analysis=analysis,
+        plan_decisions=plan_decisions,
     )
+
+
+def split_targeting_clause(summary: str) -> tuple[str, str]:
+    """Split a generated summary into (base, targeting clause).
+
+    The targeting clause is the deterministic "Targeting {title} opportunities."
+    sentence (never a claim of a held role). Returns ``("", "")`` gracefully when
+    the summary is empty and an empty clause when no targeting sentence exists.
+    """
+    if not summary:
+        return "", ""
+    match = re.search(r"\bTargeting\s+.+?\bopportunities\.", summary)
+    if not match:
+        return summary.strip(), ""
+    clause = match.group(0).strip()
+    base = (summary[: match.start()] + summary[match.end() :]).strip()
+    base = re.sub(r"\s{2,}", " ", base)
+    return base, clause
+
+
+def _summary_decisions(summary: str, jd_profile: JDProfile) -> list[PlanDecision]:
+    base, targeting = split_targeting_clause(summary)
+    decisions: list[PlanDecision] = []
+    if base:
+        decisions.append(
+            PlanDecision(
+                kind="summary",
+                location_id="resume::summary",
+                original_text="",
+                tailored_text=base,
+                operation="added",
+                reason="Generated a tailored professional summary grounded in the candidate's own evidence.",
+            )
+        )
+    if targeting:
+        decisions.append(
+            PlanDecision(
+                kind="targeting_clause",
+                location_id="resume::summary::targeting",
+                original_text="",
+                tailored_text=targeting,
+                operation="added",
+                reason=f"Named the target role ({jd_profile.title}) as a targeting statement, never as held experience.",
+            )
+        )
+    return decisions
+
+
+def _skill_decisions(skill_groups: list[tuple[str, list[str]]]) -> list[PlanDecision]:
+    decisions: list[PlanDecision] = []
+    for group_index, (label, items) in enumerate(skill_groups):
+        if not items:
+            continue
+        decisions.append(
+            PlanDecision(
+                kind="skill",
+                location_id=f"resume::skills::group{group_index}",
+                original_text="",
+                tailored_text=f"{label}: {', '.join(items)}",
+                operation="added",
+                reason="Surfaced evidence-backed skills into a job-relevant group.",
+                matched_keywords=list(items),
+            )
+        )
+    return decisions
 
 
 def build_cover_letter_plan(
@@ -505,7 +574,7 @@ def _select_experience(
     evidence: list[EvidenceItem],
     jd_profile: JDProfile,
     provider: LLMProvider | None,
-) -> list[Experience]:
+) -> tuple[list[Experience], list[PlanDecision]]:
     keywords = [item.keyword.lower() for item in evidence if item.evidence_tier != "missing"]
     entries: list[tuple[Experience, list[str]]] = []
 
@@ -536,11 +605,26 @@ def _select_experience(
             rewritten_flat[index] = rewritten_batch[position]
 
     selected: list[Experience] = []
+    decisions: list[PlanDecision] = []
     cursor = 0
-    for experience, chosen in entries:
+    for exp_index, (experience, chosen) in enumerate(entries):
         count = len(chosen)
         final_bullets = rewritten_flat[cursor : cursor + count]
         cursor += count
+        for bullet_index, (original_bullet, final_bullet) in enumerate(zip(chosen, final_bullets, strict=False)):
+            if original_bullet.strip() == final_bullet.strip():
+                continue
+            decisions.append(
+                PlanDecision(
+                    kind="bullet",
+                    location_id=f"resume::exp{exp_index}::bullet{bullet_index}",
+                    original_text=original_bullet,
+                    tailored_text=final_bullet,
+                    operation="rewritten",
+                    reason="Rewrote the bullet to surface job-relevant keywords while keeping the original facts.",
+                    matched_keywords=[keyword for keyword in keywords if _keyword_hits(final_bullet, [keyword])],
+                )
+            )
         selected.append(
             Experience(
                 company=experience.company,
@@ -550,7 +634,7 @@ def _select_experience(
                 bullets=final_bullets,
             )
         )
-    return selected
+    return selected, decisions
 
 
 def _rewrite_bullets_batch(

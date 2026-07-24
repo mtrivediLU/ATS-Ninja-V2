@@ -160,7 +160,7 @@ def test_job_fit_and_interview_prep_are_independently_selectable() -> None:
 def test_interview_prep_json_round_trip() -> None:
     kit = _kit()
     raw = application_kit_to_dict(kit)
-    assert raw["schema_version"] == "application-kit/v4"
+    assert raw["schema_version"] == "application-kit/v5"
     assert raw["interview_prep"]["questions"]
     restored = application_kit_from_dict(json.loads(json.dumps(raw)))
     assert restored.interview_prep == kit.interview_prep

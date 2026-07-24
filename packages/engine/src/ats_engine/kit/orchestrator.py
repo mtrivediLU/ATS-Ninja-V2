@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import time
 from datetime import date
 
 from ats_engine.config import EngineSettings
@@ -18,6 +20,7 @@ from ats_engine.generation.resume import (
 )
 from ats_engine.interview_prep import build_interview_prep_artifact
 from ats_engine.job_fit import build_job_fit_artifact
+from ats_engine.kit.change_ledger import build_cover_letter_change_ledger, build_resume_change_ledger
 from ats_engine.kit.contract import (
     ORCHESTRATION_VERSION,
     SCHEMA_VERSION,
@@ -34,6 +37,7 @@ from ats_engine.kit.contract import (
     InterviewPrepArtifact,
     JobFitArtifact,
     LinkedInOutreachArtifact,
+    MatchReport,
     OutreachContext,
     ResumeArtifact,
     ResumeCertificationEntry,
@@ -41,16 +45,20 @@ from ats_engine.kit.contract import (
     ResumeEducationEntry,
     ResumeExperienceEntry,
     ResumeSkillGroup,
+    StageTimings,
     ValidationSummary,
 )
 from ats_engine.kit.grounding import EvidenceContext, GroundingOutcome, build_evidence_context, ground_text
 from ats_engine.kit.policy import MIN_COVER_LETTER_WORDS
 from ats_engine.kit.routing import ResolvedProviders, resolve_providers
 from ats_engine.linkedin_outreach import build_linkedin_outreach_artifact
-from ats_engine.models import AnswerPlan, CoverLetterPlan, Mode, PipelineResult, ResumePlan
+from ats_engine.models import AnswerPlan, CoverLetterPlan, Mode, PipelineResult, Profile, ResumePlan
 from ats_engine.parsing.resume import build_profile
 from ats_engine.providers.base import LLMProvider
+from ats_engine.scoring.match_report import build_match_report, build_weighted_keywords
 from ats_engine.validation.severity import is_fatal_validation_error, partition_validation_errors
+
+logger = logging.getLogger(__name__)
 
 """Grounded AI generation orchestrator (Phase 2A, Step 7).
 
@@ -108,6 +116,11 @@ def generate_application_kit(
 
     legacy_mode = default_mode if default_mode is not None and not requested_mode.strip() else None
 
+    timings: dict[str, int] = {}
+    grounding_ms = 0
+    render_ms = 0
+
+    _stage = time.perf_counter()
     result = run_pipeline(
         resume_text=resume_text,
         job_description=job_description,
@@ -123,6 +136,7 @@ def generate_application_kit(
         extraction_provider=resolved.extraction,
         prose_provider=resolved.prose,
     )
+    timings["pipeline_ms"] = _elapsed_ms(_stage)
 
     # Deterministic evidence view of the candidate (the source of truth for
     # grounding). Never fabricated; the raw resume backstops the structured view.
@@ -145,23 +159,36 @@ def generate_application_kit(
     grounding: dict[str, _ArtifactGrounding] = {}
 
     if selection.resume and result.resume_plan is not None:
+        _stage = time.perf_counter()
         resume_claims, grounding["resume"] = _ground_resume(result.resume_plan, context)
+        grounding_ms += _elapsed_ms(_stage)
+        _stage = time.perf_counter()
         result.resume_text = generate_resume_text(result.resume_plan)
         result.resume_latex = generate_resume_latex(result.resume_plan)
         result.mode_outputs[Mode.RESUME.value] = format_resume_output(result.resume_plan, result.resume_latex)
+        render_ms += _elapsed_ms(_stage)
 
     if selection.cover_letter and result.cover_letter_plan is not None:
+        _stage = time.perf_counter()
         cover_claims, grounding["cover"] = _ground_cover_letter(result.cover_letter_plan, context)
+        grounding_ms += _elapsed_ms(_stage)
+        _stage = time.perf_counter()
         result.cover_letter_text = generate_cover_letter_text(result.cover_letter_plan)
         result.cover_letter_latex = generate_cover_letter_latex(result.cover_letter_plan)
         result.mode_outputs[Mode.COVER_LETTER.value] = format_cover_letter_output(
             result.cover_letter_plan, result.cover_letter_latex
         )
+        render_ms += _elapsed_ms(_stage)
 
     if selection.application_answers and result.answer_plan is not None:
+        _stage = time.perf_counter()
         answer_claims, grounding["answers"] = _ground_answers(result.answer_plan, context)
+        grounding_ms += _elapsed_ms(_stage)
         result.answers_text = generate_answers_text(result.answer_plan)
         result.mode_outputs[Mode.QUESTIONS.value] = result.answers_text
+
+    timings["grounding_ms"] = grounding_ms
+    timings["rendering_ms"] = render_ms
 
     # Re-validate the clean artifacts with the engine's proven gates.
     result.validation_errors = validate_pipeline_result(result, profile)
@@ -183,6 +210,7 @@ def generate_application_kit(
         else None
     )
 
+    _stage = time.perf_counter()
     job_fit_assessment = None
     if (include_job_fit or include_interview_prep or include_linkedin_outreach) and result.resume_plan is not None:
         job_fit_assessment = build_job_fit_artifact(
@@ -215,6 +243,31 @@ def generate_application_kit(
             outreach_context=outreach_context,
             provider=resolved.prose,
         )
+    timings["artifacts_ms"] = _elapsed_ms(_stage)
+
+    # v5 match report + change ledgers. A failure here must never fail an
+    # otherwise-safe kit: the match report becomes None and a bounded warning is
+    # added. No candidate content or sensitive detail is ever logged.
+    _stage = time.perf_counter()
+    kit_warnings: list[str] = []
+    match_report = _safe_match_report(
+        profile=profile,
+        result=result,
+        resume_artifact=resume_artifact,
+        job_fit=job_fit_assessment,
+        original_resume_text=resume_text,
+        extraction_warnings=list(result.metadata.get("resume_warnings", []) or []),
+        kit_warnings=kit_warnings,
+    )
+    _attach_change_ledgers(
+        resume_artifact=resume_artifact,
+        cover_artifact=cover_artifact,
+        result=result,
+        profile=profile,
+        resume_claims=resume_claims,
+        cover_claims=cover_claims,
+    )
+    timings["scoring_ms"] = _elapsed_ms(_stage)
 
     validation = _kit_validation(
         result.validation_errors,
@@ -251,6 +304,10 @@ def generate_application_kit(
         job_fit=job_fit_artifact,
         interview_prep=interview_prep_artifact,
         linkedin_outreach=linkedin_outreach_artifact,
+        match_report=match_report,
+        stage_timings=StageTimings(stages_ms=timings),
+        revision=0,
+        warnings=kit_warnings,
     )
 
 
@@ -581,3 +638,79 @@ def _generation_metadata(resolved: ResolvedProviders) -> GenerationMetadata:
         provider_calls=resolved.stats.calls,
         fallback_used=resolved.stats.fallback_used,
     )
+
+
+# --------------------------------------------------------------------------- #
+# v5 match report + change ledger (Step 10-11)
+# --------------------------------------------------------------------------- #
+def _elapsed_ms(start: float) -> int:
+    return max(0, int((time.perf_counter() - start) * 1000))
+
+
+def _safe_match_report(
+    *,
+    profile: Profile,
+    result: PipelineResult,
+    resume_artifact: ResumeArtifact | None,
+    job_fit: JobFitArtifact | None,
+    original_resume_text: str,
+    extraction_warnings: list[str],
+    kit_warnings: list[str],
+) -> MatchReport | None:
+    """Compute the match report; never fail an otherwise-safe kit if it errors."""
+    if result.resume_plan is None:
+        return None
+    tailored_text: str | None = None
+    if resume_artifact is not None and not resume_artifact.validation.fatal and resume_artifact.text:
+        tailored_text = resume_artifact.text
+    try:
+        return build_match_report(
+            profile=profile,
+            jd_profile=result.jd_profile,
+            resume_plan=result.resume_plan,
+            original_resume_text=original_resume_text,
+            tailored_resume_text=tailored_text,
+            job_fit=job_fit,
+            extraction_warnings=extraction_warnings,
+        )
+    except Exception:  # noqa: BLE001 - a scoring failure must not fail a safe kit.
+        logger.warning("match report computation failed; delivering kit without scores")
+        kit_warnings.append("Match scores were unavailable for this run.")
+        return None
+
+
+def _attach_change_ledgers(
+    *,
+    resume_artifact: ResumeArtifact | None,
+    cover_artifact: CoverLetterArtifact | None,
+    result: PipelineResult,
+    profile: Profile,
+    resume_claims: list[ClaimRecord],
+    cover_claims: list[ClaimRecord],
+) -> None:
+    """Build and attach the transparent change ledgers to the artifacts."""
+    if result.resume_plan is None:
+        return
+    try:
+        evidence = result.resume_plan.evidence
+        keywords = build_weighted_keywords(evidence, result.jd_profile)
+        tier_by_keyword = {item.keyword.casefold().strip(): item.evidence_tier for item in evidence}
+        if resume_artifact is not None:
+            resume_artifact.change_ledger = build_resume_change_ledger(
+                decisions=result.resume_plan.plan_decisions,
+                document=resume_artifact.document,
+                claims=resume_claims,
+                keywords=keywords,
+                profile=profile,
+                tier_by_keyword=tier_by_keyword,
+            )
+        if cover_artifact is not None:
+            cover_artifact.change_ledger = build_cover_letter_change_ledger(
+                document=cover_artifact.document,
+                claims=cover_claims,
+                keywords=keywords,
+                profile=profile,
+                tier_by_keyword=tier_by_keyword,
+            )
+    except Exception:  # noqa: BLE001 - a ledger failure must not fail a safe kit.
+        logger.warning("change ledger construction failed; delivering kit without a ledger")
