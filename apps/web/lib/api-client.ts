@@ -1,4 +1,10 @@
-import type { KitCreateInput, KitList, KitRead, ResumeExtraction } from "@/lib/api-types";
+import type {
+  ChangeActionRequestInput,
+  KitCreateInput,
+  KitList,
+  KitRead,
+  ResumeExtraction,
+} from "@/lib/api-types";
 
 export const API_BASE_URL = (
   process.env.NEXT_PUBLIC_API_BASE_URL ??
@@ -83,6 +89,49 @@ export function getKit(kitId: string, signal?: AbortSignal): Promise<KitRead> {
 export function listKits(limit = 20, offset = 0, signal?: AbortSignal): Promise<KitList> {
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
   return request<KitList>(`/api/v1/kits?${params}`, { signal });
+}
+
+/**
+ * Apply a batch of accept/reject/restore change actions to a completed v5 kit.
+ * Returns the updated kit with an incremented revision. A 409 (revision
+ * conflict) or 422 (irreversible change) surfaces as an {@link ApiError}.
+ */
+export function applyChangeActions(
+  kitId: string,
+  payload: ChangeActionRequestInput,
+  signal?: AbortSignal,
+): Promise<KitRead> {
+  return request<KitRead>(`/api/v1/kits/${encodeURIComponent(kitId)}/change-actions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    signal,
+  });
+}
+
+/** Hard-delete a local kit. Resolves on 204; a missing kit throws a not-found ApiError. */
+export async function deleteKit(kitId: string, signal?: AbortSignal): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/api/v1/kits/${encodeURIComponent(kitId)}`, {
+      method: "DELETE",
+      cache: "no-store",
+      signal,
+    });
+  } catch {
+    throw new ApiError("The local API could not be reached. Check that the Docker stack is running.", null, "unavailable");
+  }
+  if (response.status === 204) return;
+  const kind = response.status === 404 ? "not-found" : response.status < 500 ? "invalid" : "server";
+  throw new ApiError("The kit could not be deleted.", response.status, kind);
+}
+
+/** Regenerate a kit from its stored inputs; returns the new linked pending kit. */
+export function regenerateKit(kitId: string, signal?: AbortSignal): Promise<KitRead> {
+  return request<KitRead>(`/api/v1/kits/${encodeURIComponent(kitId)}/regenerate`, {
+    method: "POST",
+    signal,
+  });
 }
 
 export type DocumentExportPayload = {

@@ -33,7 +33,7 @@ async def test_submit_kit_runs_lifecycle_to_completion(client: httpx.AsyncClient
     assert kit["status"] == "completed"
     result = kit["result"]
     # The versioned ApplicationKit contract with typed artifacts.
-    assert result["schema_version"] == "application-kit/v4"
+    assert result["schema_version"] == "application-kit/v5"
     assert result["job_fit"] is not None
     assert result["job_fit"]["requirements"]
     assert result["job_fit"]["consistency"]["passed"] is True
@@ -212,7 +212,7 @@ async def test_submit_kit_can_persistently_disable_job_fit(client: httpx.AsyncCl
     fetched = await client.get(f"/api/v1/kits/{response.json()['id']}")
     body = fetched.json()
     assert body["include_job_fit"] is False
-    assert body["result"]["schema_version"] == "application-kit/v4"
+    assert body["result"]["schema_version"] == "application-kit/v5"
     assert body["result"]["job_fit"] is None
     assert body["include_interview_prep"] is True
     assert body["result"]["interview_prep"] is not None
@@ -353,7 +353,7 @@ async def test_process_kit_completes_and_persists_result(
         assert done is not None
         assert done.status == KitStatus.COMPLETED
         assert done.result is not None
-        assert done.result["schema_version"] == "application-kit/v4"
+        assert done.result["schema_version"] == "application-kit/v5"
         assert done.result["job_fit"] is not None
         assert done.result["interview_prep"] is not None
         assert done.result["linkedin_outreach"] is not None
@@ -496,3 +496,147 @@ async def test_mark_kit_failed_is_noop_on_completed_kit(
         assert kit is not None
         assert kit.status == KitStatus.COMPLETED
         assert kit.error is None
+
+
+# --------------------------------------------------------------------------- #
+# ApplicationKit v5: match report, change actions, lineage
+# --------------------------------------------------------------------------- #
+async def _create_completed_kit(client: httpx.AsyncClient) -> dict:
+    response = await client.post(
+        "/api/v1/kits",
+        json={
+            "resume_text": SAMPLE_RESUME,
+            "job_description": SAMPLE_JD,
+            "include_resume": True,
+            "include_cover_letter": True,
+        },
+    )
+    assert response.status_code == 202
+    kit_id = response.json()["id"]
+    fetched = await client.get(f"/api/v1/kits/{kit_id}")
+    body = fetched.json()
+    assert body["status"] == "completed"
+    return body
+
+
+async def test_new_kit_is_v5_with_match_report_and_revision(client: httpx.AsyncClient) -> None:
+    body = await _create_completed_kit(client)
+    result = body["result"]
+    assert result["schema_version"] == "application-kit/v5"
+    assert result["match_report"] is not None
+    report = result["match_report"]
+    assert 0 <= report["original_ats_match"]["score"] <= 100
+    assert 0 <= report["alignment_score"] <= 100
+    assert report["fit_category"] in {"strong_fit", "good_fit", "partial_fit", "stretch_role", "low_alignment"}
+    assert report["disclaimer"]
+    assert body["revision"] == 0
+    assert body["parent_kit_id"] is None
+    assert "stages_ms" in result["stage_timings"]
+    # The resume change ledger is present.
+    assert isinstance(result["resume"]["change_ledger"], list)
+
+
+async def test_change_action_round_trip_increments_revision(client: httpx.AsyncClient) -> None:
+    body = await _create_completed_kit(client)
+    kit_id = body["id"]
+    ledger = body["result"]["resume"]["change_ledger"]
+    reversible = next(record for record in ledger if record["reversible"])
+    response = await client.post(
+        f"/api/v1/kits/{kit_id}/change-actions",
+        json={"expected_revision": 0, "actions": [{"change_id": reversible["id"], "action": "accept"}]},
+    )
+    assert response.status_code == 200
+    assert response.json()["revision"] == 1
+    # Persisted: a fresh GET reflects the new revision.
+    refetched = await client.get(f"/api/v1/kits/{kit_id}")
+    assert refetched.json()["revision"] == 1
+
+
+async def test_change_action_revision_conflict_returns_409(client: httpx.AsyncClient) -> None:
+    body = await _create_completed_kit(client)
+    kit_id = body["id"]
+    reversible = next(r for r in body["result"]["resume"]["change_ledger"] if r["reversible"])
+    response = await client.post(
+        f"/api/v1/kits/{kit_id}/change-actions",
+        json={"expected_revision": 5, "actions": [{"change_id": reversible["id"], "action": "accept"}]},
+    )
+    assert response.status_code == 409
+
+
+async def test_change_action_irreversible_rejection_returns_422(client: httpx.AsyncClient) -> None:
+    body = await _create_completed_kit(client)
+    kit_id = body["id"]
+    ledger = body["result"]["resume"]["change_ledger"]
+    irreversible = next((r for r in ledger if not r["reversible"]), None)
+    if irreversible is None:
+        pytest.skip("no irreversible ledger record in this deterministic kit")
+    response = await client.post(
+        f"/api/v1/kits/{kit_id}/change-actions",
+        json={"expected_revision": 0, "actions": [{"change_id": irreversible["id"], "action": "reject"}]},
+    )
+    assert response.status_code == 422
+
+
+async def test_change_action_unknown_id_returns_422(client: httpx.AsyncClient) -> None:
+    body = await _create_completed_kit(client)
+    kit_id = body["id"]
+    response = await client.post(
+        f"/api/v1/kits/{kit_id}/change-actions",
+        json={"expected_revision": 0, "actions": [{"change_id": "does::not::exist", "action": "accept"}]},
+    )
+    assert response.status_code == 422
+
+
+async def test_delete_kit(client: httpx.AsyncClient) -> None:
+    body = await _create_completed_kit(client)
+    kit_id = body["id"]
+    response = await client.delete(f"/api/v1/kits/{kit_id}")
+    assert response.status_code == 204
+    assert (await client.get(f"/api/v1/kits/{kit_id}")).status_code == 404
+    # Deleting a missing kit is a 404.
+    assert (await client.delete(f"/api/v1/kits/{uuid.uuid4()}")).status_code == 404
+
+
+async def test_regenerate_creates_linked_kit(client: httpx.AsyncClient) -> None:
+    body = await _create_completed_kit(client)
+    source_id = body["id"]
+    response = await client.post(f"/api/v1/kits/{source_id}/regenerate")
+    assert response.status_code == 202
+    regenerated = response.json()
+    assert regenerated["id"] != source_id
+    assert regenerated["parent_kit_id"] == source_id
+    assert regenerated["revision"] == 0
+    # The source kit is untouched.
+    assert (await client.get(f"/api/v1/kits/{source_id}")).status_code == 200
+    # Regenerating a missing kit is a 404.
+    assert (await client.post(f"/api/v1/kits/{uuid.uuid4()}/regenerate")).status_code == 404
+
+
+async def test_pdf_export_uses_current_revision(client: httpx.AsyncClient) -> None:
+    body = await _create_completed_kit(client)
+    kit_id = body["id"]
+    reversible = next(r for r in body["result"]["resume"]["change_ledger"] if r["reversible"])
+    await client.post(
+        f"/api/v1/kits/{kit_id}/change-actions",
+        json={"expected_revision": 0, "actions": [{"change_id": reversible["id"], "action": "reject"}]},
+    )
+    export = await client.post(
+        "/api/v1/document-exports/pdf",
+        json={"kit_id": kit_id, "artifact_type": "resume", "template_id": "classic"},
+    )
+    assert export.status_code == 200
+    assert export.headers["content-type"] == "application/pdf"
+
+
+async def test_stale_expected_revision_second_request_conflicts(client: httpx.AsyncClient) -> None:
+    # Two requests both expecting revision 0: the first advances to 1, the second
+    # (still expecting 0) must be refused with 409 by the atomic revision guard.
+    body = await _create_completed_kit(client)
+    kit_id = body["id"]
+    reversible = next(r for r in body["result"]["resume"]["change_ledger"] if r["reversible"])
+    action = {"expected_revision": 0, "actions": [{"change_id": reversible["id"], "action": "accept"}]}
+    first = await client.post(f"/api/v1/kits/{kit_id}/change-actions", json=action)
+    assert first.status_code == 200
+    assert first.json()["revision"] == 1
+    second = await client.post(f"/api/v1/kits/{kit_id}/change-actions", json=action)
+    assert second.status_code == 409

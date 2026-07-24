@@ -14,11 +14,13 @@ from ats_engine.models import (
     EvidenceItem,
     Experience,
     JDProfile,
+    PlanDecision,
     Profile,
     ResumePlan,
 )
 from ats_engine.parsing.resume import find_metrics, term_in_text
 from ats_engine.providers.base import LLMProvider, generate_json, generate_text, run_concurrently
+from ats_engine.validation.naturalness import bullet_safety_errors, dedupe_bullets, select_summary_closing
 from ats_engine.validation.repair import soften_banned_style
 from ats_engine.validation.style import validate_style
 
@@ -64,12 +66,14 @@ def build_resume_plan(
         }
     )
     summary = cast(str, results["summary"])
-    experience = cast("list[Experience]", results["experience"])
+    experience, bullet_decisions = cast("tuple[list[Experience], list[PlanDecision]]", results["experience"])
     residual_gap = _first_gap(evidence)
     probability = interview_probability(evidence)
     analysis = _analysis_lines(evidence, residual_gap, jd_profile)
     headline = _headline(jd_profile, role_identity, evidence)
     work_mode_line = _work_mode_line(jd_profile)
+
+    plan_decisions = _summary_decisions(summary, jd_profile) + _skill_decisions(skill_groups) + bullet_decisions
 
     return ResumePlan(
         contacts=contacts,
@@ -87,7 +91,73 @@ def build_resume_plan(
         residual_gap=residual_gap,
         interview_probability=probability,
         analysis=analysis,
+        plan_decisions=plan_decisions,
     )
+
+
+def split_targeting_clause(summary: str) -> tuple[str, str]:
+    """Split a generated summary into (base, targeting clause).
+
+    The targeting clause is the deterministic "Targeting {title} opportunities."
+    sentence (never a claim of a held role). Returns ``("", "")`` gracefully when
+    the summary is empty and an empty clause when no targeting sentence exists.
+    """
+    if not summary:
+        return "", ""
+    match = re.search(r"\bTargeting\s+.+?\bopportunities\.", summary)
+    if not match:
+        return summary.strip(), ""
+    clause = match.group(0).strip()
+    base = (summary[: match.start()] + summary[match.end() :]).strip()
+    base = re.sub(r"\s{2,}", " ", base)
+    return base, clause
+
+
+def _summary_decisions(summary: str, jd_profile: JDProfile) -> list[PlanDecision]:
+    base, targeting = split_targeting_clause(summary)
+    decisions: list[PlanDecision] = []
+    if base:
+        decisions.append(
+            PlanDecision(
+                kind="summary",
+                location_id="resume::summary",
+                original_text="",
+                tailored_text=base,
+                operation="added",
+                reason="Generated a tailored professional summary grounded in the candidate's own evidence.",
+            )
+        )
+    if targeting:
+        decisions.append(
+            PlanDecision(
+                kind="targeting_clause",
+                location_id="resume::summary::targeting",
+                original_text="",
+                tailored_text=targeting,
+                operation="added",
+                reason=f"Named the target role ({jd_profile.title}) as a targeting statement, never as held experience.",
+            )
+        )
+    return decisions
+
+
+def _skill_decisions(skill_groups: list[tuple[str, list[str]]]) -> list[PlanDecision]:
+    decisions: list[PlanDecision] = []
+    for group_index, (label, items) in enumerate(skill_groups):
+        if not items:
+            continue
+        decisions.append(
+            PlanDecision(
+                kind="skill",
+                location_id=f"resume::skills::group{group_index}",
+                original_text="",
+                tailored_text=f"{label}: {', '.join(items)}",
+                operation="added",
+                reason="Surfaced evidence-backed skills into a job-relevant group.",
+                matched_keywords=list(items),
+            )
+        )
+    return decisions
 
 
 def build_cover_letter_plan(
@@ -399,10 +469,11 @@ def _fallback_summary(
     # A target title is never claimed as held experience — it is framed only
     # as what the candidate is targeting, in its own clearly separate clause.
     target_clause = f" Targeting {jd_profile.title} opportunities." if _is_real_target_title(jd_profile.title) else ""
-    return (
-        f"{role_identity}{years_clause}{skills_clause}.{domain_clause}{target_clause} "
-        "Focused on shipping reliable, well-scoped work and communicating clearly with stakeholders."
-    )
+    # Deterministic bounded variation of the closing sentence (>= 6-entry pool),
+    # keyed by a stable candidate/JD seed, so different candidates do not all get
+    # the identical filler while the same input is always reproducible.
+    closing = select_summary_closing(f"{role_identity}|{jd_profile.title}|{jd_profile.company}|{skills_clause}")
+    return f"{role_identity}{years_clause}{skills_clause}.{domain_clause}{target_clause} {closing}"
 
 
 def _is_real_target_title(title: str) -> bool:
@@ -505,9 +576,9 @@ def _select_experience(
     evidence: list[EvidenceItem],
     jd_profile: JDProfile,
     provider: LLMProvider | None,
-) -> list[Experience]:
+) -> tuple[list[Experience], list[PlanDecision]]:
     keywords = [item.keyword.lower() for item in evidence if item.evidence_tier != "missing"]
-    entries: list[tuple[Experience, list[str]]] = []
+    entries: list[tuple[Experience, list[str], list[str]]] = []
 
     for experience in profile.experiences:
         scored_bullets = sorted(
@@ -515,15 +586,22 @@ def _select_experience(
             key=lambda bullet: _bullet_score(bullet, keywords),
             reverse=True,
         )
+        # Drop exact near-duplicate candidate bullets (extraction artifacts) before
+        # tailoring, so the same statement is never surfaced twice — deterministic
+        # anti-stuffing that removes only repeated content, never unique wording.
+        scored_bullets = dedupe_bullets(scored_bullets)
         chosen: list[str] = [soften_banned_style(bullet) for bullet in scored_bullets]
         # Keep the entry even with zero bullets (company/title/dates only):
         # dropping it here would silently discard a verified source-profile
         # entry that `validate_completeness` still counts, producing a false
         # completeness failure. `generate_resume_text` renders a bulletless
-        # entry fine (just the header line).
-        entries.append((experience, chosen))
+        # entry fine (just the header line). ``scored_bullets`` are the raw
+        # candidate bullets (style softening happens in ``chosen``); the raw form
+        # is what the change ledger records as ``original_text`` so a rejected
+        # bullet restores the candidate's own wording, not a softened variant.
+        entries.append((experience, chosen, scored_bullets))
 
-    all_originals = [bullet for _, chosen in entries for bullet in chosen]
+    all_originals = [bullet for _, chosen, _ in entries for bullet in chosen]
     # Bullets already carrying two or more JD keywords are targeted as-is;
     # rewriting them spends tokens for little gain and risks quality drift.
     # Only the under-aligned bullets go to the model.
@@ -536,11 +614,31 @@ def _select_experience(
             rewritten_flat[index] = rewritten_batch[position]
 
     selected: list[Experience] = []
+    decisions: list[PlanDecision] = []
     cursor = 0
-    for experience, chosen in entries:
+    for exp_index, (experience, chosen, raw_bullets) in enumerate(entries):
         count = len(chosen)
         final_bullets = rewritten_flat[cursor : cursor + count]
         cursor += count
+        for bullet_index, (raw_bullet, final_bullet) in enumerate(zip(raw_bullets, final_bullets, strict=False)):
+            # Record against the RAW candidate bullet (before style softening) so
+            # a rejected bullet restores the candidate's own wording exactly.
+            if raw_bullet.strip() == final_bullet.strip():
+                continue
+            decisions.append(
+                PlanDecision(
+                    kind="bullet",
+                    location_id=f"resume::exp{exp_index}::bullet{bullet_index}",
+                    original_text=raw_bullet,
+                    tailored_text=final_bullet,
+                    operation="rewritten",
+                    reason=(
+                        "Rewrote the bullet to surface job-relevant keywords while keeping the "
+                        "original facts, scope, and seniority."
+                    ),
+                    matched_keywords=[keyword for keyword in keywords if _keyword_hits(final_bullet, [keyword])],
+                )
+            )
         selected.append(
             Experience(
                 company=experience.company,
@@ -550,7 +648,7 @@ def _select_experience(
                 bullets=final_bullets,
             )
         )
-    return selected
+    return selected, decisions
 
 
 def _rewrite_bullets_batch(
@@ -607,7 +705,13 @@ def _bullet_is_valid(candidate: str, original: str, known_skills: list[str]) -> 
     found = {metric.lower() for metric in find_metrics(candidate)}
     if not found.issubset(allowed):
         return False
-    return not _introduces_new_skill(candidate, original, known_skills)
+    if _introduces_new_skill(candidate, original, known_skills):
+        return False
+    # Deterministic naturalness/anti-stuffing gate: rejects first-person, ownership
+    # or seniority escalation, awkward length, and new tools/metrics not in the
+    # original bullet. On any failure the caller keeps the candidate-original
+    # bullet, so this can only preserve truthful wording, never fabricate.
+    return not bullet_safety_errors(candidate, original, known_skills)
 
 
 def _introduces_new_skill(rewritten: str, original: str, known_skills: list[str]) -> bool:

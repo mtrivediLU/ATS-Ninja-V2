@@ -6,6 +6,7 @@ from ats_engine.kit.contract import (
     APPLICATION_KIT_V1,
     APPLICATION_KIT_V2,
     APPLICATION_KIT_V3,
+    APPLICATION_KIT_V4,
     SCHEMA_VERSION,
     AnswerArtifact,
     AnswerItem,
@@ -13,6 +14,12 @@ from ats_engine.kit.contract import (
     ArtifactKind,
     ArtifactStatus,
     ArtifactValidation,
+    AtsMatchScore,
+    AtsQualityReportPayload,
+    ChangeOperation,
+    ChangeRecord,
+    ChangeStatus,
+    ChangeType,
     ClaimRecord,
     ClaimStatus,
     ClaimType,
@@ -21,6 +28,7 @@ from ats_engine.kit.contract import (
     CoverLetterDocument,
     EvidenceRef,
     FitBand,
+    FitCategory,
     GapHandlingGuide,
     GenerationMetadata,
     InterviewAnswerGuide,
@@ -32,6 +40,7 @@ from ats_engine.kit.contract import (
     InterviewQuestionCategory,
     JobFitArtifact,
     LinkedInOutreachArtifact,
+    MatchReport,
     OutreachAudience,
     OutreachContextKind,
     OutreachContextRef,
@@ -49,6 +58,8 @@ from ats_engine.kit.contract import (
     ResumeEducationEntry,
     ResumeExperienceEntry,
     ResumeSkillGroup,
+    ScoreConfidence,
+    StageTimings,
     StarCompleteness,
     StarSourceType,
     StarStoryCandidate,
@@ -97,7 +108,90 @@ def application_kit_to_dict(kit: ApplicationKit) -> dict[str, Any]:
         "linkedin_outreach": (
             _linkedin_outreach_to_dict(kit.linkedin_outreach) if kit.linkedin_outreach is not None else None
         ),
+        "match_report": _match_report_to_dict(kit.match_report) if kit.match_report is not None else None,
+        "stage_timings": {"stages_ms": dict(kit.stage_timings.stages_ms)},
+        "revision": kit.revision,
         "warnings": list(kit.warnings),
+    }
+
+
+def _change_record_to_dict(record: ChangeRecord) -> dict[str, Any]:
+    return {
+        "id": record.id,
+        "artifact": record.artifact.value,
+        "change_type": record.change_type.value,
+        "operation": record.operation.value,
+        "original_text": record.original_text,
+        "tailored_text": record.tailored_text,
+        "reason": record.reason,
+        "status": record.status.value,
+        "reversible": record.reversible,
+        "matched_keywords": list(record.matched_keywords),
+        "evidence": [_evidence_to_dict(ref) for ref in record.evidence],
+        "ats_impact": record.ats_impact,
+        "ats_impact_delta": record.ats_impact_delta,
+        "confidence": record.confidence.value,
+        "linked_claim_ids": list(record.linked_claim_ids),
+    }
+
+
+def _ats_match_score_to_dict(score: AtsMatchScore) -> dict[str, Any]:
+    return {
+        "score": score.score,
+        "matched_keywords": list(score.matched_keywords),
+        "missing_keywords": list(score.missing_keywords),
+        "total_keywords": score.total_keywords,
+        "required_matched": score.required_matched,
+        "required_total": score.required_total,
+        "preferred_matched": score.preferred_matched,
+        "preferred_total": score.preferred_total,
+    }
+
+
+def _quality_payload_to_dict(payload: AtsQualityReportPayload) -> dict[str, Any]:
+    return {
+        "required_term_count": payload.required_term_count,
+        "required_supported_count": payload.required_supported_count,
+        "required_coverage_percent": payload.required_coverage_percent,
+        "preferred_term_count": payload.preferred_term_count,
+        "preferred_supported_count": payload.preferred_supported_count,
+        "preferred_coverage_percent": payload.preferred_coverage_percent,
+        "exact_target_title_present": payload.exact_target_title_present,
+        "section_presence": dict(payload.section_presence),
+        "contact_issue_count": payload.contact_issue_count,
+        "contact_issues": list(payload.contact_issues),
+        "measurable_result_count": payload.measurable_result_count,
+        "word_count": payload.word_count,
+        "unsupported_requirement_count": payload.unsupported_requirement_count,
+        "adjacency_count": payload.adjacency_count,
+        "working_knowledge_count": payload.working_knowledge_count,
+        "formatting_warnings": list(payload.formatting_warnings),
+        "duplicate_keyword_warnings": list(payload.duplicate_keyword_warnings),
+        "generic_language_warnings": list(payload.generic_language_warnings),
+    }
+
+
+def _match_report_to_dict(report: MatchReport) -> dict[str, Any]:
+    return {
+        "original_ats_match": _ats_match_score_to_dict(report.original_ats_match),
+        "tailored_ats_match": (
+            _ats_match_score_to_dict(report.tailored_ats_match) if report.tailored_ats_match is not None else None
+        ),
+        "alignment_score": report.alignment_score,
+        "fit_band": report.fit_band.value,
+        "fit_category": report.fit_category.value,
+        "confidence": report.confidence.value,
+        "confidence_reasons": list(report.confidence_reasons),
+        "strongest_matches": list(report.strongest_matches),
+        "genuine_gaps": list(report.genuine_gaps),
+        "must_have_gaps": list(report.must_have_gaps),
+        "keywords_matched_original": list(report.keywords_matched_original),
+        "keywords_surfaced_by_tailoring": list(report.keywords_surfaced_by_tailoring),
+        "keywords_still_missing": list(report.keywords_still_missing),
+        "recommendation": report.recommendation,
+        "kit_summary": report.kit_summary,
+        "quality_report": _quality_payload_to_dict(report.quality_report),
+        "disclaimer": report.disclaimer,
     }
 
 
@@ -137,6 +231,7 @@ def _resume_to_dict(resume: ResumeArtifact) -> dict[str, Any]:
         "claims": [_claim_to_dict(claim) for claim in resume.claims],
         "interview_probability": resume.interview_probability,
         "document": _resume_document_to_dict(resume.document) if resume.document is not None else None,
+        "change_ledger": [_change_record_to_dict(record) for record in resume.change_ledger],
     }
 
 
@@ -147,6 +242,7 @@ def _cover_letter_to_dict(cover: CoverLetterArtifact) -> dict[str, Any]:
         "validation": _artifact_validation_to_dict(cover.validation),
         "claims": [_claim_to_dict(claim) for claim in cover.claims],
         "document": _cover_document_to_dict(cover.document) if cover.document is not None else None,
+        "change_ledger": [_change_record_to_dict(record) for record in cover.change_ledger],
     }
 
 
@@ -447,7 +543,107 @@ def application_kit_from_dict(data: dict[str, Any]) -> ApplicationKit:
         job_fit=_job_fit_from_dict(data.get("job_fit")),
         interview_prep=_interview_prep_from_dict(data.get("interview_prep")),
         linkedin_outreach=_linkedin_outreach_from_dict(data.get("linkedin_outreach")),
+        match_report=_match_report_from_dict(data.get("match_report")),
+        stage_timings=_stage_timings_from_dict(data.get("stage_timings")),
+        revision=int(data.get("revision", 0)),
         warnings=[str(item) for item in data.get("warnings") or []],
+    )
+
+
+def _stage_timings_from_dict(raw: object) -> StageTimings:
+    stages: dict[str, int] = {}
+    if isinstance(raw, dict):
+        source = raw.get("stages_ms") if isinstance(raw.get("stages_ms"), dict) else raw
+        if isinstance(source, dict):
+            for key, value in source.items():
+                try:
+                    stages[str(key)] = int(value)
+                except (TypeError, ValueError):
+                    continue
+    return StageTimings(stages_ms=stages)
+
+
+def _change_record_from_dict(raw: dict[str, Any]) -> ChangeRecord:
+    return ChangeRecord(
+        id=str(raw.get("id", "")),
+        artifact=ArtifactKind(str(raw.get("artifact", ArtifactKind.RESUME.value))),
+        change_type=ChangeType(str(raw.get("change_type", ChangeType.BULLET.value))),
+        operation=ChangeOperation(str(raw.get("operation", ChangeOperation.ADDED.value))),
+        original_text=str(raw.get("original_text", "")),
+        tailored_text=str(raw.get("tailored_text", "")),
+        reason=str(raw.get("reason", "")),
+        status=ChangeStatus(str(raw.get("status", ChangeStatus.PROPOSED.value))),
+        reversible=bool(raw.get("reversible", True)),
+        matched_keywords=[str(item) for item in raw.get("matched_keywords") or []],
+        evidence=[_evidence_from_dict(ref) for ref in raw.get("evidence") or []],
+        ats_impact=str(raw.get("ats_impact", "")),
+        ats_impact_delta=float(raw.get("ats_impact_delta", 0.0)),
+        confidence=ScoreConfidence(str(raw.get("confidence", ScoreConfidence.MEDIUM.value))),
+        linked_claim_ids=[str(item) for item in raw.get("linked_claim_ids") or []],
+    )
+
+
+def _ats_match_score_from_dict(raw: object) -> AtsMatchScore:
+    data = raw if isinstance(raw, dict) else {}
+    return AtsMatchScore(
+        score=float(data.get("score", 0.0)),
+        matched_keywords=[str(item) for item in data.get("matched_keywords") or []],
+        missing_keywords=[str(item) for item in data.get("missing_keywords") or []],
+        total_keywords=int(data.get("total_keywords", 0)),
+        required_matched=int(data.get("required_matched", 0)),
+        required_total=int(data.get("required_total", 0)),
+        preferred_matched=int(data.get("preferred_matched", 0)),
+        preferred_total=int(data.get("preferred_total", 0)),
+    )
+
+
+def _quality_payload_from_dict(raw: object) -> AtsQualityReportPayload:
+    data = raw if isinstance(raw, dict) else {}
+    section = data.get("section_presence")
+    return AtsQualityReportPayload(
+        required_term_count=int(data.get("required_term_count", 0)),
+        required_supported_count=int(data.get("required_supported_count", 0)),
+        required_coverage_percent=float(data.get("required_coverage_percent", 0.0)),
+        preferred_term_count=int(data.get("preferred_term_count", 0)),
+        preferred_supported_count=int(data.get("preferred_supported_count", 0)),
+        preferred_coverage_percent=float(data.get("preferred_coverage_percent", 0.0)),
+        exact_target_title_present=bool(data.get("exact_target_title_present", False)),
+        section_presence={str(k): bool(v) for k, v in section.items()} if isinstance(section, dict) else {},
+        contact_issue_count=int(data.get("contact_issue_count", 0)),
+        contact_issues=[str(item) for item in data.get("contact_issues") or []],
+        measurable_result_count=int(data.get("measurable_result_count", 0)),
+        word_count=int(data.get("word_count", 0)),
+        unsupported_requirement_count=int(data.get("unsupported_requirement_count", 0)),
+        adjacency_count=int(data.get("adjacency_count", 0)),
+        working_knowledge_count=int(data.get("working_knowledge_count", 0)),
+        formatting_warnings=[str(item) for item in data.get("formatting_warnings") or []],
+        duplicate_keyword_warnings=[str(item) for item in data.get("duplicate_keyword_warnings") or []],
+        generic_language_warnings=[str(item) for item in data.get("generic_language_warnings") or []],
+    )
+
+
+def _match_report_from_dict(raw: object) -> MatchReport | None:
+    if not isinstance(raw, dict):
+        return None
+    tailored = raw.get("tailored_ats_match")
+    return MatchReport(
+        original_ats_match=_ats_match_score_from_dict(raw.get("original_ats_match")),
+        alignment_score=float(raw.get("alignment_score", 0.0)),
+        fit_band=FitBand(str(raw.get("fit_band", FitBand.LOW.value))),
+        fit_category=FitCategory(str(raw.get("fit_category", FitCategory.LOW_ALIGNMENT.value))),
+        confidence=ScoreConfidence(str(raw.get("confidence", ScoreConfidence.MEDIUM.value))),
+        confidence_reasons=[str(item) for item in raw.get("confidence_reasons") or []],
+        tailored_ats_match=_ats_match_score_from_dict(tailored) if tailored is not None else None,
+        strongest_matches=[str(item) for item in raw.get("strongest_matches") or []],
+        genuine_gaps=[str(item) for item in raw.get("genuine_gaps") or []],
+        must_have_gaps=[str(item) for item in raw.get("must_have_gaps") or []],
+        keywords_matched_original=[str(item) for item in raw.get("keywords_matched_original") or []],
+        keywords_surfaced_by_tailoring=[str(item) for item in raw.get("keywords_surfaced_by_tailoring") or []],
+        keywords_still_missing=[str(item) for item in raw.get("keywords_still_missing") or []],
+        recommendation=str(raw.get("recommendation", "")),
+        kit_summary=str(raw.get("kit_summary", "")),
+        quality_report=_quality_payload_from_dict(raw.get("quality_report")),
+        disclaimer=str(raw.get("disclaimer", "")),
     )
 
 
@@ -494,6 +690,7 @@ def _resume_from_dict(raw: dict[str, Any] | None) -> ResumeArtifact | None:
         claims=[_claim_from_dict(claim) for claim in raw.get("claims") or []],
         interview_probability=int(probability) if probability is not None else None,
         document=_resume_document_from_dict(raw.get("document")),
+        change_ledger=[_change_record_from_dict(record) for record in raw.get("change_ledger") or []],
     )
 
 
@@ -506,6 +703,7 @@ def _cover_letter_from_dict(raw: dict[str, Any] | None) -> CoverLetterArtifact |
         validation=_artifact_validation_from_dict(raw.get("validation") or {}),
         claims=[_claim_from_dict(claim) for claim in raw.get("claims") or []],
         document=_cover_document_from_dict(raw.get("document")),
+        change_ledger=[_change_record_from_dict(record) for record in raw.get("change_ledger") or []],
     )
 
 
@@ -856,6 +1054,11 @@ def is_application_kit_v3(raw: dict[str, Any]) -> bool:
 
 def is_application_kit_v4(raw: dict[str, Any]) -> bool:
     """True when a persisted result is a v4 ApplicationKit."""
+    return str(raw.get("schema_version", "")) == APPLICATION_KIT_V4
+
+
+def is_application_kit_v5(raw: dict[str, Any]) -> bool:
+    """True when a persisted result is a v5 ApplicationKit (current)."""
     return str(raw.get("schema_version", "")) == SCHEMA_VERSION
 
 
@@ -964,8 +1167,17 @@ def normalize_persisted_result(raw: dict[str, Any] | None) -> dict[str, Any] | N
     """
     if raw is None:
         return None
-    if is_application_kit_v4(raw):
+    if is_application_kit_v5(raw):
         return raw
+    if is_application_kit_v4(raw):
+        # A stored v4 kit is read as-is: it never had a match report or change
+        # ledgers, and it is NOT rewritten into v5 (its schema_version stays v4).
+        # Missing v5 fields default safely (match_report -> None, ledgers -> []).
+        normalized = dict(raw)
+        normalized.setdefault("match_report", None)
+        normalized.setdefault("stage_timings", {"stages_ms": {}})
+        normalized.setdefault("revision", 0)
+        return normalized
     if is_application_kit_v3(raw):
         normalized = dict(raw)
         normalized.setdefault("linkedin_outreach", None)

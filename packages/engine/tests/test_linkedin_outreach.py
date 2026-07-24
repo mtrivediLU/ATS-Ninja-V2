@@ -120,10 +120,10 @@ def test_outreach_is_independently_selectable() -> None:
     assert disabled.linkedin_outreach is None
 
 
-def test_v4_json_round_trip_preserves_typed_outreach() -> None:
+def test_v5_json_round_trip_preserves_typed_outreach() -> None:
     kit = _kit()
     raw = application_kit_to_dict(kit)
-    assert raw["schema_version"] == "application-kit/v4"
+    assert raw["schema_version"] == "application-kit/v5"
     assert raw["linkedin_outreach"]["drafts"]
     restored = application_kit_from_dict(json.loads(json.dumps(raw)))
     assert restored.linkedin_outreach == kit.linkedin_outreach

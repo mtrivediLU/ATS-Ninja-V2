@@ -1,0 +1,113 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  engine:
+    name: Engine (pytest, ruff, mypy, eval)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install engine
+        run: pip install -e "packages/engine[dev]"
+      - name: Ruff check
+        run: ruff check packages/engine
+      - name: Ruff format check
+        run: ruff format --check packages/engine
+      - name: Mypy
+        run: mypy --config-file packages/engine/pyproject.toml packages/engine/src
+      - name: No Streamlit imports under engine
+        run: |
+          if grep -rn "streamlit" packages/engine/src; then
+            echo "Streamlit import found under packages/engine/src" && exit 1
+          fi
+      - name: Pytest
+        run: pytest packages/engine -q
+      - name: Deterministic evaluation harness
+        run: python -m ats_engine.eval
+
+  api:
+    name: API (pytest, ruff, mypy, migrations, PostgreSQL concurrency)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ats
+          POSTGRES_PASSWORD: ats
+          POSTGRES_DB: ats_ninja
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ats"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      ATS_API_TEST_POSTGRES_URL: postgresql+asyncpg://ats:ats@localhost:5432/ats_ninja
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install engine + API
+        run: |
+          pip install -e "packages/engine[dev]"
+          pip install -e "apps/api[dev]"
+      - name: Ruff check
+        run: ruff check apps/api
+      - name: Ruff format check
+        run: ruff format --check apps/api
+      - name: Mypy
+        run: mypy --config-file apps/api/pyproject.toml apps/api/app
+      - name: Alembic upgrade + downgrade (PostgreSQL)
+        working-directory: apps/api
+        env:
+          ATS_API_DATABASE_URL: postgresql+asyncpg://ats:ats@localhost:5432/ats_ninja
+        run: |
+          alembic upgrade head
+          alembic downgrade 0005_primary_artifact_selection
+          alembic upgrade head
+      - name: Pytest (includes real PostgreSQL concurrency test)
+        run: pytest apps/api -q
+
+  web:
+    name: Web (lint, typecheck, build, test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Lint
+        run: pnpm --filter @ats-ninja/web lint
+      - name: Typecheck
+        run: pnpm --filter @ats-ninja/web typecheck
+      - name: Test
+        run: pnpm --filter @ats-ninja/web test
+      - name: Build
+        run: pnpm --filter @ats-ninja/web build
+
+  compose:
+    name: Docker Compose config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate compose configuration
+        run: docker compose config
