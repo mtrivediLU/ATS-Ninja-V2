@@ -28,16 +28,19 @@ external platform.
 
 # Explicit, self-describing contract identifiers. Bump these when the shape or
 # meaning of the persisted contract changes; the value is stored on every kit.
+# Historical constants are preserved so the serialization boundary can keep
+# reading kits written under any earlier contract (see ADR-0012).
 APPLICATION_KIT_V1 = "application-kit/v1"
 APPLICATION_KIT_V2 = "application-kit/v2"
 APPLICATION_KIT_V3 = "application-kit/v3"
-SCHEMA_VERSION = "application-kit/v4"
+APPLICATION_KIT_V4 = "application-kit/v4"
+SCHEMA_VERSION = "application-kit/v5"
 
 # The orchestration contract version identifies the grounded-generation behavior
 # (claim extraction + repair/rejection policy). It participates in cache identity
 # (see ADR-0013) so a change in grounding behavior never reuses prose produced by
-# an older contract.
-ORCHESTRATION_VERSION = "grounded-orchestration/v4"
+# an older contract. The v5 bump invalidates any cached v4 orchestration output.
+ORCHESTRATION_VERSION = "grounded-orchestration/v5"
 
 # Bound every evidence excerpt so the trace never becomes a second copy of the
 # candidate's resume (privacy: see ADR-0008).
@@ -131,12 +134,75 @@ class StarSourceType(StrEnum):
 
 
 class FitBand(StrEnum):
-    """Deterministic fit band derived from requirement coverage policy."""
+    """Deterministic fit band derived from requirement coverage policy.
+
+    Preserved unchanged for v1-v4 backward compatibility. v5 adds the
+    user-facing :class:`FitCategory` alongside it (never replacing it).
+    """
 
     LOW = "low"
     PARTIAL = "partial"
     COMPETITIVE = "competitive"
     STRONG = "strong"
+
+
+class FitCategory(StrEnum):
+    """Honest, user-facing fit classification (ApplicationKit v5).
+
+    Derived from the same evidence-based role-alignment score and must-have gap
+    count as :class:`FitBand`, but phrased for the candidate. It is an estimate
+    from deterministic keyword/evidence analysis, never a prediction of an
+    employer's decision. See :mod:`ats_engine.scoring.match_report`.
+    """
+
+    STRONG_FIT = "strong_fit"
+    GOOD_FIT = "good_fit"
+    PARTIAL_FIT = "partial_fit"
+    STRETCH_ROLE = "stretch_role"
+    LOW_ALIGNMENT = "low_alignment"
+
+
+class ScoreConfidence(StrEnum):
+    """Deterministic confidence in the match scores (annotation, never a gate)."""
+
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
+class ChangeType(StrEnum):
+    """The category of a single tailoring change recorded in the change ledger."""
+
+    SUMMARY = "summary"
+    TARGETING_CLAUSE = "targeting_clause"
+    BULLET = "bullet"
+    SKILL = "skill"
+    COVER_LETTER_PARAGRAPH = "cover_letter_paragraph"
+    GROUNDING_REMOVAL = "grounding_removal"
+
+
+class ChangeOperation(StrEnum):
+    """What deterministically happened to the affected content."""
+
+    ADDED = "added"
+    REWRITTEN = "rewritten"
+    REORDERED = "reordered"
+    OMITTED = "omitted"
+    REMOVED = "removed"  # grounding excision (irreversible)
+
+
+class ChangeStatus(StrEnum):
+    """User disposition of a proposed change.
+
+    - ``proposed``: the delivered artifact contains the change; no user action.
+    - ``accepted``: the user affirmed the change (delivered content is unchanged).
+    - ``rejected``: the user reverted the change (original candidate text restored
+      for a rewrite/omission, generated text removed for an addition).
+    """
+
+    PROPOSED = "proposed"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
 
 
 class RequirementClassification(StrEnum):
@@ -229,6 +295,142 @@ class ClaimRecord:
 
 
 @dataclass(slots=True)
+class WeightedKeyword:
+    """One JD keyword in the unified job vocabulary, with its match weight.
+
+    Weight is 2.0 for required terms and 1.0 for preferred/other terms. The
+    vocabulary is built *only* from the job description (evidence-matrix
+    requirements first, then remaining JD technical keywords); no candidate-
+    derived term is ever added. ``source`` records where the term came from
+    (``required`` / ``preferred`` / ``jd_keyword``) for transparency.
+    """
+
+    term: str
+    weight: float
+    source: str = "jd_keyword"
+    required: bool = False
+
+
+@dataclass(slots=True)
+class AtsMatchScore:
+    """A 0-100 keyword-match score of one resume against the unified JD vocabulary.
+
+    Presence, not frequency, determines credit: a keyword scores at most once,
+    and only when it is genuinely present (an appended copy of the JD or a
+    negated/unsupported mention does not earn user-facing credit — see
+    :mod:`ats_engine.scoring.match_report`).
+    """
+
+    score: float
+    matched_keywords: list[str] = field(default_factory=list)
+    missing_keywords: list[str] = field(default_factory=list)
+    total_keywords: int = 0
+    required_matched: int = 0
+    required_total: int = 0
+    preferred_matched: int = 0
+    preferred_total: int = 0
+
+
+@dataclass(slots=True)
+class AtsQualityReportPayload:
+    """Bounded, persistable projection of the internal ``AtsQualityReport``.
+
+    Structural diagnostics only — never raw resume content or internal engine
+    objects. Coverage percentages count only keywords backed by real evidence
+    (tier A/B); an unsupported keyword never inflates coverage.
+    """
+
+    required_term_count: int = 0
+    required_supported_count: int = 0
+    required_coverage_percent: float = 0.0
+    preferred_term_count: int = 0
+    preferred_supported_count: int = 0
+    preferred_coverage_percent: float = 0.0
+    exact_target_title_present: bool = False
+    section_presence: dict[str, bool] = field(default_factory=dict)
+    contact_issue_count: int = 0
+    contact_issues: list[str] = field(default_factory=list)
+    measurable_result_count: int = 0
+    word_count: int = 0
+    unsupported_requirement_count: int = 0
+    adjacency_count: int = 0
+    working_knowledge_count: int = 0
+    formatting_warnings: list[str] = field(default_factory=list)
+    duplicate_keyword_warnings: list[str] = field(default_factory=list)
+    generic_language_warnings: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class MatchReport:
+    """The v5 honest-scoring report: three distinct scores plus diagnostics.
+
+    The three scores are deliberately separate and never merged into one
+    "ATS score": ``original_ats_match`` measures the *submitted* resume,
+    ``tailored_ats_match`` measures the *final grounded* resume (absent when the
+    resume was not requested or was withheld), and ``alignment_score`` is the
+    evidence-based role-alignment index (reused from the fit policy, never a
+    competing formula). All are deterministic estimates, not employer decisions.
+    """
+
+    original_ats_match: AtsMatchScore
+    alignment_score: float
+    fit_band: FitBand
+    fit_category: FitCategory
+    confidence: ScoreConfidence
+    confidence_reasons: list[str] = field(default_factory=list)
+    tailored_ats_match: AtsMatchScore | None = None
+    strongest_matches: list[str] = field(default_factory=list)
+    genuine_gaps: list[str] = field(default_factory=list)
+    must_have_gaps: list[str] = field(default_factory=list)
+    keywords_matched_original: list[str] = field(default_factory=list)
+    keywords_surfaced_by_tailoring: list[str] = field(default_factory=list)
+    keywords_still_missing: list[str] = field(default_factory=list)
+    recommendation: str = ""
+    kit_summary: str = ""
+    quality_report: AtsQualityReportPayload = field(default_factory=AtsQualityReportPayload)
+    disclaimer: str = ""
+
+
+@dataclass(slots=True)
+class ChangeRecord:
+    """One transparent, evidence-linked tailoring change in the change ledger.
+
+    IDs are stable and location-aware (never random) so the same input produces
+    the same ledger, and a persisted user disposition maps back to the same
+    change on a later revision. ``ats_impact_delta`` is computed by exact
+    deterministic re-scoring (never estimated by a model); it is an
+    *estimated keyword-match* impact, never an "interview" impact.
+    """
+
+    id: str
+    artifact: ArtifactKind
+    change_type: ChangeType
+    operation: ChangeOperation
+    original_text: str
+    tailored_text: str
+    reason: str
+    status: ChangeStatus = ChangeStatus.PROPOSED
+    reversible: bool = True
+    matched_keywords: list[str] = field(default_factory=list)
+    evidence: list[EvidenceRef] = field(default_factory=list)
+    ats_impact: str = ""
+    ats_impact_delta: float = 0.0
+    confidence: ScoreConfidence = ScoreConfidence.MEDIUM
+    linked_claim_ids: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class StageTimings:
+    """Per-stage wall-clock timings in whole milliseconds (observability only).
+
+    Plain integers, no candidate content, safe to persist and surface. Absent
+    stages are simply omitted from the mapping.
+    """
+
+    stages_ms: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
 class ArtifactValidation:
     """Per-artifact validation outcome."""
 
@@ -314,6 +516,7 @@ class ResumeArtifact:
     claims: list[ClaimRecord] = field(default_factory=list)
     interview_probability: int | None = None
     document: ResumeDocument | None = None
+    change_ledger: list[ChangeRecord] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -325,6 +528,7 @@ class CoverLetterArtifact:
     validation: ArtifactValidation
     claims: list[ClaimRecord] = field(default_factory=list)
     document: CoverLetterDocument | None = None
+    change_ledger: list[ChangeRecord] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -659,6 +863,9 @@ class ApplicationKit:
     job_fit: JobFitArtifact | None = None
     interview_prep: InterviewPrepArtifact | None = None
     linkedin_outreach: LinkedInOutreachArtifact | None = None
+    match_report: MatchReport | None = None
+    stage_timings: StageTimings = field(default_factory=StageTimings)
+    revision: int = 0
     warnings: list[str] = field(default_factory=list)
 
     def all_claims(self) -> list[ClaimRecord]:

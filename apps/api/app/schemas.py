@@ -219,6 +219,26 @@ class CoverLetterDocumentResponse(BaseModel):
     signature_name: str = ""
 
 
+class ChangeRecordResponse(BaseModel):
+    """One transparent, evidence-linked tailoring change in the change ledger."""
+
+    id: str = ""
+    artifact: str = ""
+    change_type: str = ""
+    operation: str = ""
+    original_text: str = ""
+    tailored_text: str = ""
+    reason: str = ""
+    status: str = "proposed"
+    reversible: bool = True
+    matched_keywords: list[str] = Field(default_factory=list)
+    evidence: list[EvidenceRefResponse] = Field(default_factory=list)
+    ats_impact: str = ""
+    ats_impact_delta: float = 0.0
+    confidence: str = "medium"
+    linked_claim_ids: list[str] = Field(default_factory=list)
+
+
 class ResumeArtifactResponse(BaseModel):
     """The tailored resume artifact and its truth-grounding trace."""
 
@@ -228,6 +248,7 @@ class ResumeArtifactResponse(BaseModel):
     claims: list[ClaimResponse] = Field(default_factory=list)
     interview_probability: int | None = None
     document: ResumeDocumentResponse | None = None
+    change_ledger: list[ChangeRecordResponse] = Field(default_factory=list)
 
 
 class CoverLetterArtifactResponse(BaseModel):
@@ -238,6 +259,7 @@ class CoverLetterArtifactResponse(BaseModel):
     validation: ArtifactValidationResponse = Field(default_factory=ArtifactValidationResponse)
     claims: list[ClaimResponse] = Field(default_factory=list)
     document: CoverLetterDocumentResponse | None = None
+    change_ledger: list[ChangeRecordResponse] = Field(default_factory=list)
 
 
 class AnswerItemResponse(BaseModel):
@@ -464,6 +486,70 @@ class LinkedInOutreachArtifactResponse(BaseModel):
     withheld: bool = False
 
 
+class AtsMatchScoreResponse(BaseModel):
+    """A 0-100 keyword-match score of one resume against the unified JD vocabulary."""
+
+    score: float = 0.0
+    matched_keywords: list[str] = Field(default_factory=list)
+    missing_keywords: list[str] = Field(default_factory=list)
+    total_keywords: int = 0
+    required_matched: int = 0
+    required_total: int = 0
+    preferred_matched: int = 0
+    preferred_total: int = 0
+
+
+class AtsQualityReportPayloadResponse(BaseModel):
+    """Bounded structural diagnostics from the internal ATS quality report."""
+
+    required_term_count: int = 0
+    required_supported_count: int = 0
+    required_coverage_percent: float = 0.0
+    preferred_term_count: int = 0
+    preferred_supported_count: int = 0
+    preferred_coverage_percent: float = 0.0
+    exact_target_title_present: bool = False
+    section_presence: dict[str, bool] = Field(default_factory=dict)
+    contact_issue_count: int = 0
+    contact_issues: list[str] = Field(default_factory=list)
+    measurable_result_count: int = 0
+    word_count: int = 0
+    unsupported_requirement_count: int = 0
+    adjacency_count: int = 0
+    working_knowledge_count: int = 0
+    formatting_warnings: list[str] = Field(default_factory=list)
+    duplicate_keyword_warnings: list[str] = Field(default_factory=list)
+    generic_language_warnings: list[str] = Field(default_factory=list)
+
+
+class MatchReportResponse(BaseModel):
+    """The v5 honest-scoring report: three distinct scores plus diagnostics."""
+
+    original_ats_match: AtsMatchScoreResponse = Field(default_factory=AtsMatchScoreResponse)
+    tailored_ats_match: AtsMatchScoreResponse | None = None
+    alignment_score: float = 0.0
+    fit_band: str = "low"
+    fit_category: str = "low_alignment"
+    confidence: str = "medium"
+    confidence_reasons: list[str] = Field(default_factory=list)
+    strongest_matches: list[str] = Field(default_factory=list)
+    genuine_gaps: list[str] = Field(default_factory=list)
+    must_have_gaps: list[str] = Field(default_factory=list)
+    keywords_matched_original: list[str] = Field(default_factory=list)
+    keywords_surfaced_by_tailoring: list[str] = Field(default_factory=list)
+    keywords_still_missing: list[str] = Field(default_factory=list)
+    recommendation: str = ""
+    kit_summary: str = ""
+    quality_report: AtsQualityReportPayloadResponse = Field(default_factory=AtsQualityReportPayloadResponse)
+    disclaimer: str = ""
+
+
+class StageTimingsResponse(BaseModel):
+    """Per-stage wall-clock timings in whole milliseconds (observability only)."""
+
+    stages_ms: dict[str, int] = Field(default_factory=dict)
+
+
 class ApplicationKitResponse(BaseModel):
     """The versioned, truth-grounded application kit as returned by the API."""
 
@@ -480,6 +566,9 @@ class ApplicationKitResponse(BaseModel):
     job_fit: JobFitArtifactResponse | None = None
     interview_prep: InterviewPrepArtifactResponse | None = None
     linkedin_outreach: LinkedInOutreachArtifactResponse | None = None
+    match_report: MatchReportResponse | None = None
+    stage_timings: StageTimingsResponse = Field(default_factory=StageTimingsResponse)
+    revision: int = 0
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -498,6 +587,24 @@ class DocumentExportRequest(BaseModel):
     local_edit_text: str = Field(default="", max_length=100_000)
 
 
+class ChangeActionItem(BaseModel):
+    """One requested change action against a ledger record."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    change_id: str = Field(min_length=1, max_length=200)
+    action: Literal["accept", "reject", "restore"]
+
+
+class ChangeActionRequest(BaseModel):
+    """A batch of change actions with optimistic-concurrency protection."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: int = Field(ge=0)
+    actions: list[ChangeActionItem] = Field(min_length=1, max_length=200)
+
+
 class KitRead(BaseModel):
     """Full kit representation, including the result once completed."""
 
@@ -512,6 +619,8 @@ class KitRead(BaseModel):
     include_job_fit: bool = True
     include_interview_prep: bool = True
     include_linkedin_outreach: bool = True
+    revision: int = 0
+    parent_kit_id: UUID | None = None
     result: ApplicationKitResponse | None = None
     error: str | None = None
     created_at: datetime

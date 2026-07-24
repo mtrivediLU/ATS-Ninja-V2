@@ -22,10 +22,16 @@ external service and intentionally excludes application UI messages.
 > **Status: Phase 2 backend complete; Design Phase D2 private-local dogfooding polish.**
 > The engine produces a tailored **resume, cover letter, and application answers**
 > and now assembles them into a versioned, truth-grounded **ApplicationKit**
-> (`application-kit/v4`): every candidate-specific claim in generated prose is
+> (`application-kit/v5`): every candidate-specific claim in generated prose is
 > validated against the candidate's own evidence, and anything unsupported is
 > removed (or the artifact withheld) before delivery — with a structured
-> claim/evidence trace. The async API + Celery/Redis worker persist this contract
+> claim/evidence trace. **ApplicationKit v5** adds an honest `MatchReport` (three
+> separate scores — original-resume keyword match, tailored-resume keyword match,
+> and evidence-based role alignment — plus deterministic confidence, five honest
+> fit categories, a constructive recommendation, and the internal ATS quality
+> report) and a transparent, evidence-linked **change ledger** with safe,
+> persisted accept/reject/restore actions (truth-grounding removals are
+> permanent). Kits carry a revision counter and regeneration lineage. The async API + Celery/Redis worker persist this contract
 > to PostgreSQL. A structured `JobFitArtifact` now adds deterministic requirement
 > coverage, fit band, strengths, honest adjacency/working knowledge, and visible
 > gaps. A typed `InterviewPrepArtifact` adds evidence-bounded questions, answer
@@ -138,7 +144,13 @@ kit = generate_application_kit(
     requested_mode="resume and cover letter",
     use_llm=False,            # fully deterministic path (provider=None)
 )
-print(kit.schema_version)                 # "application-kit/v4"
+print(kit.schema_version)                 # "application-kit/v5"
+print(kit.match_report.original_ats_match.score)   # submitted-resume keyword match
+print(kit.match_report.tailored_ats_match.score)   # final grounded-resume keyword match
+print(kit.match_report.alignment_score)            # evidence-based role alignment
+print(kit.match_report.fit_category)               # strong_fit .. low_alignment
+print(kit.match_report.confidence)                 # high | medium | low
+print(kit.resume.change_ledger)                    # transparent, reversible tailoring changes
 print(kit.job_fit.fit_band)               # deterministic requirement-coverage band
 print(kit.job_fit.must_have_gaps)         # honest risks stay visible
 print(kit.interview_prep.questions)       # grounded questions + answer guides
@@ -247,6 +259,33 @@ standardized `ApplicantName_JobTitle_CompanyName_<Artifact>[_Template].pdf`
 filename, no browser print dialog, no external service. See
 [docs/architecture.md](docs/architecture.md#grounded-ats-tailoring-typed-requirement-categories-and-direct-pdf-download-fixedadded)
 and [ADR-0018](docs/adr/0018-local-pdf-rendering.md).
+
+## ApplicationKit v5: honest scoring and the change ledger
+
+ApplicationKit v5 makes scoring honest and tailoring transparent. The
+`MatchReport` reports three deliberately separate scores — the **original**
+resume keyword match, the **tailored** resume keyword match, and the
+**evidence-based role alignment** — plus deterministic `high`/`medium`/`low`
+confidence with reasons, one of five honest fit categories
+(`strong_fit` … `low_alignment`), a constructive style-clean recommendation, and
+the persisted ATS quality report. A keyword only earns credit when the
+candidate's own parsed evidence supports it, so pasting the job description into
+a resume, repeating keywords, or padding prose can never raise a score. Every
+figure is a deterministic estimate, never a prediction of an employer's decision;
+`interview_probability` is preserved for compatibility but is never rendered as a
+percentage.
+
+Each artifact carries a transparent, evidence-linked **change ledger**. Ordinary
+tailoring changes (summary, targeting clause, bullet rewrites, cover-letter
+paragraphs) can be accepted or rejected through
+`POST /api/v1/kits/{id}/change-actions`; the batch is deterministic, LLM-free,
+re-grounded, re-validated, and bumps a persisted revision (optimistic concurrency
+via `expected_revision`, 409 on conflict). Truth-grounding removals are
+permanent and can never be restored. Kits also support
+`POST /api/v1/kits/{id}/regenerate` (a new linked kit from the same inputs) and
+`DELETE /api/v1/kits/{id}`. A static **How scoring works** page explains all of
+this. See [ADR-0019](docs/adr/0019-application-kit-v5-match-report-and-change-ledger.md)
+and [ADR-0020](docs/adr/0020-change-action-revision-and-irreversibility-policy.md).
 
 ## License
 

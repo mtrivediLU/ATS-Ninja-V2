@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import asdict
 from typing import Any, cast
 
@@ -31,6 +32,7 @@ from ats_engine.providers.ollama import ollama_provider_pair
 from ats_engine.validation.claims import validate_claims
 from ats_engine.validation.completeness import validate_completeness
 from ats_engine.validation.latex import validate_latex
+from ats_engine.validation.naturalness import production_naturalness_warnings
 from ats_engine.validation.output_format import (
     validate_cover_letter_word_count,
     validate_output_format,
@@ -212,6 +214,8 @@ def validate_pipeline_result(result: PipelineResult, profile: Profile | None = N
     errors.extend(
         [f"contact: {warning}" for warning in validate_contact_integrity(result.parsed_input.contacts).warnings]
     )
+    jd_keywords = list(result.jd_profile.technical_keywords)
+    job_description = result.parsed_input.job_description
     if result.resume_latex:
         errors.extend([f"resume: {error}" for error in validate_latex(result.resume_latex)])
         errors.extend([f"resume: {error}" for error in validate_style(result.resume_latex)])
@@ -222,12 +226,32 @@ def validate_pipeline_result(result: PipelineResult, profile: Profile | None = N
                 for error in validate_output_format(result.mode_outputs[Mode.RESUME.value], Mode.RESUME)
             ]
         )
+        # Authoritative anti-stuffing / JD-echo gate on the delivered resume text
+        # (the same gate the change-action path runs). Warnings, not fatal.
+        errors.extend(
+            f"resume: {message}"
+            for message in production_naturalness_warnings(
+                text=result.resume_text,
+                units=_resume_bullet_units(result.resume_text),
+                keywords=jd_keywords,
+                job_description=job_description,
+            )
+        )
     if result.cover_letter_latex:
         errors.extend([f"cover letter: {error}" for error in validate_latex(result.cover_letter_latex)])
         errors.extend([f"cover letter: {error}" for error in validate_style(result.cover_letter_latex)])
         errors.extend([f"cover letter: {error}" for error in validate_claims(result.cover_letter_latex, profile)])
         errors.extend(
             [f"cover letter: {error}" for error in validate_cover_letter_word_count(result.cover_letter_text)]
+        )
+        errors.extend(
+            f"cover letter: {message}"
+            for message in production_naturalness_warnings(
+                text=result.cover_letter_text,
+                units=_cover_paragraph_units(result.cover_letter_text),
+                keywords=jd_keywords,
+                job_description=job_description,
+            )
         )
         errors.extend(
             [
@@ -244,6 +268,22 @@ def validate_pipeline_result(result: PipelineResult, profile: Profile | None = N
             [f"answers output: {error}" for error in validate_output_format(result.answers_text, Mode.QUESTIONS)]
         )
     return _dedupe(errors)
+
+
+def _resume_bullet_units(resume_text: str) -> list[str]:
+    """Structured bullet units for the stuffing checks, parsed from rendered text."""
+    from ats_engine.generation.latex_renderer import parse_resume_sections
+
+    sections = parse_resume_sections(resume_text or "")
+    bullets: list[str] = []
+    for entry in sections.get("experience") or []:
+        bullets.extend(bullet for bullet in (entry.get("bullets") or []) if bullet and bullet.strip())
+    return bullets
+
+
+def _cover_paragraph_units(cover_text: str) -> list[str]:
+    """Structured paragraph units for the stuffing checks, split on blank lines."""
+    return [block.strip() for block in re.split(r"\n\s*\n", cover_text or "") if block.strip()]
 
 
 def mode_from_text(requested_text: str, job_description: str = "", questions: list[str] | None = None) -> Mode:

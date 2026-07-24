@@ -40,7 +40,7 @@ def _kit(mode: Mode = Mode.RESUME_AND_COVER) -> ApplicationKit:
 
 
 def test_schema_version_is_explicit_and_versioned() -> None:
-    assert SCHEMA_VERSION == "application-kit/v4"
+    assert SCHEMA_VERSION == "application-kit/v5"
     kit = _kit()
     assert kit.schema_version == SCHEMA_VERSION
     assert kit.engine_version  # populated
@@ -196,11 +196,33 @@ PHASE1_RESULT = {
 }
 
 
-def test_v4_result_is_detected_and_passed_through() -> None:
+def test_v5_result_is_detected_and_passed_through() -> None:
     kit = _kit()
     data = application_kit_to_dict(kit)
-    assert is_application_kit_v4(data)
+    assert data["schema_version"] == "application-kit/v5"
     assert normalize_persisted_result(data) == data
+
+
+def test_v4_result_remains_readable_and_is_not_rewritten() -> None:
+    # A kit persisted under v4 (no match report, ledgers, or revision) must stay
+    # readable and keep its v4 schema_version — it is never silently upgraded.
+    data = application_kit_to_dict(_kit())
+    data["schema_version"] = "application-kit/v4"
+    for key in ("match_report", "stage_timings", "revision"):
+        data.pop(key, None)
+    if data.get("resume") is not None:
+        data["resume"].pop("change_ledger", None)
+    assert is_application_kit_v4(data)
+    normalized = normalize_persisted_result(data)
+    assert normalized is not None
+    assert normalized["schema_version"] == "application-kit/v4"
+    assert normalized["match_report"] is None
+    assert normalized["revision"] == 0
+    # from_dict tolerates the missing v5 fields with safe defaults.
+    kit = application_kit_from_dict(normalized)
+    assert kit.match_report is None
+    assert kit.revision == 0
+    assert kit.resume is not None and kit.resume.change_ledger == []
 
 
 def test_v3_result_remains_readable_with_absent_linkedin_outreach() -> None:

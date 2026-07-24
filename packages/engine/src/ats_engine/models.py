@@ -179,6 +179,28 @@ class EvidenceItem:
 
 
 @dataclass(slots=True)
+class PlanDecision:
+    """One instrumented tailoring decision, recorded where it happens.
+
+    This is the stable, deterministic source for the v5 change ledger (see
+    :mod:`ats_engine.kit.change_ledger`): the summary/targeting/skill/bullet
+    decisions are captured *at planning time* with their exact original and
+    tailored text and a location-aware id, rather than reconstructed by fragile
+    post-hoc diffing of rendered output. ``kind`` is one of ``summary``,
+    ``targeting_clause``, ``bullet``, ``skill``; ``operation`` is ``added``,
+    ``rewritten``, ``reordered``, or ``omitted``.
+    """
+
+    kind: str
+    location_id: str
+    original_text: str
+    tailored_text: str
+    operation: str = "rewritten"
+    reason: str = ""
+    matched_keywords: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class ResumePlan:
     contacts: ContactInfo
     jd_profile: JDProfile
@@ -195,6 +217,7 @@ class ResumePlan:
     residual_gap: str
     interview_probability: int
     analysis: list[str]
+    plan_decisions: list[PlanDecision] = field(default_factory=list)
 
 
 @dataclass(slots=True)

@@ -9,7 +9,7 @@ deterministic style repair used to avoid blocking the candidate's own wording.
 from __future__ import annotations
 
 from ats_engine.validation.claims import validate_claims
-from ats_engine.validation.completeness import validate_completeness
+from ats_engine.validation.completeness import resume_completeness_errors, validate_completeness
 from ats_engine.validation.latex import validate_latex
 from ats_engine.validation.output_format import (
     validate_cover_letter_word_count,
@@ -22,10 +22,17 @@ from ats_engine.validation.severity import (
 )
 from ats_engine.validation.style import assert_style, validate_style
 
+# NOTE: ``naturalness`` is intentionally NOT imported here. It imports
+# ``scoring.ats`` (→ match_report → job_fit → kit), so importing it at
+# validation-package init time forms an import cycle. Callers that need the
+# authoritative naturalness gate import it directly from
+# ``ats_engine.validation.naturalness``.
+
 __all__ = [
     "assert_style",
     "is_fatal_validation_error",
     "partition_validation_errors",
+    "resume_completeness_errors",
     "soften_banned_style",
     "validate_claims",
     "validate_completeness",

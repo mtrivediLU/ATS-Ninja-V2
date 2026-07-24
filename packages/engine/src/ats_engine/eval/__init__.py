@@ -13,6 +13,7 @@ from ats_engine.kit import (
 )
 from ats_engine.models import Mode
 from ats_engine.providers import LLMProvider
+from ats_engine.scoring.match_report import match_report_style_errors
 
 """Grounding, JobFit, InterviewPrep, and LinkedIn outreach evaluation.
 
@@ -56,6 +57,12 @@ class EvalCase:
     expect_outreach_present: list[str] = field(default_factory=list)
     outreach_forbidden: list[str] = field(default_factory=list)
     outreach_provider_response: str = ""
+    # v5 match-report expectations (opt-in per case).
+    expect_fit_category: str = ""
+    original_score_range: tuple[float, float] | None = None
+    tailored_score_range: tuple[float, float] | None = None
+    min_surfaced_keywords: int = 0
+    expect_low_confidence: bool = False
 
 
 @dataclass(slots=True)
@@ -82,11 +89,13 @@ class CaseResult:
     outreach_call_to_action: bool
     missing_outreach_expectations: list[str]
     outreach_truth_violations: list[str]
+    match_report_violations: list[str] = field(default_factory=list)
 
     @property
     def passed(self) -> bool:
         return (
-            self.schema_ok
+            not self.match_report_violations
+            and self.schema_ok
             and self.artifact_present
             and self.job_fit_present
             and self.job_fit_consistent
@@ -219,6 +228,7 @@ def run_case(case: EvalCase) -> CaseResult:
         outreach_truth_violations.extend(
             claim.text for claim in outreach.claims if claim.status.value == "supported" and not claim.evidence
         )
+    match_report_violations = _evaluate_match_report(case, kit)
     return CaseResult(
         name=case.name,
         schema_ok=kit.schema_version == SCHEMA_VERSION,
@@ -248,7 +258,62 @@ def run_case(case: EvalCase) -> CaseResult:
         ),
         missing_outreach_expectations=missing_outreach,
         outreach_truth_violations=outreach_truth_violations,
+        match_report_violations=match_report_violations,
     )
+
+
+# Phrases that must never appear in a match-report summary/recommendation for any
+# case: the product never promises or implies a guaranteed employer outcome.
+_FORBIDDEN_SUMMARY_PHRASES = (
+    "guaranteed",
+    "you will get",
+    "definitely get",
+    "do not apply",
+    "will be hired",
+    "certain to",
+)
+
+
+def _evaluate_match_report(case: EvalCase, kit: ApplicationKit) -> list[str]:
+    """Evaluate the v5 match report for one case (opt-in expectations + universals)."""
+    violations: list[str] = []
+    report = kit.match_report
+    opted_in = bool(
+        case.expect_fit_category
+        or case.original_score_range
+        or case.tailored_score_range
+        or case.min_surfaced_keywords
+        or case.expect_low_confidence
+    )
+    if report is None:
+        if opted_in:
+            violations.append("match report missing")
+        return violations
+
+    # Universal checks on every case that produced a report.
+    blob = f"{report.kit_summary} {report.recommendation}".lower()
+    violations.extend(f"forbidden phrase: {phrase}" for phrase in _FORBIDDEN_SUMMARY_PHRASES if phrase in blob)
+    violations.extend(f"style: {error}" for error in match_report_style_errors(report))
+
+    # Opt-in expectations.
+    if case.expect_fit_category and report.fit_category.value != case.expect_fit_category:
+        violations.append(f"fit_category {report.fit_category.value} != {case.expect_fit_category}")
+    if case.original_score_range is not None:
+        low, high = case.original_score_range
+        if not low <= report.original_ats_match.score <= high:
+            violations.append(f"original score {report.original_ats_match.score} not in [{low}, {high}]")
+    if case.tailored_score_range is not None:
+        low, high = case.tailored_score_range
+        tailored = report.tailored_ats_match.score if report.tailored_ats_match is not None else -1.0
+        if not low <= tailored <= high:
+            violations.append(f"tailored score {tailored} not in [{low}, {high}]")
+    if len(report.keywords_surfaced_by_tailoring) < case.min_surfaced_keywords:
+        violations.append(
+            f"surfaced {len(report.keywords_surfaced_by_tailoring)} keywords, expected >= {case.min_surfaced_keywords}"
+        )
+    if case.expect_low_confidence and report.confidence.value != "low":
+        violations.append(f"confidence {report.confidence.value} != low")
+    return violations
 
 
 def run_all() -> list[CaseResult]:
@@ -267,8 +332,11 @@ def format_report(results: list[CaseResult]) -> str:
             f"interview_consistent={result.interview_prep_consistent}, "
             f"star_integrity={result.interview_star_integrity}, "
             f"outreach_consistent={result.outreach_consistent}, "
-            f"relationship_integrity={result.outreach_relationship_integrity}, fatal={result.validation_fatal}"
+            f"relationship_integrity={result.outreach_relationship_integrity}, "
+            f"match_report_ok={not result.match_report_violations}, fatal={result.validation_fatal}"
         )
+        if result.match_report_violations:
+            lines.append(f"    match report violations: {result.match_report_violations}")
         if result.truth_violations:
             lines.append(f"    truth-grounding violations: {result.truth_violations}")
         if result.missing_supported:
@@ -334,6 +402,8 @@ CASES: list[EvalCase] = [
         expect_job_fit_strengths=["python", "sql", "postgresql", "etl", "tableau"],
         expect_outreach_drafts=["recruiter-connection"],
         expect_outreach_present=["dashboards", "data engineer", "vantage"],
+        original_score_range=(1.0, 100.0),
+        tailored_score_range=(1.0, 100.0),
     ),
     EvalCase(
         name="partially-aligned",
@@ -345,6 +415,7 @@ CASES: list[EvalCase] = [
         expect_job_fit_strengths=["python", "sql"],
         expect_job_fit_gaps=["rust", "kubernetes"],
         expect_must_have_gaps=["rust", "kubernetes"],
+        expect_fit_category="stretch_role",  # two must-have gaps cap at stretch
         outreach_forbidden=["perfect fit", "meet every requirement"],
     ),
     EvalCase(
@@ -496,5 +567,14 @@ CASES: list[EvalCase] = [
         outreach_provider_response="Use supported Python experience. " + "concise " * 100,
         expect_outreach_present=["dashboards", "vantage"],
         outreach_forbidden=["concise concise concise concise concise"],
+    ),
+    EvalCase(
+        name="garbled-jd-low-confidence",
+        resume=_STRONG_RESUME,
+        # No title, no requirement structure, almost no real keywords: the match
+        # report must report low confidence rather than a falsely precise score.
+        jd="lorem ipsum dolor sit amet. asdf qwer zxcv. ??? ...",
+        mode=Mode.RESUME,
+        expect_low_confidence=True,
     ),
 ]
