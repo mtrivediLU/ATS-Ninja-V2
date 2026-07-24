@@ -114,6 +114,53 @@ succeed: the loser's UPDATE affects zero rows and returns 409, never overwriting
 the winner. A PostgreSQL-gated concurrency test proves exactly one of two
 concurrent requests wins.
 
+## Second review: full validation, true atomicity, and adjacent hardening
+
+### Authoritative post-action validation
+
+Every batch is revalidated to the *same* standards as initial generation, so a
+change action can never persist an unusable artifact. The resume rebuild runs
+LaTeX + whole-JD-append + **completeness** as fatal gates and style + the
+authoritative anti-stuffing / JD-echo gate as warnings. The cover-letter rebuild
+runs LaTeX plus a **minimum-usable** gate (no body paragraphs, or a body below a
+usable word floor) as fatal, with the ideal word-count band, anti-stuffing, and
+style as warnings. This is why rejecting most or all cover-letter paragraphs —
+which previously produced a "valid" 22-word letter — is now refused. Initial
+generation still treats the ideal 280-320 band as a soft warning; only a
+change action that would leave the letter *degenerate* is refused, so a
+legitimately short letter is never blocked.
+
+### True atomicity (build-then-swap, never mutate-then-rollback)
+
+The proposed revision is built on a **deep copy** of the kit. Only a fully valid
+revision is returned; on any failure the caller's kit is returned byte-for-byte
+unchanged — documents, claims, ledger statuses, rendered text, LaTeX, match
+report, revision, and validation. The earlier design mutated the artifact in
+place and rolled back only ledger statuses on failure, so a refused batch could
+leave the artifact text emptied. Build-then-swap removes that whole class of
+partial-mutation bug.
+
+### Claim-link reconciliation
+
+After the rebuild re-grounds each unit from scratch (fresh ClaimRecord ids), every
+ledger record's `linked_claim_ids` is reconciled against the new claim set: any id
+that no longer exists is dropped. No `linked_claim_id` can dangle, and no stale
+revision-zero link survives an action. A grounding-removal record keeps its
+permanent-removal reason and text even when its historical link is cleared — the
+removed content stays gone regardless.
+
+### Adjacent hardening
+
+- **Empty batch is a no-op.** It never advances the revision or rebuilds; the kit
+  is returned unchanged.
+- **Duplicate change id in one batch is refused (422).** Two actions targeting the
+  same change are ambiguous, so the batch is rejected rather than letting the last
+  action silently win.
+- **CI aligns on Node 24.** The web test runner uses
+  `node --experimental-strip-types`, unsupported on the Node 20 the workflow
+  previously pinned; the workflow, root `engines`, and the web package now require
+  Node 24.
+
 ## Deviations from the Fable proposal
 
 - Reversible bullet mapping comes from planning-time instrumentation

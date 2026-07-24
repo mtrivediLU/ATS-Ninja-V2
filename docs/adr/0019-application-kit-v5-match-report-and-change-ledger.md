@@ -144,6 +144,70 @@ Transfer is deterministic and bounded (no free-form inference): it fires only fo
 listed JD terms when the candidate's own bullets/skills carry an explicit,
 word-boundary-matched capability signal.
 
+### Granular, requirement-specific transfer (second review)
+
+A follow-up audit found the first transfer implementation too broad: a single
+umbrella listed every testing JD term, and *any* one signal (e.g. "code review")
+activated the whole umbrella, so one generic signal earned adjacency credit
+against five distinct requirements (unit/integration/API/regression testing, test
+automation) and inflated role alignment. `ats_engine.evidence.transfer` is now a
+**granular, requirement-specific** policy: each rule owns one requirement family
+with its own `jd_terms` *and its own `evidence_signals`*, and a rule fires only
+when one of *its* signals is present. Concretely:
+
+- "Code review" supports the *code review* and generic *software quality*
+  requirements only — never unit/integration/API/regression testing or test
+  automation.
+- "Debugged production issues" supports *debugging and defect resolution*, not
+  formal testing.
+- "Maintained CI/CD pipelines" supports *CI/CD*, not automated tests.
+- "Wrote unit tests" / "wrote integration tests" / "tested REST APIs" /
+  "built automated tests" / "performed regression testing" each support only their
+  own requirement.
+- Named tools/frameworks and specialized testing types (Selenium, Cypress,
+  Playwright, JUnit, Mockito, JMeter, performance/load/security/accessibility/
+  mobile testing, ...) are `FORBIDDEN_SPECIFICS` and never transfer.
+
+`transfer_match` returns a reviewable record (requirement, JD term, umbrella,
+matched evidence signal, evidence source, confidence, reason, allowed placement).
+One generic quality signal can therefore never multiply alignment credit across
+several distinct requirements. Adversarial tests lock this in, including identity
+invariance (names, pronouns, cities never change the outcome).
+
+### Duplicate and reorder handling
+
+Two candidate-facing correctness fixes:
+
+- **Duplicate source bullets never withhold the resume.** `_select_experience`
+  no longer deletes exact-duplicate candidate bullets before the ledger exists
+  (which then failed completeness — source bullet count > rendered count — and
+  withheld the whole resume). Candidate-authored duplicates are the candidate's
+  own content; they are preserved. Completeness now compares *distinct* source
+  bullets per entry against the rendered (parser-deduplicated) output, so a
+  genuinely dropped distinct bullet is still caught while a candidate duplicate is
+  not a false positive. *Generated* duplication (a model rewrite collapsing two
+  distinct bullets into identical prose) is repaired by restoring the later
+  bullet's own original, never by dropping a bullet.
+- **Bullet order is preserved, never silently reordered.** `_select_experience`
+  no longer sorts bullets by keyword relevance. Presence-based ATS scoring is
+  unaffected by order, so the safe, honest default is the candidate's source
+  order; a silent, unledgered reorder is avoided entirely (the alternative — full
+  reversible reorder ChangeRecords threaded through change-action reconstruction —
+  was judged higher risk than its marginal benefit for this PR).
+
+### Production naturalness / anti-stuffing wiring
+
+`production_naturalness_warnings` is the single authoritative anti-stuffing /
+JD-echo gate (keyword over-repetition, per-bullet and cross-bullet saturation,
+near-duplicate bullets, eight-word verbatim JD echo, whole-JD append). It is wired
+into both initial generation (`validate_pipeline_result`) and the change-action
+rebuild, replacing the change path's earlier `validate_naturalness(text, [])`
+call whose empty keyword list silently disabled repetition detection. The
+keyword-frequency thresholds — previously dead code with no production caller —
+were recalibrated so a core skill legitimately recurring across a resume's
+summary, skills, and several bullets is not flagged, while genuine mechanical
+stuffing still is.
+
 ### Smart placement
 
 JD keyword detection gained testing/quality and general web-development

@@ -587,6 +587,26 @@ async def test_change_action_unknown_id_returns_422(client: httpx.AsyncClient) -
     assert response.status_code == 422
 
 
+async def test_change_action_duplicate_change_id_in_batch_returns_422(client: httpx.AsyncClient) -> None:
+    body = await _create_completed_kit(client)
+    kit_id = body["id"]
+    reversible = next(r for r in body["result"]["resume"]["change_ledger"] if r["reversible"])
+    response = await client.post(
+        f"/api/v1/kits/{kit_id}/change-actions",
+        json={
+            "expected_revision": 0,
+            "actions": [
+                {"change_id": reversible["id"], "action": "accept"},
+                {"change_id": reversible["id"], "action": "reject"},
+            ],
+        },
+    )
+    assert response.status_code == 422
+    # Refused atomically: the kit stays at revision 0.
+    refetched = await client.get(f"/api/v1/kits/{kit_id}")
+    assert refetched.json()["revision"] == 0
+
+
 async def test_delete_kit(client: httpx.AsyncClient) -> None:
     body = await _create_completed_kit(client)
     kit_id = body["id"]

@@ -70,6 +70,10 @@ test("scoring page explains the three scores and irreversible grounding removals
   assert.match(source, /Evidence-based role alignment/);
   assert.match(source, /grounding removals cannot be restored/i);
   assert.match(source, /never inserted into your resume/i);
+  // Transfer is described as requirement-specific, and named tools stay gaps.
+  assert.match(source, /requirement-specific/i);
+  assert.match(source, /Writing unit tests supports unit testing/i);
+  assert.match(source, /never earns strict exact-keyword credit/i);
 });
 
 test("unified workspace wires match insights, change ledger, and lineage; v5 is current", async () => {
