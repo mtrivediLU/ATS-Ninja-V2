@@ -82,6 +82,46 @@ def test_presence_not_frequency() -> None:
     assert stuffed.score == once.score, "repeating a keyword must not raise the score"
 
 
+def test_required_keyword_outweighs_preferred_in_score() -> None:
+    # One required (weight 2.0) + one preferred (weight 1.0). Matching only the
+    # required keyword must yield 2/3 = 66.67%, not the count-based 50%.
+    jd_profile = JDProfile(
+        title="Engineer",
+        required_qualifications=["python"],
+        preferred_qualifications=["kubernetes"],
+        technical_keywords=["python", "kubernetes"],
+    )
+    profile = build_profile(
+        "Alex\nProfessional Experience\nCompany: X\nTitle: Dev\nDates: 2020 - 2023\n"
+        "- Built services in Python\nSkills\nPython\n"
+    )
+    evidence = build_evidence_matrix(jd_profile, profile)
+    keywords = build_weighted_keywords(evidence, jd_profile)
+    tiers = {item.keyword.casefold().strip(): item.evidence_tier for item in evidence}
+    score = score_resume("Built services in Python", keywords, profile, tiers)
+    assert score.matched_keywords == ["python"]
+    assert score.score == 66.67
+
+
+def test_weighted_score_repetition_does_not_help() -> None:
+    jd_profile = JDProfile(
+        title="Engineer",
+        required_qualifications=["python"],
+        preferred_qualifications=["kubernetes"],
+        technical_keywords=["python", "kubernetes"],
+    )
+    profile = build_profile(
+        "Alex\nProfessional Experience\nCompany: X\nTitle: Dev\nDates: 2020 - 2023\n"
+        "- Built services in Python\nSkills\nPython\n"
+    )
+    evidence = build_evidence_matrix(jd_profile, profile)
+    keywords = build_weighted_keywords(evidence, jd_profile)
+    tiers = {item.keyword.casefold().strip(): item.evidence_tier for item in evidence}
+    once = score_resume("Built services in Python", keywords, profile, tiers)
+    many = score_resume("Python Python Python built services in Python", keywords, profile, tiers)
+    assert once.score == many.score == 66.67
+
+
 def test_required_and_preferred_counts() -> None:
     profile, jd_profile, evidence = _profile_and_jd()
     keywords = build_weighted_keywords(evidence, jd_profile)

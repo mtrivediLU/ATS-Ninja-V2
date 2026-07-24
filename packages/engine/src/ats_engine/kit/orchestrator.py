@@ -703,6 +703,7 @@ def _attach_change_ledgers(
                 keywords=keywords,
                 profile=profile,
                 tier_by_keyword=tier_by_keyword,
+                full_text=resume_artifact.text,
             )
         if cover_artifact is not None:
             cover_artifact.change_ledger = build_cover_letter_change_ledger(
@@ -711,6 +712,7 @@ def _attach_change_ledgers(
                 keywords=keywords,
                 profile=profile,
                 tier_by_keyword=tier_by_keyword,
+                full_text=cover_artifact.text,
             )
     except Exception:  # noqa: BLE001 - a ledger failure must not fail a safe kit.
         logger.warning("change ledger construction failed; delivering kit without a ledger")

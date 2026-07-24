@@ -54,17 +54,48 @@ _REVERSIBLE_TYPES: frozenset[ChangeType] = frozenset(
 )
 
 
-def _impact_delta(
+def _counterfactual_impact(
+    *,
+    full_text: str,
     original: str,
     tailored: str,
+    is_grounding: bool,
     keywords: list[WeightedKeyword],
     profile: Profile,
     tier_by_keyword: dict[str, str],
 ) -> float:
-    """Exact deterministic keyword-match impact of a change, in score points."""
-    before = score_resume(original, keywords, profile, tier_by_keyword).score
-    after = score_resume(tailored, keywords, profile, tier_by_keyword).score
-    return round(after - before, 2)
+    """Deterministic whole-document keyword-match impact of one change.
+
+    Impact is computed *counterfactually against the complete resume*, not on an
+    isolated snippet:
+
+        impact = score(full document with the change)
+               - score(full document without the change)
+
+    so a keyword that already appears elsewhere in the document contributes zero
+    additional impact. For a normal tailoring change the delivered ``full_text``
+    already contains ``tailored``; the counterfactual reverts it (restoring
+    ``original`` for a rewrite, or removing it for an addition). For a grounding
+    removal the fabricated ``original`` is *absent* from the delivered document,
+    so the counterfactual re-adds it — and, being unsupported, it never raises
+    the evidence-gated score, yielding an honest ~0 impact.
+    """
+
+    def _score(text: str) -> float:
+        return score_resume(text, keywords, profile, tier_by_keyword).score
+
+    with_change = full_text
+    if is_grounding:
+        without_change = f"{full_text}\n{original}".strip()
+    elif tailored and tailored in full_text:
+        without_change = full_text.replace(tailored, original, 1)
+    else:
+        # The change's tailored text is not located in the delivered document
+        # (e.g. it was further edited by grounding); fall back to a bounded local
+        # comparison so the record still carries an honest, non-inflated figure.
+        with_change = f"{full_text}\n{tailored}".strip() if tailored else full_text
+        without_change = f"{full_text}\n{original}".strip() if original else full_text
+    return round(_score(with_change) - _score(without_change), 2)
 
 
 def _operation(value: str) -> ChangeOperation:
@@ -107,6 +138,7 @@ def build_resume_change_ledger(
     keywords: list[WeightedKeyword],
     profile: Profile,
     tier_by_keyword: dict[str, str],
+    full_text: str = "",
 ) -> list[ChangeRecord]:
     """Build the resume change ledger from plan decisions and grounding claims."""
     records: list[ChangeRecord] = []
@@ -121,7 +153,15 @@ def build_resume_change_ledger(
             if resolved is not None:
                 tailored = resolved
         reversible = change_type in _REVERSIBLE_TYPES
-        delta = _impact_delta(decision.original_text, tailored, keywords, profile, tier_by_keyword)
+        delta = _counterfactual_impact(
+            full_text=full_text,
+            original=decision.original_text,
+            tailored=tailored,
+            is_grounding=False,
+            keywords=keywords,
+            profile=profile,
+            tier_by_keyword=tier_by_keyword,
+        )
         operation = _operation(decision.operation)
         evidence = (
             [
@@ -153,7 +193,9 @@ def build_resume_change_ledger(
             )
         )
 
-    records.extend(_grounding_records(claims, ArtifactKind.RESUME, keywords, profile, tier_by_keyword))
+    records.extend(
+        _grounding_records(claims, ArtifactKind.RESUME, keywords, profile, tier_by_keyword, full_text=full_text)
+    )
     return records
 
 
@@ -164,6 +206,7 @@ def build_cover_letter_change_ledger(
     keywords: list[WeightedKeyword],
     profile: Profile,
     tier_by_keyword: dict[str, str],
+    full_text: str = "",
 ) -> list[ChangeRecord]:
     """Build the cover-letter change ledger.
 
@@ -176,7 +219,15 @@ def build_cover_letter_change_ledger(
     for index, paragraph in enumerate(paragraphs):
         if not paragraph.strip() or paragraph.strip().lower().startswith("dear "):
             continue
-        delta = _impact_delta("", paragraph, keywords, profile, tier_by_keyword)
+        delta = _counterfactual_impact(
+            full_text=full_text,
+            original="",
+            tailored=paragraph,
+            is_grounding=False,
+            keywords=keywords,
+            profile=profile,
+            tier_by_keyword=tier_by_keyword,
+        )
         records.append(
             ChangeRecord(
                 id=f"cover::p{index}",
@@ -193,7 +244,9 @@ def build_cover_letter_change_ledger(
                 confidence=ScoreConfidence.MEDIUM,
             )
         )
-    records.extend(_grounding_records(claims, ArtifactKind.COVER_LETTER, keywords, profile, tier_by_keyword))
+    records.extend(
+        _grounding_records(claims, ArtifactKind.COVER_LETTER, keywords, profile, tier_by_keyword, full_text=full_text)
+    )
     return records
 
 
@@ -203,6 +256,8 @@ def _grounding_records(
     keywords: list[WeightedKeyword],
     profile: Profile,
     tier_by_keyword: dict[str, str],
+    *,
+    full_text: str = "",
 ) -> list[ChangeRecord]:
     """Convert repaired/rejected grounding claims into irreversible ledger records.
 
@@ -214,10 +269,20 @@ def _grounding_records(
     for claim in claims:
         if claim.status not in (ClaimStatus.REPAIRED, ClaimStatus.REJECTED):
             continue
-        # The removed text was present before removal; its keyword-match impact is
-        # the (typically zero or negative) delta of taking it out. Removing an
-        # unsupported claim never raises the real keyword match.
-        delta = _impact_delta(claim.text, "", keywords, profile, tier_by_keyword)
+        # Counterfactual: the delivered document already excludes the fabrication,
+        # so impact = score(delivered) - score(delivered + fabrication). Since the
+        # fabrication is unsupported it never raises the evidence-gated score, so
+        # this is an honest ~0 (removing a fabrication does not lower the real
+        # keyword match). The reason is grounding-specific, never a generic label.
+        delta = _counterfactual_impact(
+            full_text=full_text,
+            original=claim.text,
+            tailored="",
+            is_grounding=True,
+            keywords=keywords,
+            profile=profile,
+            tier_by_keyword=tier_by_keyword,
+        )
         records.append(
             ChangeRecord(
                 id=f"grounding::{claim.id}",
@@ -226,7 +291,11 @@ def _grounding_records(
                 operation=ChangeOperation.REMOVED,
                 original_text=claim.text,
                 tailored_text="",
-                reason=f"Removed an unsupported {claim.claim_type.value} claim: {claim.reason}.",
+                reason=(
+                    f"Removed an unsupported {claim.claim_type.value} claim ({claim.reason}). "
+                    "Restoring it would reintroduce content the candidate's evidence does not support, "
+                    "so this removal is permanent."
+                ),
                 status=ChangeStatus.PROPOSED,
                 reversible=False,
                 ats_impact=_impact_text(delta),

@@ -576,7 +576,7 @@ def _select_experience(
     provider: LLMProvider | None,
 ) -> tuple[list[Experience], list[PlanDecision]]:
     keywords = [item.keyword.lower() for item in evidence if item.evidence_tier != "missing"]
-    entries: list[tuple[Experience, list[str]]] = []
+    entries: list[tuple[Experience, list[str], list[str]]] = []
 
     for experience in profile.experiences:
         scored_bullets = sorted(
@@ -589,10 +589,13 @@ def _select_experience(
         # dropping it here would silently discard a verified source-profile
         # entry that `validate_completeness` still counts, producing a false
         # completeness failure. `generate_resume_text` renders a bulletless
-        # entry fine (just the header line).
-        entries.append((experience, chosen))
+        # entry fine (just the header line). ``scored_bullets`` are the raw
+        # candidate bullets (style softening happens in ``chosen``); the raw form
+        # is what the change ledger records as ``original_text`` so a rejected
+        # bullet restores the candidate's own wording, not a softened variant.
+        entries.append((experience, chosen, scored_bullets))
 
-    all_originals = [bullet for _, chosen in entries for bullet in chosen]
+    all_originals = [bullet for _, chosen, _ in entries for bullet in chosen]
     # Bullets already carrying two or more JD keywords are targeted as-is;
     # rewriting them spends tokens for little gain and risks quality drift.
     # Only the under-aligned bullets go to the model.
@@ -607,21 +610,26 @@ def _select_experience(
     selected: list[Experience] = []
     decisions: list[PlanDecision] = []
     cursor = 0
-    for exp_index, (experience, chosen) in enumerate(entries):
+    for exp_index, (experience, chosen, raw_bullets) in enumerate(entries):
         count = len(chosen)
         final_bullets = rewritten_flat[cursor : cursor + count]
         cursor += count
-        for bullet_index, (original_bullet, final_bullet) in enumerate(zip(chosen, final_bullets, strict=False)):
-            if original_bullet.strip() == final_bullet.strip():
+        for bullet_index, (raw_bullet, final_bullet) in enumerate(zip(raw_bullets, final_bullets, strict=False)):
+            # Record against the RAW candidate bullet (before style softening) so
+            # a rejected bullet restores the candidate's own wording exactly.
+            if raw_bullet.strip() == final_bullet.strip():
                 continue
             decisions.append(
                 PlanDecision(
                     kind="bullet",
                     location_id=f"resume::exp{exp_index}::bullet{bullet_index}",
-                    original_text=original_bullet,
+                    original_text=raw_bullet,
                     tailored_text=final_bullet,
                     operation="rewritten",
-                    reason="Rewrote the bullet to surface job-relevant keywords while keeping the original facts.",
+                    reason=(
+                        "Rewrote the bullet to surface job-relevant keywords while keeping the "
+                        "original facts, scope, and seniority."
+                    ),
                     matched_keywords=[keyword for keyword in keywords if _keyword_hits(final_bullet, [keyword])],
                 )
             )

@@ -120,9 +120,15 @@ def score_resume(
 ) -> AtsMatchScore:
     """Score one resume (0-100) against the unified vocabulary, evidence-gated.
 
-    A keyword is credited only when it is present in ``resume_text`` (word-
-    boundary, case-insensitive) *and* the candidate's parsed evidence supports
-    it. Credit is boolean per keyword, so frequency never changes the score.
+    The score is *weighted*:
+
+        100 * (sum of weights of credited keywords) / (sum of all keyword weights)
+
+    Required keywords (weight 2.0) therefore contribute more than preferred/other
+    keywords (weight 1.0). A keyword is credited only when it is present in
+    ``resume_text`` (word-boundary, case-insensitive) *and* the candidate's
+    parsed evidence supports it at tier A/B/C. Credit is boolean per unique
+    keyword, so repetition never changes the score.
     """
     if not keywords:
         return AtsMatchScore(score=0.0, total_keywords=0)
@@ -131,8 +137,11 @@ def score_resume(
     missing: list[str] = []
     required_matched = required_total = 0
     preferred_matched = preferred_total = 0
+    credited_weight = 0.0
+    total_weight = 0.0
     for weighted in keywords:
         is_required = weighted.required
+        total_weight += weighted.weight
         if is_required:
             required_total += 1
         else:
@@ -142,6 +151,7 @@ def score_resume(
         )
         if credited:
             matched.append(weighted.term)
+            credited_weight += weighted.weight
             if is_required:
                 required_matched += 1
             else:
@@ -149,7 +159,7 @@ def score_resume(
         else:
             missing.append(weighted.term)
 
-    score = round(len(matched) / len(keywords) * 100, 2)
+    score = round(credited_weight / total_weight * 100, 2) if total_weight else 0.0
     return AtsMatchScore(
         score=score,
         matched_keywords=matched,

@@ -57,6 +57,101 @@ def test_plan_decisions_map_once_and_have_stable_ids() -> None:
     assert bullet.reversible is True
 
 
+def test_counterfactual_impact_is_zero_when_keyword_already_present() -> None:
+    profile, keywords, tiers = _ledger_context()
+    # A rewrite that surfaces "sql" where "sql" is already present elsewhere in
+    # the full delivered resume must have zero whole-document ATS impact.
+    full_text = "Technical Skills\nSQL, Python\nExperience\n- Built SQL reports"
+    decisions = [
+        PlanDecision(
+            kind="bullet",
+            location_id="resume::exp0::bullet0",
+            original_text="Built reports",
+            tailored_text="Built SQL reports",
+            operation="rewritten",
+        )
+    ]
+    document = ResumeDocument(experience=[ResumeExperienceEntry(bullets=["Built SQL reports"])])
+    records = build_resume_change_ledger(
+        decisions=decisions,
+        document=document,
+        claims=[],
+        keywords=keywords,
+        profile=profile,
+        tier_by_keyword=tiers,
+        full_text=full_text,
+    )
+    bullet = next(r for r in records if r.change_type is ChangeType.BULLET)
+    assert bullet.ats_impact_delta == 0.0
+    assert "No estimated keyword-match change" in bullet.ats_impact
+
+
+def test_counterfactual_impact_of_grounding_removal_is_non_positive() -> None:
+    profile, keywords, tiers = _ledger_context()
+    claim = ClaimRecord(
+        id="resume-summary-1",
+        artifact=ArtifactKind.RESUME,
+        claim_type=ClaimType.EMPLOYER,
+        text="worked at Google",
+        status=ClaimStatus.REPAIRED,
+        disposition="repaired",
+        reason="employer absent from candidate evidence",
+    )
+    records = build_resume_change_ledger(
+        decisions=[],
+        document=None,
+        claims=[claim],
+        keywords=keywords,
+        profile=profile,
+        tier_by_keyword=tiers,
+        full_text="Experience\n- Built dashboards",
+    )
+    grounding = next(r for r in records if r.change_type is ChangeType.GROUNDING_REMOVAL)
+    # Removing a fabrication never raises the real keyword match.
+    assert grounding.ats_impact_delta <= 0.0
+
+
+def test_bullet_original_text_is_the_raw_candidate_wording() -> None:
+    # A raw candidate bullet with a banned style verb keeps its raw wording as the
+    # ledger's original_text (softening happens later, but reject must restore the
+    # candidate's own words).
+    profile, keywords, tiers = _ledger_context()
+    decisions = [
+        PlanDecision(
+            kind="bullet",
+            location_id="resume::exp0::bullet0",
+            original_text="Leveraged Python to build pipelines",
+            tailored_text="Built Python data pipelines",
+            operation="rewritten",
+        )
+    ]
+    document = ResumeDocument(experience=[ResumeExperienceEntry(bullets=["Built Python data pipelines"])])
+    records = build_resume_change_ledger(
+        decisions=decisions, document=document, claims=[], keywords=keywords, profile=profile, tier_by_keyword=tiers
+    )
+    bullet = next(r for r in records if r.change_type is ChangeType.BULLET)
+    assert bullet.original_text == "Leveraged Python to build pipelines"
+
+
+def test_grounding_removal_reason_is_type_specific_not_generic() -> None:
+    profile, keywords, tiers = _ledger_context()
+    claim = ClaimRecord(
+        id="c1",
+        artifact=ArtifactKind.RESUME,
+        claim_type=ClaimType.SKILL,
+        text="Rust",
+        status=ClaimStatus.REPAIRED,
+        disposition="repaired",
+        reason="claimed skill absent from candidate evidence",
+    )
+    records = build_resume_change_ledger(
+        decisions=[], document=None, claims=[claim], keywords=keywords, profile=profile, tier_by_keyword=tiers
+    )
+    grounding = next(r for r in records if r.change_type is ChangeType.GROUNDING_REMOVAL)
+    assert "skill" in grounding.reason.lower()
+    assert "permanent" in grounding.reason.lower()
+
+
 def test_grounding_removal_is_irreversible_and_linked() -> None:
     profile, keywords, tiers = _ledger_context()
     claim = ClaimRecord(
