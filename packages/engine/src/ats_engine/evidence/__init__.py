@@ -9,13 +9,17 @@ from ats_engine.evidence.matrix import (
     classify_requirement_category,
     interview_probability,
 )
+from ats_engine.evidence.transfer import CAPABILITY_TRANSFERS, CapabilityTransfer, transfer_capability
 
 __all__ = [
+    "CAPABILITY_TRANSFERS",
     "TOOL_CATEGORIES",
+    "CapabilityTransfer",
     "build_evidence_matrix",
     "category_tools",
     "classify_keyword",
     "classify_requirement_category",
     "find_category",
     "interview_probability",
+    "transfer_capability",
 ]

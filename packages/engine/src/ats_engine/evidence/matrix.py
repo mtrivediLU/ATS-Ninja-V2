@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from ats_engine.evidence.adjacency import find_category
+from ats_engine.evidence.transfer import transfer_capability
 from ats_engine.models import EvidenceItem, JDProfile, Profile
 from ats_engine.parsing.resume import term_in_text_affirmative
 
@@ -112,6 +113,24 @@ def classify_keyword(keyword: str, required_or_preferred: str, profile: Profile)
             allowed_placement="adjacency phrasing naming the real tool",
             strength="medium" if required_or_preferred == "preferred" else "weak",
             planned_placement="summary or skills with adjacent evidence",
+            category=category,
+        )
+
+    # Bounded, evidence-supported capability transfer (e.g. a developer with real
+    # testing/quality signals covering a "unit testing"/"test automation"
+    # requirement via a truthful umbrella phrase). Treated as an adjacency:
+    # transferable, surfaced with honest phrasing, credited toward role alignment,
+    # but never a specific tool and never strict keyword-match credit.
+    transfer = transfer_capability(normalized, profile)
+    if transfer:
+        return EvidenceItem(
+            keyword=keyword,
+            required_or_preferred=required_or_preferred,
+            evidence_tier="adjacency",
+            real_evidence=transfer,
+            allowed_placement="umbrella capability phrasing in skills or summary; never a specific tool",
+            strength="medium" if required_or_preferred == "preferred" else "weak",
+            planned_placement="skills or summary as a transferable capability",
             category=category,
         )
 
