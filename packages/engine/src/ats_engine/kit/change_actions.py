@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 
 from ats_engine.evidence.matrix import build_evidence_matrix
@@ -30,10 +31,24 @@ from ats_engine.models import Profile
 from ats_engine.parsing.job_description import parse_jd
 from ats_engine.parsing.resume import build_profile
 from ats_engine.scoring.match_report import build_kit_summary, build_weighted_keywords, score_resume
+from ats_engine.validation.completeness import resume_completeness_errors
 from ats_engine.validation.latex import validate_latex
-from ats_engine.validation.naturalness import detect_jd_echo, jd_appended_to_resume, validate_naturalness
+from ats_engine.validation.naturalness import (
+    detect_jd_echo,
+    jd_appended_to_resume,
+    production_naturalness_warnings,
+)
+from ats_engine.validation.output_format import validate_cover_letter_word_count
 from ats_engine.validation.severity import is_fatal_validation_error
 from ats_engine.validation.style import validate_style
+
+# A cover letter shorter than this many body words (or with no body paragraphs) is
+# not a usable letter. Initial generation treats the ideal 280-320 band as a soft
+# warning, but a *change action* that would leave the delivered letter degenerate
+# (e.g. rejecting most paragraphs down to a couple of sentences) must be refused
+# atomically rather than persisting an unusable artifact. This floor sits well
+# below a legitimately short letter, so only genuinely broken results are refused.
+MIN_USABLE_COVER_WORDS = 100
 
 """Safe, persisted change actions over the v5 change ledger (see ADR-0020).
 
@@ -98,24 +113,59 @@ def apply_change_actions(
     actions: list[ChangeAction],
     expected_revision: int,
 ) -> ChangeActionResult:
-    """Apply a batch of change actions and return the updated, revalidated kit."""
+    """Apply a batch of change actions and return the updated, revalidated kit.
+
+    Atomic by construction: the proposed revision is built on a deep copy of the
+    kit, so a batch that fails validation leaves the caller's ``kit`` byte-for-byte
+    unchanged (documents, claims, ledger statuses, rendered text, LaTeX, match
+    report, revision, and validation). Only a fully-valid revision is returned; on
+    any failure the original kit is returned untouched.
+    """
     if kit.revision != expected_revision:
         return ChangeActionResult(
             kit=kit, conflict=True, errors=["Revision conflict: the kit changed since it was loaded."]
         )
 
-    records: dict[str, ChangeRecord] = {}
+    # An empty batch is a no-op: it must never advance the revision or rebuild the
+    # artifacts. The caller's kit is returned exactly as received.
+    if not actions:
+        return ChangeActionResult(kit=kit)
+
+    # A batch that targets the same change twice is ambiguous (which disposition
+    # wins?). Refuse it rather than silently letting the last action win.
+    seen_ids: set[str] = set()
+    duplicate_ids: set[str] = set()
+    for action in actions:
+        if action.change_id in seen_ids:
+            duplicate_ids.add(action.change_id)
+        seen_ids.add(action.change_id)
+    if duplicate_ids:
+        return ChangeActionResult(
+            kit=kit,
+            errors=[
+                f"Duplicate change id in one batch: '{cid}'. Send at most one action per change."
+                for cid in sorted(duplicate_ids)
+            ],
+        )
+
+    original_records: dict[str, ChangeRecord] = {}
     for artifact in (kit.resume, kit.cover_letter):
         if artifact is not None:
             for record in artifact.change_ledger:
-                records[record.id] = record
+                original_records[record.id] = record
 
-    errors = _validate_actions(actions, records)
+    errors = _validate_actions(actions, original_records)
     if errors:
         return ChangeActionResult(kit=kit, errors=errors)
 
-    # Snapshot statuses so we can roll back if the rebuilt artifact is invalid.
-    previous_status = {record_id: record.status for record_id, record in records.items()}
+    # Everything below mutates a working copy only. The caller's kit is never
+    # touched until (and unless) a valid revision is returned.
+    working = deepcopy(kit)
+    records: dict[str, ChangeRecord] = {}
+    for artifact in (working.resume, working.cover_letter):
+        if artifact is not None:
+            for record in artifact.change_ledger:
+                records[record.id] = record
 
     for action in actions:
         record = records[action.change_id]
@@ -135,31 +185,36 @@ def apply_change_actions(
     tier_by_keyword = {item.keyword.casefold().strip(): item.evidence_tier for item in evidence}
     context = build_evidence_context(profile, jd_profile)
 
+    keyword_terms = [keyword.term for keyword in keywords]
+
     rebuild_errors: list[str] = []
     new_resume_text: str | None = None
-    if kit.resume is not None and kit.resume.document is not None:
-        outcome = _rebuild_resume(kit.resume, context, job_description)
+    if working.resume is not None and working.resume.document is not None:
+        outcome = _rebuild_resume(
+            working.resume, context, job_description=job_description, profile=profile, keyword_terms=keyword_terms
+        )
         new_resume_text = outcome.text
         if outcome.fatal:
             rebuild_errors.extend(outcome.errors)
-    if kit.cover_letter is not None and kit.cover_letter.document is not None:
-        outcome = _rebuild_cover_letter(kit.cover_letter, context)
+    if working.cover_letter is not None and working.cover_letter.document is not None:
+        outcome = _rebuild_cover_letter(
+            working.cover_letter, context, job_description=job_description, keyword_terms=keyword_terms
+        )
         if outcome.fatal:
             rebuild_errors.extend(outcome.errors)
 
     if rebuild_errors:
-        # Atomic refusal: roll back statuses; the caller must not persist.
-        for record_id, status in previous_status.items():
-            records[record_id].status = status
+        # Atomic refusal: the working copy is discarded; the original kit is
+        # returned exactly as it was received.
         return ChangeActionResult(
             kit=kit, errors=["The change could not be applied without invalidating the artifact.", *rebuild_errors]
         )
 
-    if kit.match_report is not None and new_resume_text is not None:
-        _recompute_match_report(kit.match_report, new_resume_text, keywords, profile, tier_by_keyword)
+    if working.match_report is not None and new_resume_text is not None:
+        _recompute_match_report(working.match_report, new_resume_text, keywords, profile, tier_by_keyword)
 
-    kit.revision = expected_revision + 1
-    return ChangeActionResult(kit=kit)
+    working.revision = expected_revision + 1
+    return ChangeActionResult(kit=working)
 
 
 def _validate_actions(actions: list[ChangeAction], records: dict[str, ChangeRecord]) -> list[str]:
@@ -188,7 +243,14 @@ def _validate_actions(actions: list[ChangeAction], records: dict[str, ChangeReco
 # --------------------------------------------------------------------------- #
 # Resume rebuild (stable baseline -> ledger state -> re-render -> re-ground)
 # --------------------------------------------------------------------------- #
-def _rebuild_resume(resume: ResumeArtifact, context: EvidenceContext, job_description: str) -> _RebuildOutcome:
+def _rebuild_resume(
+    resume: ResumeArtifact,
+    context: EvidenceContext,
+    *,
+    job_description: str,
+    profile: Profile,
+    keyword_terms: list[str],
+) -> _RebuildOutcome:
     document = resume.document
     assert document is not None
     ledger = {record.id: record for record in resume.change_ledger}
@@ -234,13 +296,34 @@ def _rebuild_resume(resume: ResumeArtifact, context: EvidenceContext, job_descri
     text = render_resume_text_from_document(document)
     latex = resume_to_latex(text, _resume_user_info(document))
 
+    # Authoritative post-action validation: LaTeX + JD-append + completeness are
+    # fatal (an unusable or lossy resume must never persist); style + anti-stuffing
+    # + JD-echo are warnings, matching initial generation's severity.
     errors = _structural_errors(text, latex, job_description)
+    errors.extend(resume_completeness_errors(text, profile))
+    units = [document.summary, *(bullet for entry in document.experience for bullet in entry.bullets)]
+    warnings = _naturalness_warnings(text, units=units, keyword_terms=keyword_terms, job_description=job_description)
     fatal = rejected > 0 or any(is_fatal_validation_error(error) for error in errors)
-    _apply_validation(resume, claims=claims, repaired=repaired, rejected=rejected, fatal=fatal, text=text, latex=latex)
+    _apply_validation(
+        resume,
+        claims=claims,
+        repaired=repaired,
+        rejected=rejected,
+        fatal=fatal,
+        text=text,
+        latex=latex,
+        extra_warnings=warnings,
+    )
     return _RebuildOutcome(text=text, fatal=fatal, errors=errors)
 
 
-def _rebuild_cover_letter(cover: CoverLetterArtifact, context: EvidenceContext) -> _RebuildOutcome:
+def _rebuild_cover_letter(
+    cover: CoverLetterArtifact,
+    context: EvidenceContext,
+    *,
+    job_description: str,
+    keyword_terms: list[str],
+) -> _RebuildOutcome:
     document = cover.document
     assert document is not None
 
@@ -271,9 +354,36 @@ def _rebuild_cover_letter(cover: CoverLetterArtifact, context: EvidenceContext) 
     text = render_cover_letter_text_from_document(document)
     latex = cover_letter_to_latex(text, _cover_user_info(document))
 
+    # Fatal gates: broken LaTeX, and a letter that a change action has reduced to
+    # an unusable length (e.g. rejecting most/all paragraphs). The latter is the
+    # atomic-refusal that keeps a valid artifact rather than persisting a
+    # degenerate 22-word letter.
     errors = [f"cover letter latex: {error}" for error in validate_latex(latex)]
+    body_word_count = sum(len(paragraph.split()) for paragraph in document.body_paragraphs)
+    if not document.body_paragraphs or body_word_count < MIN_USABLE_COVER_WORDS:
+        errors.append(
+            f"completeness: cover letter is not usable after this change "
+            f"({body_word_count} body words, minimum {MIN_USABLE_COVER_WORDS})"
+        )
+    # Warnings, matching initial-generation severity: ideal word-count band,
+    # anti-stuffing, JD echo, style.
+    warnings = [f"cover letter word count: {message}" for message in validate_cover_letter_word_count(text)]
+    warnings.extend(
+        _naturalness_warnings(
+            text, units=document.body_paragraphs, keyword_terms=keyword_terms, job_description=job_description
+        )
+    )
     fatal = rejected > 0 or any(is_fatal_validation_error(error) for error in errors)
-    _apply_validation(cover, claims=claims, repaired=repaired, rejected=rejected, fatal=fatal, text=text, latex=latex)
+    _apply_validation(
+        cover,
+        claims=claims,
+        repaired=repaired,
+        rejected=rejected,
+        fatal=fatal,
+        text=text,
+        latex=latex,
+        extra_warnings=warnings,
+    )
     return _RebuildOutcome(text=text, fatal=fatal, errors=errors)
 
 
@@ -295,6 +405,27 @@ def _structural_errors(text: str, latex: str, job_description: str) -> list[str]
     return errors
 
 
+def _naturalness_warnings(text: str, *, units: list[str], keyword_terms: list[str], job_description: str) -> list[str]:
+    """Style + the authoritative production anti-stuffing / JD-echo report.
+
+    Runs the *same* authoritative naturalness gate initial generation runs, with
+    the real unified JD keyword vocabulary and structured units, instead of the
+    previous ``validate_naturalness(text, [])`` call whose empty keyword list
+    silently disabled keyword-repetition detection.
+    """
+    warnings = [f"style: {error}" for error in validate_style(text)]
+    warnings.extend(
+        f"naturalness: {message}"
+        for message in production_naturalness_warnings(
+            text=text,
+            units=[unit for unit in units if unit and unit.strip()],
+            keywords=keyword_terms,
+            job_description=job_description,
+        )
+    )
+    return warnings
+
+
 def _apply_validation(
     artifact: ResumeArtifact | CoverLetterArtifact,
     *,
@@ -304,19 +435,29 @@ def _apply_validation(
     fatal: bool,
     text: str,
     latex: str,
+    extra_warnings: list[str],
 ) -> None:
     """Replace the artifact's claim trace, validation, rendered text, and LaTeX.
 
     Revision-zero claims and rendered output are discarded — everything is rebuilt
     from the current revision's content.
     """
-    warnings: list[str] = []
-    warnings.extend(f"style: {error}" for error in validate_style(text))
-    warnings.extend(f"naturalness: {message}" for message in validate_naturalness(text, []))
+    warnings = list(extra_warnings)
     status = ArtifactStatus.REJECTED if fatal else (ArtifactStatus.REPAIRED if repaired else ArtifactStatus.GENERATED)
     artifact.claims = claims
     artifact.text = "" if fatal else text
     artifact.latex = "" if fatal else latex
+    # Reconcile ledger claim links against the freshly rebuilt claim trace: the
+    # re-grounding assigns new claim ids, so any link left pointing at a
+    # revision-that-no-longer-exists claim is dropped. This guarantees no
+    # ``linked_claim_id`` dangles and no stale revision-zero link survives an
+    # action. Grounding-removal records keep their permanent-removal reason and
+    # text even when their historical link is cleared (the removed content stays
+    # gone regardless).
+    valid_claim_ids = {claim.id for claim in claims}
+    for record in artifact.change_ledger:
+        if record.linked_claim_ids:
+            record.linked_claim_ids = [cid for cid in record.linked_claim_ids if cid in valid_claim_ids]
     artifact.validation = ArtifactValidation(
         status=status,
         fatal=fatal,
