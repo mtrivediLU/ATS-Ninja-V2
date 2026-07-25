@@ -24,6 +24,7 @@ from ats_engine.kit.contract import (
     MatchReport,
     ResumeArtifact,
     ResumeDocument,
+    ValidationSummary,
     WeightedKeyword,
 )
 from ats_engine.kit.grounding import EvidenceContext, GroundingOutcome, build_evidence_context, ground_text
@@ -213,8 +214,66 @@ def apply_change_actions(
     if working.match_report is not None and new_resume_text is not None:
         _recompute_match_report(working.match_report, new_resume_text, keywords, profile, tier_by_keyword)
 
+    # Refresh the kit-wide validation roll-up so global warnings/status can never
+    # go stale relative to the artifacts a successful batch just rebuilt.
+    working.validation = _recompute_kit_validation(working)
+
     working.revision = expected_revision + 1
     return ChangeActionResult(kit=working)
+
+
+# Prefixes `validate_pipeline_result` gives resume/cover-letter entries in the
+# kit-wide validation roll-up (see `generation/pipeline.py`). A change action
+# revalidates only these two artifacts, so only their prefixed entries are
+# stale after a batch and need replacing.
+_REFRESHED_VALIDATION_PREFIXES = ("resume:", "cover letter:")
+
+
+def _recompute_kit_validation(kit: ApplicationKit) -> ValidationSummary:
+    """Refresh ``ApplicationKit.validation`` after a successful change-action batch.
+
+    `kit.validation` is built once at initial generation from the pipeline's
+    prefixed error/warning strings (``"resume: ..."``, ``"cover letter: ..."``,
+    ``"contact: ..."``, ...). A change action revalidates only the resume and
+    cover-letter artifacts, so this drops their stale prefixed entries and
+    re-adds fresh ones from the just-rebuilt artifacts' own validation, leaving
+    every other artifact's contribution (contact/answers/job-fit/...) untouched.
+    ``fatal`` is recomputed across every artifact, matching the same rule
+    initial generation uses.
+    """
+    previous = kit.validation
+    carried_errors = [e for e in previous.errors if not e.startswith(_REFRESHED_VALIDATION_PREFIXES)]
+    carried_warnings = [w for w in previous.warnings if not w.startswith(_REFRESHED_VALIDATION_PREFIXES)]
+
+    fresh_errors: list[str] = []
+    fresh_warnings: list[str] = []
+    for label, artifact in (("resume", kit.resume), ("cover letter", kit.cover_letter)):
+        if artifact is None:
+            continue
+        fresh_errors.extend(f"{label}: {error}" for error in artifact.validation.errors)
+        fresh_warnings.extend(f"{label}: {warning}" for warning in artifact.validation.warnings)
+
+    errors = [*carried_errors, *fresh_errors]
+    warnings = [*carried_warnings, *fresh_warnings]
+    fatal = any(
+        artifact is not None and artifact.validation.fatal
+        for artifact in (
+            kit.resume,
+            kit.cover_letter,
+            kit.answers,
+            kit.job_fit,
+            kit.interview_prep,
+            kit.linkedin_outreach,
+        )
+    )
+    return ValidationSummary(
+        passed=not fatal,
+        fatal=fatal,
+        error_count=len(errors),
+        warning_count=len(warnings),
+        errors=errors,
+        warnings=warnings,
+    )
 
 
 def _validate_actions(actions: list[ChangeAction], records: dict[str, ChangeRecord]) -> list[str]:

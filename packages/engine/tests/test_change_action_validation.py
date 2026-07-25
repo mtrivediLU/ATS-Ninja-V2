@@ -177,3 +177,76 @@ def test_claim_links_are_consistent_after_a_successful_action() -> None:
     for record in resume.change_ledger:
         for linked in record.linked_claim_ids:
             assert linked in claim_ids, f"dangling linked_claim_id {linked}"
+
+
+def test_top_level_validation_refreshes_after_a_successful_action() -> None:
+    kit = generate_application_kit(
+        resume_text=SYNTHETIC_RESUME, job_description=SYNTHETIC_JD, use_llm=False, include_resume=True
+    )
+    result = apply_change_actions(
+        kit=kit,
+        resume_text=SYNTHETIC_RESUME,
+        job_description=SYNTHETIC_JD,
+        actions=[ChangeAction("resume::summary", "accept")],
+        expected_revision=0,
+    )
+    assert result.ok
+    updated = result.kit
+    # Every current resume warning/error is reflected (prefixed) at the top level.
+    for warning in updated.resume.validation.warnings:
+        assert f"resume: {warning}" in updated.validation.warnings
+    for error in updated.resume.validation.errors:
+        assert f"resume: {error}" in updated.validation.errors
+    # Counts and errors/warnings stay internally consistent.
+    assert updated.validation.warning_count == len(updated.validation.warnings)
+    assert updated.validation.error_count == len(updated.validation.errors)
+    assert updated.validation.passed == (not updated.validation.fatal)
+    # `fatal` reflects every artifact (not resume alone), matching initial generation.
+    expected_fatal = any(
+        artifact is not None and artifact.validation.fatal
+        for artifact in (
+            updated.resume,
+            updated.cover_letter,
+            updated.answers,
+            updated.job_fit,
+            updated.interview_prep,
+            updated.linkedin_outreach,
+        )
+    )
+    assert updated.validation.fatal == expected_fatal
+
+
+def test_top_level_validation_drops_stale_resume_entries_after_an_action() -> None:
+    kit = generate_application_kit(
+        resume_text=SYNTHETIC_RESUME, job_description=SYNTHETIC_JD, use_llm=False, include_resume=True
+    )
+    # Simulate a stale pre-existing resume warning that no longer applies to the
+    # current revision (as if left over from before the change action).
+    stale = "resume: a stale warning that no longer applies"
+    kit.validation.warnings.append(stale)
+    kit.validation.warning_count = len(kit.validation.warnings)
+
+    result = apply_change_actions(
+        kit=kit,
+        resume_text=SYNTHETIC_RESUME,
+        job_description=SYNTHETIC_JD,
+        actions=[ChangeAction("resume::summary", "accept")],
+        expected_revision=0,
+    )
+    assert result.ok
+    assert stale not in result.kit.validation.warnings
+
+
+def test_top_level_validation_unchanged_on_a_refused_batch() -> None:
+    kit = _kit_with_cover()
+    before_validation = copy.deepcopy(kit.validation)
+    ids = _cover_paragraph_ids(kit)
+    result = apply_change_actions(
+        kit=kit,
+        resume_text=SYNTHETIC_RESUME,
+        job_description=SYNTHETIC_JD,
+        actions=[ChangeAction(cid, "reject") for cid in ids],  # rejects every paragraph -> refused
+        expected_revision=0,
+    )
+    assert not result.ok
+    assert result.kit.validation == before_validation
