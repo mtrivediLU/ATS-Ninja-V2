@@ -17,12 +17,13 @@ import { copyText, kitTarget } from "@/lib/product";
 import { formatAnswersText, recommendedOutreachDraft } from "@/lib/artifact-content";
 
 /**
- * The results-first Application Kit page (D4 / K1). Renders top to bottom:
- * personalized header, ATS keyword-match comparison, primary downloads with a
- * PDF/Word selector, evidence-backed added keywords, "what matters most" job
- * priorities, exactly two fit panels (strengths/gaps), and one quiet advanced
- * entry. A Kit opened from History renders this identical page — never a
- * different, more-technical view than the one shown right after generation.
+ * The results-first Application Kit page (D4 / K1). Renders top to bottom in
+ * the approved order: personalized header, ATS keyword-match comparison,
+ * primary downloads with a PDF/Word selector, evidence-backed added keywords,
+ * "what matters most" job priorities, exactly two fit panels (strengths/
+ * gaps), and one quiet advanced entry. A Kit opened from History renders this
+ * identical page — never a different, more-technical view than the one shown
+ * right after generation.
  */
 export function UnifiedKitWorkspace() {
   const { kit, refresh } = useKit();
@@ -33,6 +34,16 @@ export function UnifiedKitWorkspace() {
   const result = kit?.result;
   if (!kit || !result) return null;
   const completedResult = result;
+
+  function openResumePreview() {
+    setPreviewArtifact("resume");
+    // The resume card may already be on screen (its expand/focus effect fires
+    // regardless), but an explicit smooth scroll guarantees the user actually
+    // sees where the added keywords appear, not just that focus moved there.
+    window.requestAnimationFrame(() => {
+      document.getElementById("resume")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
 
   async function copyAnswers() {
     if (!completedResult.answers) return;
@@ -69,14 +80,8 @@ export function UnifiedKitWorkspace() {
 
       <ResultsHeader kit={kit} />
 
-      {result.match_report ? (
-        <>
-          <ScoreComparison report={result.match_report} />
-          <KeywordsAdded report={result.match_report} onSeeWhereTheseAppear={() => setPreviewArtifact("resume")} />
-          <JobPriorities report={result.match_report} />
-          <FitPanels report={result.match_report} />
-        </>
-      ) : (
+      {result.match_report && <ScoreComparison report={result.match_report} />}
+      {!result.match_report && (
         <Banner tone="neutral" title="Match scores were unavailable for this run." className="mt-6">
           Your documents are still available for download below.
         </Banner>
@@ -108,6 +113,14 @@ export function UnifiedKitWorkspace() {
           />
         </div>
       </section>
+
+      {result.match_report && (
+        <>
+          <KeywordsAdded report={result.match_report} onSeeWhereTheseAppear={openResumePreview} />
+          <JobPriorities report={result.match_report} />
+          <FitPanels report={result.match_report} />
+        </>
+      )}
 
       <AdvancedDetails
         kit={kit}

@@ -72,11 +72,21 @@ test("score state: tailored unavailable (older kit / not requested)", () => {
 // Structural requirements: the approved D4 hierarchy, source-inspected because
 // the current stack has no component-rendering test runner (no jsdom/RTL).
 // --------------------------------------------------------------------------- //
-test("results page renders the seven-item D4 hierarchy in order, nothing extra", async () => {
+test("results page renders the seven-item D4 hierarchy in the approved order, nothing extra", async () => {
   const source = await read("../components/product/unified-kit-workspace.tsx");
   // Match JSX usage sites specifically (`<Component`), not import statements,
   // since imports are alphabetized and would otherwise scramble the check.
-  const order = ["<ResultsHeader", "<ScoreComparison", "<KeywordsAdded", "<JobPriorities", "<FitPanels", "downloads-heading", "<AdvancedDetails"];
+  // Approved order: header -> score comparison -> downloads -> keywords added
+  // -> job priorities -> fit panels -> advanced details.
+  const order = [
+    "<ResultsHeader",
+    "<ScoreComparison",
+    "downloads-heading",
+    "<KeywordsAdded",
+    "<JobPriorities",
+    "<FitPanels",
+    "<AdvancedDetails",
+  ];
   let cursor = -1;
   for (const marker of order) {
     const index = source.indexOf(marker);
@@ -123,6 +133,41 @@ test("advanced details is the one quiet entry with correct aria wiring", async (
   assert.match(source, /\{open && \(/);
 });
 
+test("advanced details gates match insights, trust/evidence, and tailoring changes behind the same single-open state as the four artifact workspaces", async () => {
+  const source = await read("../components/product/advanced-details.tsx");
+
+  // A single shared union covers all seven subsections.
+  assert.match(
+    source,
+    /type Subsection =\s*\|\s*"match-insights"\s*\|\s*"trust-evidence"\s*\|\s*"tailoring-changes"\s*\|\s*"answers"\s*\|\s*"job-fit"\s*\|\s*"interview-prep"\s*\|\s*"linkedin-outreach"/,
+  );
+  assert.match(source, /openSubsection/);
+  assert.doesNotMatch(source, /openArtifact/); // superseded by the wider single-open state
+
+  // Match Insights, Trust/evidence, and tailoring changes are each wrapped in
+  // a SubsectionRow keyed off openSubsection, not rendered unconditionally.
+  const matchInsightsBlock = source.slice(source.indexOf("<MatchInsights") - 400, source.indexOf("<MatchInsights"));
+  assert.match(matchInsightsBlock, /expanded=\{openSubsection === "match-insights"\}/);
+
+  const trustStripBlock = source.slice(source.indexOf("<KitTrustStrip") - 400, source.indexOf("<KitTrustStrip"));
+  assert.match(trustStripBlock, /expanded=\{openSubsection === "trust-evidence"\}/);
+
+  const changeLedgerBlock = source.slice(source.indexOf("<ChangeLedger") - 800, source.indexOf("<ChangeLedger"));
+  assert.match(changeLedgerBlock, /expanded=\{openSubsection === "tailoring-changes"\}/);
+
+  // Every one of the seven subsections reads from the same openSubsection
+  // state, so opening one is guaranteed to close any other.
+  for (const key of ["match-insights", "trust-evidence", "tailoring-changes", "answers", "job-fit", "interview-prep", "linkedin-outreach"]) {
+    assert.match(source, new RegExp(`expanded=\\{openSubsection === "${key}"\\}`), `expected "${key}" to share the openSubsection state`);
+  }
+
+  // Kit lineage (regenerate/revision history) stays a compact, always-visible
+  // control row — it is not one of the seven gated subsections.
+  const lineageIndex = source.indexOf("<KitLineageActions");
+  assert.ok(lineageIndex > -1);
+  assert.doesNotMatch(source.slice(lineageIndex - 50, lineageIndex), /openSubsection/);
+});
+
 test("format selector is a real radiogroup that relabels both downloads", async () => {
   const source = await read("../components/product/format-selector.tsx");
   assert.match(source, /role="radiogroup"/);
@@ -161,4 +206,24 @@ test("results page grid is responsive without a fixed/sticky mobile overlay", as
 test("score comparison panels stack on mobile and pair up from sm breakpoint", async () => {
   const source = await read("../components/product/score-comparison.tsx");
   assert.match(source, /sm:grid-cols-2/);
+});
+
+// --------------------------------------------------------------------------- //
+// Corrections: header status shown once, and an accessible jump to the resume.
+// --------------------------------------------------------------------------- //
+test("results header shows the completion status exactly once, via the StatusLabel pill", async () => {
+  const source = await read("../components/product/results-header.tsx");
+  // The joined context line must not also print the status label as plain text.
+  assert.doesNotMatch(source, /contextParts = \[[\s\S]*?kitStatusPresentation\[kit\.status\]\.label[\s\S]*?\]/);
+  // Exactly one StatusLabel renders the completion state.
+  const statusLabelMatches = source.match(/<StatusLabel/g) ?? [];
+  assert.equal(statusLabelMatches.length, 1);
+});
+
+test("'see where these appear' opens the resume preview and scrolls it into view accessibly", async () => {
+  const source = await read("../components/product/unified-kit-workspace.tsx");
+  assert.match(source, /function openResumePreview\(\)/);
+  assert.match(source, /setPreviewArtifact\("resume"\)/);
+  assert.match(source, /getElementById\("resume"\)\?\.scrollIntoView\(\{\s*behavior:\s*"smooth"/);
+  assert.match(source, /onSeeWhereTheseAppear=\{openResumePreview\}/);
 });

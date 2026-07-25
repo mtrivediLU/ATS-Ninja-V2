@@ -17,9 +17,10 @@ export function ResultsHeader({ kit }: { kit: KitRead }) {
   const warningCount = kit.result?.validation.warning_count ?? 0;
 
   const headline = buildHeadline({ name, role: target.role, company: target.company, hasRole, hasCompany });
+  // Completion state is shown once, via the StatusLabel pill below — it must
+  // not also appear as plain text in this joined context line.
   const contextParts = [
     hasRole || hasCompany ? [hasRole ? target.role : "", hasCompany ? target.company : ""].filter(Boolean).join(" · ") : "Role and organization not detected.",
-    kitStatusPresentation[kit.status].label,
     `Generated ${formatDate(kit.created_at)}`,
   ].filter(Boolean);
 
