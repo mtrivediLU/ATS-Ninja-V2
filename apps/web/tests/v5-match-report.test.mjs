@@ -76,10 +76,20 @@ test("scoring page explains the three scores and irreversible grounding removals
   assert.match(source, /never earns strict exact-keyword credit/i);
 });
 
-test("unified workspace wires match insights, change ledger, and lineage; v5 is current", async () => {
+test("results-first workspace composes the D4 hierarchy and knows v5 is current", async () => {
   const source = await read("../components/product/unified-kit-workspace.tsx");
+  assert.match(source, /ResultsHeader/);
+  assert.match(source, /ScoreComparison/);
+  assert.match(source, /KeywordsAdded/);
+  assert.match(source, /JobPriorities/);
+  assert.match(source, /FitPanels/);
+  assert.match(source, /AdvancedDetails/);
+  assert.match(source, /application-kit\/v5/);
+});
+
+test("advanced details wires match insights, change ledger, and lineage behind the quiet entry", async () => {
+  const source = await read("../components/product/advanced-details.tsx");
   assert.match(source, /MatchInsights/);
   assert.match(source, /ChangeLedger/);
   assert.match(source, /KitLineageActions/);
-  assert.match(source, /application-kit\/v5/);
 });

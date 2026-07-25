@@ -177,21 +177,25 @@ exports Markdown.
 Download filenames are bounded and sanitized from available target context.
 Generated content never leaves the browser for copy/download actions.
 
-### Resume/Cover Letter template PDF download
+### Resume/Cover Letter template PDF/Word download
 
-The template workspace's primary **Download PDF** button
-(`components/product/templates/template-preview.tsx`) calls
-`POST /api/v1/document-exports/pdf` directly and saves the response as a real
-binary file — no browser print dialog, no external service. It sends
+`QuickPdfDownload` (`components/product/quick-pdf-download.tsx`) is the one
+browser control for both formats: it calls `POST
+/api/v1/document-exports/pdf` or the sibling `POST
+/api/v1/document-exports/docx` depending on the selected format, and saves the
+response as a real binary file — no browser print dialog, no external
+service, no second client-side rendering pipeline. It sends
 `content_source: "local_edit"` and the current draft text only when the
 active source actually is a local edit (never persisted server-side by that
 request); otherwise it exports the generated, already-validated Kit content.
 The button disables itself and shows a spinner for the duration of the
 export (no duplicate in-flight exports) and announces success or a specific
-failure reason through the existing toast system. The downloaded filename is
-never computed in the frontend: it is read from the API's
+failure reason through the existing toast system. The results-first page's
+`FormatSelector` (a segmented PDF/Word `radiogroup`) relabels both the Resume
+and Cover Letter buttons at once; PDF is the default. The downloaded filename
+is never computed in the frontend: it is read from the API's
 `Content-Disposition` header, which is the single source of truth for the
-`ApplicantName_JobTitle_CompanyName_<Resume|Cover_Letter>[_Classic|_Modern].pdf`
+`ApplicantName_JobTitle_CompanyName_<Resume|Cover_Letter>[_Classic|_Modern].<pdf|docx>`
 convention (`ats_engine.generation.filenames.build_export_filename`). Print /
 Save as PDF, plain-text, and LaTeX export remain available from a secondary
 "More export options" menu next to the primary button.

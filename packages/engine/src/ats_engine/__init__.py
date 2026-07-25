@@ -24,8 +24,11 @@ from ats_engine.evidence import (
 from ats_engine.generation import (
     build_export_filename,
     build_resume_plan,
+    render_cover_letter_docx,
     render_cover_letter_html,
+    render_plain_text_docx,
     render_plain_text_html,
+    render_resume_docx,
     render_resume_html,
     resolve_artifact_selection,
     run_pipeline,
@@ -172,8 +175,11 @@ __all__ = [
     # generation
     "build_export_filename",
     "build_resume_plan",
+    "render_cover_letter_docx",
     "render_cover_letter_html",
+    "render_plain_text_docx",
     "render_plain_text_html",
+    "render_resume_docx",
     "render_resume_html",
     "resolve_artifact_selection",
     "run_pipeline",

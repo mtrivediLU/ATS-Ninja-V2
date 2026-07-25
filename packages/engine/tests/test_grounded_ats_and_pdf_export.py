@@ -561,6 +561,27 @@ def test_filename_always_ends_in_pdf() -> None:
     assert name.count(".pdf") == 1
 
 
+def test_filename_extension_can_be_docx() -> None:
+    name = build_export_filename(
+        candidate_name="Ada",
+        job_title="Engineer",
+        company_name="Acme",
+        artifact_type="resume",
+        extension="docx",
+    )
+    assert name.endswith(".docx")
+    assert not name.endswith(".pdf")
+
+
+def test_filename_extension_strips_a_leading_dot() -> None:
+    name = build_export_filename(
+        candidate_name="Ada", job_title="Engineer", company_name="Acme", artifact_type="resume", extension=".docx"
+    )
+    assert name.endswith(".docx")
+    assert ".. " not in name
+    assert not name.endswith("..docx")
+
+
 # ---------------------------------------------------------------------------
 # HTML rendering for local PDF rasterization (Phase 12)
 # ---------------------------------------------------------------------------

@@ -226,18 +226,16 @@ _RECOGNIZED_HEADINGS = {
 _BULLET_LINE = re.compile(r"^[\-*•]\s+")
 
 
-def render_plain_text_html(text: str, *, template: str) -> str:
-    """Render freeform text (a local edit with no structured document) as HTML.
+def parse_freeform_document(text: str) -> tuple[str, list[tuple[str, list[str]]]]:
+    """Recognize headings in freeform text (a local edit with no structured document).
 
-    Ported from the frontend's ``document-model.ts`` heading recognition so a
-    locally-edited Resume/Cover Letter still downloads with real section
-    headings and bullets when the edited text still uses recognizable
-    headings; anything else falls back to a single verbatim, single-column,
-    selectable-text block rather than guessing at structure.
+    Shared by every output-format renderer (HTML for PDF, DOCX) so heading and
+    bullet recognition never drifts between formats. Returns ``(header_text,
+    sections)``; empty ``sections`` means no recognizable heading was found, so
+    the caller should fall back to a single verbatim block rather than guessing
+    at structure.
     """
-    cls = "modern" if template == "modern" else "classic"
     lines = (text or "").splitlines()
-
     sections: list[tuple[str, list[str]]] = []
     header_lines: list[str] = []
     current: tuple[str, list[str]] | None = None
@@ -250,6 +248,36 @@ def render_plain_text_html(text: str, *, template: str) -> str:
             current[1].append(line)
         else:
             header_lines.append(line)
+    header_text = "\n".join(line for line in header_lines if line.strip())
+    return header_text, sections
+
+
+def freeform_line_blocks(lines: list[str]) -> list[tuple[str, str]]:
+    """Classify freeform lines as ``("bullet", text)`` or ``("paragraph", text)``,
+    skipping blanks. Shared by every output-format renderer."""
+    blocks: list[tuple[str, str]] = []
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line:
+            continue
+        if _BULLET_LINE.match(line):
+            blocks.append(("bullet", _BULLET_LINE.sub("", line)))
+        else:
+            blocks.append(("paragraph", line))
+    return blocks
+
+
+def render_plain_text_html(text: str, *, template: str) -> str:
+    """Render freeform text (a local edit with no structured document) as HTML.
+
+    Ported from the frontend's ``document-model.ts`` heading recognition so a
+    locally-edited Resume/Cover Letter still downloads with real section
+    headings and bullets when the edited text still uses recognizable
+    headings; anything else falls back to a single verbatim, single-column,
+    selectable-text block rather than guessing at structure.
+    """
+    cls = "modern" if template == "modern" else "classic"
+    header_text, sections = parse_freeform_document(text)
 
     if not sections:
         parts = [f'<article class="doc {cls}"><div class="verbatim">']
@@ -258,7 +286,6 @@ def render_plain_text_html(text: str, *, template: str) -> str:
         return _wrap_html("Document", "".join(parts))
 
     body_parts = [f'<article class="doc {cls}">']
-    header_text = "\n".join(line for line in header_lines if line.strip())
     if header_text:
         body_parts.append(f'<header class="doc-header"><p class="doc-contact">{_e(header_text)}</p></header>')
     for heading, section_lines in sections:
@@ -270,20 +297,17 @@ def render_plain_text_html(text: str, *, template: str) -> str:
 def _render_freeform_lines(lines: list[str]) -> str:
     html_lines: list[str] = []
     open_list = False
-    for raw_line in lines:
-        line = raw_line.strip()
-        if not line:
-            continue
-        if _BULLET_LINE.match(line):
+    for kind, text in freeform_line_blocks(lines):
+        if kind == "bullet":
             if not open_list:
                 html_lines.append("<ul>")
                 open_list = True
-            html_lines.append(f"<li>{_e(_BULLET_LINE.sub('', line))}</li>")
+            html_lines.append(f"<li>{_e(text)}</li>")
         else:
             if open_list:
                 html_lines.append("</ul>")
                 open_list = False
-            html_lines.append(f"<p>{_e(line)}</p>")
+            html_lines.append(f"<p>{_e(text)}</p>")
     if open_list:
         html_lines.append("</ul>")
     return "".join(html_lines)

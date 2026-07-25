@@ -100,6 +100,38 @@ async def test_completed_kit_with_legacy_phase1_result_is_served(
     assert any("legacy" in warning.lower() for warning in body["result"]["warnings"])
 
 
+async def test_older_v5_kit_missing_job_priorities_defaults_to_empty_list(
+    client: httpx.AsyncClient, sessionmaker: async_sessionmaker[AsyncSession]
+) -> None:
+    """A v5 kit persisted before ``job_priorities`` existed must still serve
+    (Pydantic backfills the field's default), never a 500."""
+    from app.models import Kit
+
+    response = await client.post(
+        "/api/v1/kits",
+        json={"resume_text": SAMPLE_RESUME, "job_description": SAMPLE_JD, "include_resume": True},
+    )
+    kit_id = response.json()["id"]
+    fetched = await client.get(f"/api/v1/kits/{kit_id}")
+    assert fetched.json()["status"] == "completed"
+    assert fetched.json()["result"]["match_report"]["job_priorities"]  # sanity: normally present
+
+    async with sessionmaker() as session:
+        kit = await session.get(Kit, uuid.UUID(kit_id))
+        assert kit is not None and kit.result is not None
+        stripped_result = dict(kit.result)
+        stripped_match_report = dict(stripped_result["match_report"])
+        del stripped_match_report["job_priorities"]
+        stripped_result["match_report"] = stripped_match_report
+        kit.result = stripped_result  # whole-object reassignment for JSON dirty-tracking
+        session.add(kit)
+        await session.commit()
+
+    refetched = await client.get(f"/api/v1/kits/{kit_id}")
+    assert refetched.status_code == 200
+    assert refetched.json()["result"]["match_report"]["job_priorities"] == []
+
+
 async def test_submit_kit_rejects_empty_inputs(client: httpx.AsyncClient) -> None:
     response = await client.post("/api/v1/kits", json={"resume_text": "", "job_description": "x"})
     assert response.status_code == 422

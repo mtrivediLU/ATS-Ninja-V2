@@ -54,20 +54,36 @@ application shells. Three deployable/importable units plus infra and docs:
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Frontend workflows (Design Phase K1)
+### Frontend workflows (Design Phase D4 — results-first)
 
-K1 keeps the D2 provider, local-edit, evidence, and full-artifact workspaces,
-but makes `/kits/[kitId]` the completed-Kit workspace. It derives six artifact
-summaries, trust counts, and warning state from the one `KitProvider` result;
-there are no per-card fetches, no additional poller, no browser evidence
-classification, and no browser ATS/fit calculation. Common actions expand in
-place, while the prior artifact routes remain advanced/deep-link paths.
+D4 replaces the K1 unified workspace's always-visible six-artifact body with a
+**results-first** hierarchy at `/kits/[kitId]` (see ADR-0021): a personalized
+header, an honest original-vs-tailored ATS keyword-match comparison, one-click
+downloads (PDF/Word), a compact evidence-backed "keywords added" list,
+natural-language "what matters most" bullets, exactly two fit panels
+(strengths/gaps), and one quiet "View detailed analysis and evidence" entry
+consolidating everything else — the full match-report breakdown, tailoring
+change ledgers, trust and evidence, application answers, job-fit assessment,
+interview prep, LinkedIn outreach, and kit lineage. A Kit opened from History
+renders this identical page; new-Kit submission redirects to this page
+directly rather than a specific artifact's Trust Summary.
 
-The shared Quick PDF control still invokes the existing PDF export endpoint;
-template selection is presentation-only React session state shared by unified
-and advanced document views. Candidate content is not added to browser storage
-or URLs. K1 is frontend composition only: no API contract, engine, persistence,
-queue, database, or evidence-rule change.
+It still derives every summary from the one `KitProvider` result — no per-card
+fetches, no additional poller, no browser evidence classification, and no
+browser ATS/fit/job-priority calculation. The advanced area's four secondary
+artifacts (answers, job-fit, interview prep, LinkedIn outreach) keep the K1
+single-open coordination via the existing `ArtifactSummarySection`; the prior
+per-artifact routes remain advanced/deep-link paths.
+
+The shared download control (`QuickPdfDownload`) now supports both PDF and
+Word (`.docx`) via a `FormatSelector` segmented control shared by the Resume
+and Cover Letter cards; template selection remains presentation-only React
+session state shared by the results and advanced document views. Candidate
+content is not added to browser storage or URLs. Unlike K1, D4 required two
+small, additive engine fields (`MatchReport.job_priorities`, reusing the
+existing `keywords_surfaced_by_tailoring` for "added keywords") and a new DOCX
+renderer/export endpoint — see ADR-0021 for exactly what changed and why nothing
+else did.
 
 ### Frontend workflows (Design Phase D2)
 
@@ -447,10 +463,21 @@ selectable-text, single-column PDF and returns it with a standardized
 `Content-Disposition` filename
 (`ApplicantName_JobTitle_CompanyName_<Resume|Cover_Letter>[_Classic|_Modern].pdf`,
 `ats_engine.generation.filenames.build_export_filename`). The frontend's
-"Download PDF" button (`template-preview.tsx`) calls this directly — no
+"Download PDF" button (`quick-pdf-download.tsx`) calls this directly — no
 print dialog — with duplicate-click prevention and success/failure toasts;
 Print / Save as PDF, plain-text, and LaTeX export remain available from a
 secondary "More export options" menu.
+
+**Direct DOCX download.** See
+[ADR-0021](../adr/0021-results-first-application-kit-and-docx-export.md). A
+sibling `POST /api/v1/document-exports/docx` shares the same request schema
+and filename convention (`...docx` instead of `...pdf`), rendered by
+`ats_engine.generation.docx_renderer` via `python-docx` — a pure-Python OOXML
+writer, so unlike WeasyPrint this renderer lives in the engine, not the API
+layer. Single-column, no tables/images, so an ATS text extractor reads it in
+the same order as a human. The same one-click control
+(`quick-pdf-download.tsx`) calls either endpoint based on the results page's
+PDF/Word `FormatSelector`.
 
 **Two regressions found only by a live, real end-to-end run (not caught by
 any existing test) and fixed:**

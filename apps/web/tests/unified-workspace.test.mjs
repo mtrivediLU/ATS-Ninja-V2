@@ -19,7 +19,13 @@ test("unified workspace composes the one provider result without a card fetch or
   assert.match(source, /useKit\(\)/);
   assert.doesNotMatch(source, /getKit\(|setInterval\(/);
   assert.match(source, /PrimaryDocumentCard/);
+  assert.match(source, /AdvancedDetails/);
+});
+
+test("advanced details consolidates the secondary artifacts behind one entry", async () => {
+  const source = await readFile(new URL("../components/product/advanced-details.tsx", import.meta.url), "utf8");
   assert.match(source, /ArtifactSummarySection/);
+  assert.match(source, /View detailed analysis and evidence/);
 });
 
 test("quick PDF control uses the established export client and has an in-flight guard", async () => {

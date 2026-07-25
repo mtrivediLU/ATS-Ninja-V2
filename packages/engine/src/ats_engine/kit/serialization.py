@@ -39,6 +39,7 @@ from ats_engine.kit.contract import (
     InterviewQuestion,
     InterviewQuestionCategory,
     JobFitArtifact,
+    JobPriorityItem,
     LinkedInOutreachArtifact,
     MatchReport,
     OutreachAudience,
@@ -148,6 +149,16 @@ def _ats_match_score_to_dict(score: AtsMatchScore) -> dict[str, Any]:
     }
 
 
+def _job_priority_to_dict(item: JobPriorityItem) -> dict[str, Any]:
+    return {"theme": item.theme, "detail": item.detail}
+
+
+def _job_priority_from_dict(raw: object) -> JobPriorityItem | None:
+    if not isinstance(raw, dict):
+        return None
+    return JobPriorityItem(theme=str(raw.get("theme", "")), detail=str(raw.get("detail", "")))
+
+
 def _quality_payload_to_dict(payload: AtsQualityReportPayload) -> dict[str, Any]:
     return {
         "required_term_count": payload.required_term_count,
@@ -188,6 +199,7 @@ def _match_report_to_dict(report: MatchReport) -> dict[str, Any]:
         "keywords_matched_original": list(report.keywords_matched_original),
         "keywords_surfaced_by_tailoring": list(report.keywords_surfaced_by_tailoring),
         "keywords_still_missing": list(report.keywords_still_missing),
+        "job_priorities": [_job_priority_to_dict(item) for item in report.job_priorities],
         "recommendation": report.recommendation,
         "kit_summary": report.kit_summary,
         "quality_report": _quality_payload_to_dict(report.quality_report),
@@ -640,6 +652,11 @@ def _match_report_from_dict(raw: object) -> MatchReport | None:
         keywords_matched_original=[str(item) for item in raw.get("keywords_matched_original") or []],
         keywords_surfaced_by_tailoring=[str(item) for item in raw.get("keywords_surfaced_by_tailoring") or []],
         keywords_still_missing=[str(item) for item in raw.get("keywords_still_missing") or []],
+        job_priorities=[
+            parsed
+            for parsed in (_job_priority_from_dict(item) for item in raw.get("job_priorities") or [])
+            if parsed is not None
+        ],
         recommendation=str(raw.get("recommendation", "")),
         kit_summary=str(raw.get("kit_summary", "")),
         quality_report=_quality_payload_from_dict(raw.get("quality_report")),

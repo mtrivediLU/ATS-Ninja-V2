@@ -8,6 +8,7 @@ from ats_engine.scoring.ats import (
     extract_keywords,
     keyword_in_text,
 )
+from ats_engine.scoring.job_priorities import build_job_priorities
 from ats_engine.scoring.keyword_analysis import analyze_keyword_coverage
 from ats_engine.scoring.match_report import (
     DISCLAIMER,
@@ -23,6 +24,7 @@ from ats_engine.scoring.match_report import (
 __all__ = [
     "DISCLAIMER",
     "analyze_keyword_coverage",
+    "build_job_priorities",
     "build_match_report",
     "build_recommendation",
     "build_weighted_keywords",

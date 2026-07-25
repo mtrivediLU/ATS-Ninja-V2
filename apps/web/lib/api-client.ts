@@ -144,23 +144,29 @@ export type DocumentExportPayload = {
 
 const FILENAME_FROM_DISPOSITION = /filename="([^"]+)"/;
 
+const DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
 /**
- * Direct local PDF export: a real binary download, not a print dialog.
- * Bypasses `request<T>` (JSON-only) since the success body is a PDF blob; the
- * error path still parses the same safe `{ detail }` shape as every other
- * endpoint, and the standardized filename comes from the server's
- * Content-Disposition header — this stays the single source of truth for the
- * naming convention rather than duplicating it in TypeScript.
+ * The shared binary-export request both `exportDocumentPdf` and
+ * `exportDocumentDocx` use. Bypasses `request<T>` (JSON-only) since the
+ * success body is a document blob; the error path still parses the same safe
+ * `{ detail }` shape as every other endpoint, and the standardized filename
+ * comes from the server's Content-Disposition header — this stays the single
+ * source of truth for the naming convention rather than duplicating it in
+ * TypeScript.
  */
-export async function exportDocumentPdf(
+async function exportDocument(
+  endpoint: "pdf" | "docx",
+  acceptMimeType: string,
+  fallbackFilename: string,
   payload: DocumentExportPayload,
   signal?: AbortSignal,
 ): Promise<{ blob: Blob; filename: string }> {
   let response: Response;
   try {
-    response = await fetch(`${API_BASE_URL}/api/v1/document-exports/pdf`, {
+    response = await fetch(`${API_BASE_URL}/api/v1/document-exports/${endpoint}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/pdf" },
+      headers: { "Content-Type": "application/json", Accept: acceptMimeType },
       body: JSON.stringify(payload),
       cache: "no-store",
       signal,
@@ -170,7 +176,7 @@ export async function exportDocumentPdf(
   }
 
   if (!response.ok) {
-    let detail = "The PDF could not be generated.";
+    let detail = `The ${endpoint.toUpperCase()} could not be generated.`;
     try {
       const body: unknown = await response.json();
       if (
@@ -191,6 +197,22 @@ export async function exportDocumentPdf(
 
   const blob = await response.blob();
   const disposition = response.headers.get("content-disposition") ?? "";
-  const filename = FILENAME_FROM_DISPOSITION.exec(disposition)?.[1] || "document.pdf";
+  const filename = FILENAME_FROM_DISPOSITION.exec(disposition)?.[1] || fallbackFilename;
   return { blob, filename };
+}
+
+/** Direct local PDF export: a real binary download, not a print dialog. */
+export function exportDocumentPdf(
+  payload: DocumentExportPayload,
+  signal?: AbortSignal,
+): Promise<{ blob: Blob; filename: string }> {
+  return exportDocument("pdf", "application/pdf", "document.pdf", payload, signal);
+}
+
+/** Direct local Word (.docx) export, parallel to the PDF export above. */
+export function exportDocumentDocx(
+  payload: DocumentExportPayload,
+  signal?: AbortSignal,
+): Promise<{ blob: Blob; filename: string }> {
+  return exportDocument("docx", DOCX_MEDIA_TYPE, "document.docx", payload, signal);
 }
