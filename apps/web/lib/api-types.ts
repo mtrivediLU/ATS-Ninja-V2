@@ -414,6 +414,11 @@ export interface AtsQualityReportPayload {
   generic_language_warnings: string[];
 }
 
+export interface JobPriorityItem {
+  theme: string;
+  detail: string;
+}
+
 export interface MatchReport {
   original_ats_match: AtsMatchScore;
   tailored_ats_match: AtsMatchScore | null;
@@ -428,6 +433,7 @@ export interface MatchReport {
   keywords_matched_original: string[];
   keywords_surfaced_by_tailoring: string[];
   keywords_still_missing: string[];
+  job_priorities: JobPriorityItem[];
   recommendation: string;
   kit_summary: string;
   quality_report: AtsQualityReportPayload;

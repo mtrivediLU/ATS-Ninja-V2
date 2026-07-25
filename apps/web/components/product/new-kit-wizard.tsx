@@ -167,7 +167,9 @@ export function NewKitWizard() {
     };
     try {
       const kit = await createKit(payload, controller.signal);
-      router.push(`/kits/${kit.id}/resume`);
+      // The results-first page at /kits/{id} is the landing experience for every
+      // completed Kit (see K1/D4) — never a specific artifact's Trust Summary.
+      router.push(`/kits/${kit.id}`);
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : "The Kit could not be submitted.";
       setErrors({ submit: message });
