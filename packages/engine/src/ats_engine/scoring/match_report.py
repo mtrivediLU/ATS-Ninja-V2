@@ -16,6 +16,7 @@ from ats_engine.kit.contract import (
 )
 from ats_engine.models import EvidenceItem, JDProfile, Profile, ResumePlan
 from ats_engine.scoring.ats import keyword_in_text
+from ats_engine.scoring.job_priorities import build_job_priorities
 from ats_engine.validation.style import validate_style
 
 """ApplicationKit v5 honest scoring — the deterministic match report.
@@ -475,6 +476,7 @@ def build_match_report(
     matched_tailored = set(tailored.matched_keywords) if tailored is not None else set(matched_original)
     surfaced = [term for term in matched_tailored if term not in matched_original]
     still_missing = [w.term for w in keywords if w.term not in matched_original and w.term not in matched_tailored]
+    job_priorities = build_job_priorities(evidence)
 
     quality = build_ats_quality_report(
         evidence=evidence,
@@ -523,6 +525,7 @@ def build_match_report(
         keywords_matched_original=sorted(matched_original),
         keywords_surfaced_by_tailoring=sorted(surfaced),
         keywords_still_missing=still_missing,
+        job_priorities=job_priorities,
         recommendation=recommendation,
         kit_summary=kit_summary,
         quality_report=payload,

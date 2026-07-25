@@ -361,6 +361,21 @@ class AtsQualityReportPayload:
 
 
 @dataclass(slots=True)
+class JobPriorityItem:
+    """One natural-language "what this employer values most" theme.
+
+    Derived only from the job description's own requirement set (the evidence
+    matrix's keyword/category/required-preferred fields) — never from candidate
+    evidence — so it describes what the role asks for, independent of whether
+    the candidate has it. ``theme`` is a short bold-lead phrase; ``detail`` is
+    one plain sentence.
+    """
+
+    theme: str
+    detail: str
+
+
+@dataclass(slots=True)
 class MatchReport:
     """The v5 honest-scoring report: three distinct scores plus diagnostics.
 
@@ -385,6 +400,7 @@ class MatchReport:
     keywords_matched_original: list[str] = field(default_factory=list)
     keywords_surfaced_by_tailoring: list[str] = field(default_factory=list)
     keywords_still_missing: list[str] = field(default_factory=list)
+    job_priorities: list[JobPriorityItem] = field(default_factory=list)
     recommendation: str = ""
     kit_summary: str = ""
     quality_report: AtsQualityReportPayload = field(default_factory=AtsQualityReportPayload)

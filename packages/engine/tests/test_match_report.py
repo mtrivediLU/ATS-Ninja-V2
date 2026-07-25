@@ -274,3 +274,55 @@ def test_tailored_lower_than_original_is_explained() -> None:
     if report.tailored_ats_match.score < report.original_ats_match.score:
         assert "lower" in report.kit_summary.lower()
     assert keywords  # sanity
+
+
+def test_match_report_carries_job_priorities() -> None:
+    kit = generate_application_kit(
+        resume_text=SYNTHETIC_RESUME,
+        job_description=SYNTHETIC_JD,
+        use_llm=False,
+        include_resume=True,
+    )
+    report = kit.match_report
+    assert report is not None
+    assert report.job_priorities
+    for priority in report.job_priorities:
+        assert priority.theme.strip()
+        assert priority.detail.strip()
+
+
+def test_match_report_serialization_round_trips_job_priorities() -> None:
+    from ats_engine.kit.serialization import _match_report_from_dict, _match_report_to_dict
+
+    kit = generate_application_kit(
+        resume_text=SYNTHETIC_RESUME,
+        job_description=SYNTHETIC_JD,
+        use_llm=False,
+        include_resume=True,
+    )
+    report = kit.match_report
+    assert report is not None
+    raw = _match_report_to_dict(report)
+    restored = _match_report_from_dict(raw)
+    assert restored is not None
+    assert restored.job_priorities == report.job_priorities
+
+
+def test_match_report_deserializes_older_kit_missing_job_priorities() -> None:
+    """A v5 kit persisted before ``job_priorities`` existed must deserialize with
+    an empty list, never an error — new optional fields are additive."""
+    from ats_engine.kit.serialization import _match_report_from_dict, _match_report_to_dict
+
+    kit = generate_application_kit(
+        resume_text=SYNTHETIC_RESUME,
+        job_description=SYNTHETIC_JD,
+        use_llm=False,
+        include_resume=True,
+    )
+    report = kit.match_report
+    assert report is not None
+    raw = _match_report_to_dict(report)
+    del raw["job_priorities"]  # simulate an older persisted kit
+    restored = _match_report_from_dict(raw)
+    assert restored is not None
+    assert restored.job_priorities == []
