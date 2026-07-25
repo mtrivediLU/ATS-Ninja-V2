@@ -4,8 +4,11 @@ from dataclasses import dataclass
 
 from ats_engine import (
     build_export_filename,
+    render_cover_letter_docx,
     render_cover_letter_html,
+    render_plain_text_docx,
     render_plain_text_html,
+    render_resume_docx,
     render_resume_html,
 )
 from ats_engine.kit.contract import (
@@ -28,14 +31,16 @@ from app.schemas import (
     ResumeDocumentResponse,
 )
 
-"""Local, request-scoped PDF rendering for the Resume/Cover Letter download.
+"""Local, request-scoped PDF and DOCX rendering for the Resume/Cover Letter download.
 
 Renders the already-persisted, already-validated ApplicationKit content (or a
-request-scoped local edit, never persisted) to standalone HTML via the engine
-(``ats_engine.generation.html_renderer`` — pure Python, no binary rendering),
-then rasterizes that HTML to PDF bytes with WeasyPrint. WeasyPrint's native
-dependency stays confined to this service/apps-api layer per ADR-0004/
-ADR-0018 — the engine itself never imports it.
+request-scoped local edit, never persisted) via the engine's pure-Python
+renderers (``ats_engine.generation.html_renderer`` / ``docx_renderer``), then
+either rasterizes the HTML to PDF bytes with WeasyPrint or returns the DOCX
+bytes directly. WeasyPrint's native dependency stays confined to this
+service/apps-api layer per ADR-0004/ADR-0018 — the engine itself never imports
+it; ``python-docx`` is a pure-Python OOXML writer, so DOCX rendering lives in
+the engine alongside the other renderers.
 """
 
 
@@ -49,22 +54,47 @@ class RenderedExport:
     filename: str
 
 
+@dataclass(slots=True)
+class RenderedDocxExport:
+    docx_bytes: bytes
+    filename: str
+
+
+@dataclass(slots=True)
+class _ResolvedArtifact:
+    """The document to render, resolved once for both the PDF and DOCX paths.
+
+    ``document`` is the engine's structured dataclass (``ResumeDocument`` or
+    ``CoverLetterDocument``) when one is available; ``plain_text`` is the raw
+    text used instead when the source is a local edit or no structured document
+    exists — both output formats agree on which content produced the export.
+    """
+
+    candidate_name: str
+    document: ResumeDocument | CoverLetterDocument | None
+    plain_text: str
+
+
 def build_export(kit: Kit, payload: DocumentExportRequest) -> RenderedExport:
     """Render the requested artifact to PDF bytes with a standardized filename."""
-    if kit.status != KitStatus.COMPLETED or not kit.result:
-        raise DocumentExportError("This kit has no completed result to export yet.")
-
-    result = ApplicationKitResponse.model_validate(normalize_persisted_result(kit.result))
-    company, role = _kit_target(result)
+    company, role, resolved = _resolve(kit, payload)
 
     if payload.artifact_type == "cover_letter":
-        html, candidate_name = _render_cover_letter(result, payload)
+        html = (
+            render_cover_letter_html(resolved.document, payload.template_id)
+            if isinstance(resolved.document, CoverLetterDocument)
+            else render_plain_text_html(resolved.plain_text, template=payload.template_id)
+        )
     else:
-        html, candidate_name = _render_resume(result, payload)
+        html = (
+            render_resume_html(resolved.document, payload.template_id)
+            if isinstance(resolved.document, ResumeDocument)
+            else render_plain_text_html(resolved.plain_text, template=payload.template_id)
+        )
 
     pdf_bytes = HTML(string=html).write_pdf()
     filename = build_export_filename(
-        candidate_name=candidate_name,
+        candidate_name=resolved.candidate_name,
         job_title=role,
         company_name=company,
         artifact_type=payload.artifact_type,
@@ -74,23 +104,66 @@ def build_export(kit: Kit, payload: DocumentExportRequest) -> RenderedExport:
     return RenderedExport(pdf_bytes=pdf_bytes, filename=filename)
 
 
-def _render_resume(result: ApplicationKitResponse, payload: DocumentExportRequest) -> tuple[str, str]:
+def build_docx_export(kit: Kit, payload: DocumentExportRequest) -> RenderedDocxExport:
+    """Render the requested artifact to DOCX bytes with a standardized filename."""
+    company, role, resolved = _resolve(kit, payload)
+
+    if payload.artifact_type == "cover_letter":
+        docx_bytes = (
+            render_cover_letter_docx(resolved.document, payload.template_id)
+            if isinstance(resolved.document, CoverLetterDocument)
+            else render_plain_text_docx(resolved.plain_text, template=payload.template_id)
+        )
+    else:
+        docx_bytes = (
+            render_resume_docx(resolved.document, payload.template_id)
+            if isinstance(resolved.document, ResumeDocument)
+            else render_plain_text_docx(resolved.plain_text, template=payload.template_id)
+        )
+
+    filename = build_export_filename(
+        candidate_name=resolved.candidate_name,
+        job_title=role,
+        company_name=company,
+        artifact_type=payload.artifact_type,
+        template_id=payload.template_id,
+        kit_id=str(kit.id),
+        extension="docx",
+    )
+    return RenderedDocxExport(docx_bytes=docx_bytes, filename=filename)
+
+
+def _resolve(kit: Kit, payload: DocumentExportRequest) -> tuple[str, str, _ResolvedArtifact]:
+    if kit.status != KitStatus.COMPLETED or not kit.result:
+        raise DocumentExportError("This kit has no completed result to export yet.")
+
+    result = ApplicationKitResponse.model_validate(normalize_persisted_result(kit.result))
+    company, role = _kit_target(result)
+    resolved = (
+        _resolve_cover_letter(result, payload)
+        if payload.artifact_type == "cover_letter"
+        else _resolve_resume(result, payload)
+    )
+    return company, role, resolved
+
+
+def _resolve_resume(result: ApplicationKitResponse, payload: DocumentExportRequest) -> _ResolvedArtifact:
     if payload.content_source == "local_edit":
         text = payload.local_edit_text.strip()
         if not text:
             raise DocumentExportError("No local edit content was provided to export.")
         candidate_name = result.resume.document.candidate_name if result.resume and result.resume.document else ""
-        return render_plain_text_html(payload.local_edit_text, template=payload.template_id), candidate_name
+        return _ResolvedArtifact(candidate_name=candidate_name, document=None, plain_text=payload.local_edit_text)
 
     if result.resume is None or not result.resume.text.strip():
         raise DocumentExportError("This kit has no generated Resume to export.")
     if result.resume.document is not None:
         document = _to_engine_resume_document(result.resume.document)
-        return render_resume_html(document, payload.template_id), document.candidate_name
-    return render_plain_text_html(result.resume.text, template=payload.template_id), ""
+        return _ResolvedArtifact(candidate_name=document.candidate_name, document=document, plain_text="")
+    return _ResolvedArtifact(candidate_name="", document=None, plain_text=result.resume.text)
 
 
-def _render_cover_letter(result: ApplicationKitResponse, payload: DocumentExportRequest) -> tuple[str, str]:
+def _resolve_cover_letter(result: ApplicationKitResponse, payload: DocumentExportRequest) -> _ResolvedArtifact:
     if payload.content_source == "local_edit":
         text = payload.local_edit_text.strip()
         if not text:
@@ -98,14 +171,14 @@ def _render_cover_letter(result: ApplicationKitResponse, payload: DocumentExport
         candidate_name = (
             result.cover_letter.document.sender_name if result.cover_letter and result.cover_letter.document else ""
         )
-        return render_plain_text_html(payload.local_edit_text, template=payload.template_id), candidate_name
+        return _ResolvedArtifact(candidate_name=candidate_name, document=None, plain_text=payload.local_edit_text)
 
     if result.cover_letter is None or not result.cover_letter.text.strip():
         raise DocumentExportError("This kit has no generated Cover Letter to export.")
     if result.cover_letter.document is not None:
         document = _to_engine_cover_letter_document(result.cover_letter.document)
-        return render_cover_letter_html(document, payload.template_id), document.sender_name
-    return render_plain_text_html(result.cover_letter.text, template=payload.template_id), ""
+        return _ResolvedArtifact(candidate_name=document.sender_name, document=document, plain_text="")
+    return _ResolvedArtifact(candidate_name="", document=None, plain_text=result.cover_letter.text)
 
 
 def _kit_target(result: ApplicationKitResponse) -> tuple[str, str]:

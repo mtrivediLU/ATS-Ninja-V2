@@ -44,14 +44,17 @@ def build_export_filename(
     artifact_type: str,
     template_id: str = "",
     kit_id: str = "",
+    extension: str = "pdf",
 ) -> str:
-    """Build the standardized download filename for a Resume or Cover Letter PDF.
+    """Build the standardized download filename for a Resume or Cover Letter export.
 
     ``artifact_type`` is ``"resume"`` or ``"cover_letter"``; any other value is
     treated as ``"resume"``. ``template_id`` of ``"classic"``/``"modern"``
     appends the matching suffix before the extension; anything else appends
     nothing. ``kit_id`` is only ever used as the last-resort disambiguator, and
     only when candidate name, job title, and company are all unavailable.
+    ``extension`` defaults to ``"pdf"``; the DOCX export passes ``"docx"`` so
+    both formats share this one naming convention.
     """
     name = sanitize_filename_component(candidate_name)
     title = sanitize_filename_component(job_title)
@@ -71,4 +74,5 @@ def build_export_filename(
             base = f"{base}_{short_id}"
 
     base = base[:_MAX_BASE_LENGTH].strip("_") or "Applicant"
-    return f"{base}_{artifact_label}{template_suffix}.pdf"
+    safe_extension = (extension or "pdf").strip(".").lower() or "pdf"
+    return f"{base}_{artifact_label}{template_suffix}.{safe_extension}"

@@ -522,6 +522,13 @@ class AtsQualityReportPayloadResponse(BaseModel):
     generic_language_warnings: list[str] = Field(default_factory=list)
 
 
+class JobPriorityItemResponse(BaseModel):
+    """One natural-language "what this employer values most" theme, JD-only."""
+
+    theme: str = ""
+    detail: str = ""
+
+
 class MatchReportResponse(BaseModel):
     """The v5 honest-scoring report: three distinct scores plus diagnostics."""
 
@@ -538,6 +545,7 @@ class MatchReportResponse(BaseModel):
     keywords_matched_original: list[str] = Field(default_factory=list)
     keywords_surfaced_by_tailoring: list[str] = Field(default_factory=list)
     keywords_still_missing: list[str] = Field(default_factory=list)
+    job_priorities: list[JobPriorityItemResponse] = Field(default_factory=list)
     recommendation: str = ""
     kit_summary: str = ""
     quality_report: AtsQualityReportPayloadResponse = Field(default_factory=AtsQualityReportPayloadResponse)

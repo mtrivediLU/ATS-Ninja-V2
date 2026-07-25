@@ -13,6 +13,11 @@ from ats_engine.generation.cover_letter import (
     generate_cover_letter_latex,
     generate_cover_letter_text,
 )
+from ats_engine.generation.docx_renderer import (
+    render_cover_letter_docx,
+    render_plain_text_docx,
+    render_resume_docx,
+)
 from ats_engine.generation.filenames import build_export_filename, sanitize_filename_component
 from ats_engine.generation.html_renderer import (
     render_cover_letter_html,
@@ -51,8 +56,11 @@ __all__ = [
     "generate_resume_latex",
     "generate_resume_text",
     "mode_from_text",
+    "render_cover_letter_docx",
     "render_cover_letter_html",
+    "render_plain_text_docx",
     "render_plain_text_html",
+    "render_resume_docx",
     "render_resume_html",
     "resolve_artifact_selection",
     "run_pipeline",
