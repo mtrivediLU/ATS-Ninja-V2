@@ -1,14 +1,18 @@
 # ATS-Ninja-V2
 
-## K1 unified Application Kit workspace
+## Results-first Application Kit page
 
-Completed Kits now open at `/kits/[kitId]` as one scrollable results workspace.
-It places one-click Resume and Cover Letter PDF downloads, answer/outreach copy,
-Job Fit gaps, interview review, and evidence warnings alongside all six
-artifact summaries. Inline expansion avoids route changes for everyday review;
-the individual artifact routes are retained as advanced workspaces. This is a
-frontend-only composition over the existing Kit result, PDF export endpoint,
-trust/evidence records, and lifecycle poller—no backend business rules changed.
+A completed Kit opens at `/kits/[kitId]` as a results-first delivery page, the
+same page whether reached right after generation or from History: a
+personalized header, an honest original-vs-tailored ATS keyword-match
+comparison, one-click Resume/Cover Letter downloads with a PDF/Word format
+selector, a compact evidence-backed "keywords added" list, a handful of
+natural-language "what matters most" bullets, exactly two fit panels
+(strengths/gaps), and one quiet "View detailed analysis and evidence" entry
+that reveals the full match-report breakdown, tailoring change ledgers, trust
+and evidence, application answers, job-fit assessment, interview prep,
+LinkedIn outreach, and kit lineage (regenerate / revision history). See
+ADR-0021.
 
 A deterministic-first, truth-grounded AI career SaaS. From a candidate's resume
 and a job description it generates an application kit that stays honest to what
