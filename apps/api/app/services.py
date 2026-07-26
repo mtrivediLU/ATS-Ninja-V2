@@ -9,6 +9,7 @@ from uuid import UUID
 
 from ats_engine import (
     ChangeAction,
+    ExtractionSuspectError,
     OutreachAudience,
     OutreachContext,
     OutreachIntent,
@@ -48,6 +49,8 @@ _CLIENT_ERROR_PREFIX = "Kit generation failed"
 
 def _client_safe_error(exc: Exception) -> str:
     """A persisted, client-safe failure message that never leaks content."""
+    if isinstance(exc, ExtractionSuspectError):
+        return "EXTRACTION_SUSPECT: Resume structure could not be verified; review or re-upload the resume."
     return f"{_CLIENT_ERROR_PREFIX} ({type(exc).__name__})."
 
 

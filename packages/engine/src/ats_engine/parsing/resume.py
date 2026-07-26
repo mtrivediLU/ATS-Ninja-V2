@@ -13,6 +13,20 @@ from ats_engine.providers.base import LLMProvider, generate_json
 PROFILE_CACHE_VERSION = "profile-v5-tailoring-v2-structure-summary-and-wraps"
 
 
+class ExtractionSuspectError(RuntimeError):
+    """Raised when parsed resume structure is unsafe to use for generation.
+
+    The fixed code is intentionally the entire exception message: parser
+    diagnostics can contain candidate-authored text and must not leak through
+    API error persistence or logs.
+    """
+
+    code = "EXTRACTION_SUSPECT"
+
+    def __init__(self) -> None:
+        super().__init__(self.code)
+
+
 # The resume below has already been split into numbered lines. The model is
 # asked to point at line numbers for bullets instead of retyping them: that is
 # both faster (no need to decode the bullet text a second time) and strictly
@@ -75,12 +89,19 @@ def build_profile(resume_text: str, provider: LLMProvider | None = None) -> Prof
     key = make_key(f"{PROFILE_CACHE_VERSION}|{extractor}", text)
     cached = cache.get(key)
     if isinstance(cached, Profile):
+        _raise_if_extraction_suspect(cached)
         return cached
 
     profile = extract_profile(text, provider=provider)
+    _raise_if_extraction_suspect(profile)
     if profile.experiences or profile.tier_a:
         cache.set(key, profile)
     return profile
+
+
+def _raise_if_extraction_suspect(profile: Profile) -> None:
+    if profile.extraction_warnings:
+        raise ExtractionSuspectError
 
 
 def empty_profile() -> Profile:

@@ -340,6 +340,54 @@ def test_supported_content_survives_without_generic_collapse() -> None:
     assert all(len(draft.text.split()) >= 12 for draft in artifact.drafts)
 
 
+def test_v2_atomic_requirement_order_keeps_distinct_proof_in_outreach() -> None:
+    kit = generate_application_kit(
+        resume_text=(
+            "Sam Carter\nPROFESSIONAL EXPERIENCE\nMeridian Data Toronto, ON\n"
+            "Senior Data Engineer 2019 - 2024\n"
+            "- Built Python and SQL ETL pipelines on PostgreSQL, cutting report time by 35%.\n"
+            "- Delivered Tableau dashboards for finance and operations teams.\n"
+        ),
+        job_description=(
+            "Job Title: Data Engineer\nCompany: Vantage\nRequired qualifications:\n"
+            "- Python, SQL, PostgreSQL, ETL\n- Tableau dashboards\n"
+        ),
+        default_mode=Mode.RESUME,
+        use_llm=False,
+        include_interview_prep=False,
+    )
+    artifact = kit.linkedin_outreach
+    assert artifact is not None
+    text = "\n".join(draft.text for draft in artifact.drafts).casefold()
+    assert "python, sql, and tableau dashboards" in text
+    assert any("tableau dashboards" in ref.excerpt.casefold() for ref in artifact.evidence)
+    assert all(draft.character_count <= draft.character_limit for draft in artifact.drafts)
+
+
+def test_v2_jd_order_does_not_hide_more_specific_honest_adjacency() -> None:
+    kit = generate_application_kit(
+        resume_text=(
+            "Sam Carter\nPROFESSIONAL EXPERIENCE\nMeridian Data Toronto, ON\n"
+            "Senior Data Engineer 2019 - 2024\n"
+            "- Built Python and SQL ETL pipelines on PostgreSQL, cutting report time by 35%.\n"
+            "- Delivered Tableau dashboards for finance and operations teams.\n"
+        ),
+        job_description=(
+            "Job Title: BI Developer\nCompany: Vantage\nRequired qualifications:\n"
+            "- Power BI\n- Snowflake\nThe team uses Power BI and Snowflake.\n"
+        ),
+        default_mode=Mode.RESUME,
+        use_llm=False,
+        include_interview_prep=False,
+    )
+    artifact = kit.linkedin_outreach
+    assert artifact is not None
+    text = "\n".join(draft.text for draft in artifact.drafts).casefold()
+    assert "adjacent to snowflake" in text
+    assert "snowflake experience" not in text
+    assert artifact.consistency.passed
+
+
 @pytest.mark.parametrize(
     ("resume", "classification", "phrase"),
     [

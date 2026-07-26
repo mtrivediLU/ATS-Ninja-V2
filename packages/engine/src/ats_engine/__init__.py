@@ -122,6 +122,7 @@ from ats_engine.models import (
     ResumePlan,
 )
 from ats_engine.parsing import (
+    ExtractionSuspectError,
     build_profile,
     extract_profile,
     extract_text_from_pdf,
@@ -158,6 +159,7 @@ __all__ = [
     "ResumePlan",
     # parsing
     "build_profile",
+    "ExtractionSuspectError",
     "extract_profile",
     "extract_text_from_pdf",
     "parse_input",

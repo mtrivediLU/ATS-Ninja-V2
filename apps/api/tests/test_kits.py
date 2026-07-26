@@ -60,6 +60,33 @@ async def test_get_unknown_kit_returns_404(client: httpx.AsyncClient) -> None:
     assert response.status_code == 404
 
 
+async def test_suspect_resume_structure_becomes_content_safe_failed_job(client: httpx.AsyncClient) -> None:
+    suspect_fragment = "Cloud SQL Auth Proxy, configuring secure communication between services."
+    response = await client.post(
+        "/api/v1/kits",
+        json={
+            "resume_text": (
+                "PROFESSIONAL EXPERIENCE\n"
+                f"{suspect_fragment}\n"
+                "Software Engineer 2022 - 2024\n"
+                "- Built Python tools.\n"
+                "TECHNICAL SKILLS\n"
+                "Python\n"
+            ),
+            "job_description": "Job Title: Python Engineer\nCompany: Acme\nRequired qualifications:\n- Python\n",
+        },
+    )
+    assert response.status_code == 202
+
+    fetched = await client.get(f"/api/v1/kits/{response.json()['id']}")
+    assert fetched.status_code == 200
+    kit = fetched.json()
+    assert kit["status"] == "failed"
+    assert kit["result"] is None
+    assert kit["error"].startswith("EXTRACTION_SUSPECT:")
+    assert suspect_fragment not in kit["error"]
+
+
 async def test_completed_kit_with_legacy_phase1_result_is_served(
     client: httpx.AsyncClient,
     sessionmaker: async_sessionmaker[AsyncSession],

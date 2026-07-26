@@ -765,8 +765,10 @@ job description ──► requirements ─► RequirementTerm[]
    wrapped document text before building the candidate `Profile`. It preserves
    source skill-group headings, locations such as `(Remote)`, certification
    credential IDs, and structured bullet boundaries. A company-like line that
-   looks like an orphaned verb phrase is surfaced as `EXTRACTION_SUSPECT` rather
-   than being silently promoted to an employer.
+   looks like an orphaned verb phrase raises the content-safe
+   `EXTRACTION_SUSPECT` error before planning; the API records a failed kit and
+   asks the user to review or re-upload rather than generating from corrupt
+   structure.
 2. **Requirements** (`parsing.vocab`, `parsing.jd_requirements`) are extracted
    from the JD alone, phrase-first and section-aware. `RequirementTerm` records
    a canonical form, JD surface form, aliases, category, weight, section, and

@@ -9,7 +9,7 @@ This module is the engine's *public, persistable* representation of a generated
 application kit. It is deliberately:
 
 - **Versioned.** ``SCHEMA_VERSION`` is an explicit, human-readable string
-  (currently ``application-kit/v4``) so a stored kit always declares which contract it was
+  (currently ``application-kit/v6``) so a stored kit always declares which contract it was
   written under. A bare integer with ambiguous meaning is intentionally avoided.
 - **Truthful by construction.** Every candidate-specific claim the AI produced is
   represented as a :class:`ClaimRecord` with an explicit :class:`ClaimStatus` and
@@ -41,7 +41,7 @@ SCHEMA_VERSION = APPLICATION_KIT_V6
 # The orchestration contract version identifies the grounded-generation behavior
 # (claim extraction + repair/rejection policy). It participates in cache identity
 # (see ADR-0013) so a change in grounding behavior never reuses prose produced by
-# an older contract. The v5 bump invalidates any cached v4 orchestration output.
+# an older contract. The v6 bump invalidates any cached v5 orchestration output.
 ORCHESTRATION_VERSION = "grounded-orchestration/v6"
 
 # Bound every evidence excerpt so the trace never becomes a second copy of the

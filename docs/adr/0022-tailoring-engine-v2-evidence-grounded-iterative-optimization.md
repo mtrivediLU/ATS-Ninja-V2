@@ -126,13 +126,16 @@ Raw candidate source is the authority for fidelity. Before delivery, the resume
 must retain source-supported employers, titles, date ranges, locations,
 education, certification lines and credential IDs, metrics, team-size facts,
 material named entities, and bullet terminal clauses. A parser plausibility
-failure is surfaced as `EXTRACTION_SUSPECT` rather than silently accepted.
+failure raises a content-safe `EXTRACTION_SUSPECT` before planning. The API
+records a failed job without persisting the candidate-derived parser diagnostic,
+rather than silently accepting or generating from corrupt structure.
 
 The anti-stuffing gate caps requirement frequency, targeted density, summary and
 bullet placements, skills additions, and repeated bigrams. Existing claim
 grounding remains mandatory: a model may improve prose but cannot create a
 candidate fact. Any fatal fidelity, stuffing, extraction, grounding, or
-structural failure withholds the unsafe artifact.
+structural failure withholds the unsafe artifact; extraction failure aborts
+generation before an artifact exists.
 
 ### Contract, rollout, and compatibility
 

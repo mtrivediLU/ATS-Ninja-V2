@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import pytest
+
+from ats_engine import ExtractionSuspectError
 from ats_engine.generation.pipeline import mode_from_text
 from ats_engine.models import Mode
 from ats_engine.parsing.input import extract_contacts, resolve_contacts
 from ats_engine.parsing.pdf import clean_extracted_text
-from ats_engine.parsing.resume import extract_profile
+from ats_engine.parsing.resume import build_profile, extract_profile
 from ats_engine.providers.base import LLMProvider
 from conftest import SYNTHETIC_RESUME, WRAPPED_RESUME_TEXT, sample_profile
 
@@ -66,6 +69,22 @@ def test_wrapped_pdf_lines_do_not_become_garbage_employers() -> None:
     first = profile.experiences[0]
     assert first.title == "Senior Data Engineer"
     assert any("millions of users" in bullet for bullet in first.bullets)
+
+
+def test_suspect_employer_aborts_generation_profile_build() -> None:
+    resume = (
+        "PROFESSIONAL EXPERIENCE\n"
+        "Cloud SQL Auth Proxy, configuring secure communication between services.\n"
+        "Software Engineer 2022 - 2024\n"
+        "- Built Python tools.\n"
+        "TECHNICAL SKILLS\n"
+        "Python\n"
+    )
+
+    diagnostic = extract_profile(resume)
+    assert diagnostic.extraction_warnings
+    with pytest.raises(ExtractionSuspectError, match="^EXTRACTION_SUSPECT$"):
+        build_profile(resume)
 
 
 def test_pdf_extractor_merges_wrapped_continuation_lines() -> None:
