@@ -604,14 +604,14 @@ generate_application_kit(resume, jd, mode, provider?)
 | --- | --- | --- |
 | `models` | Typed domain dataclasses shared across the engine | Completed |
 | `config` | `EngineSettings` (env-driven, framework-independent) | Completed |
-| `parsing` | PDF text, contacts, resume `Profile`, JD `JDProfile` (heuristic + optional LLM) | Completed |
-| `evidence` | Gap ladder (`classify_keyword`), evidence matrix, adjacency clusters, interview probability | Completed |
-| `scoring` | Deterministic ATS keyword scoring + before/after coverage analysis | Completed |
-| `validation` | Claim, style, output-format, LaTeX, completeness gates; deterministic style repair; severity classification | Completed |
+| `parsing` | PDF text, contacts, source-preserving resume `Profile`, JD `JDProfile`, phrase-first requirement vocabulary/extraction | Completed |
+| `evidence` | Requirement resolver, gap ladder (`classify_keyword`), evidence matrix, adjacency clusters, interview probability | Completed |
+| `scoring` | Authoritative v2 ATS scoring, legacy compatibility wrappers, before/after coverage analysis | Completed |
+| `validation` | Claim, raw-source fidelity, anti-stuffing, style, output-format, LaTeX, completeness gates; severity classification | Completed |
 | `caching` | Content-hash cache (disk-backed, degrades to no-op) | Completed |
 | `providers` | `LLMProvider` interface + `OllamaProvider` (stdlib HTTP) | Completed |
-| `generation` | Plans + resume/cover-letter/answer generation, LaTeX rendering, pipeline, evidence-bound prompt contract | Completed |
-| `kit` | Versioned `ApplicationKit` contract, JSON serialization boundary (+ legacy adapter), grounding gate, provider routing, orchestrator | Completed (Phase 2A) |
+| `generation` | Source-preserving plans, placement planner, monotone optimizer, resume/cover-letter/answer generation, rendering, pipeline | Completed |
+| `kit` | Versioned `ApplicationKit` v6 contract, JSON serialization boundary (+ legacy adapter), grounding gate, provider routing, orchestrator | Completed (Phase 2A + Tailoring v2) |
 | `eval` | Phase 2A quality-evaluation harness (synthetic cases; `python -m ats_engine.eval`) | Completed (Phase 2A) |
 | `job_fit` | Deterministic requirement assessment, fit policy, bounded narrative, consistency validation | Completed (Phase 2B1) |
 | `interview_prep` | Deterministic questions/answer guides, single-context STAR policy, honest gaps, bounded narrative validation | Completed (Phase 2B2) |
@@ -724,18 +724,111 @@ restore and conflict handling, kit lineage with regenerate/delete, and a static
 "How scoring works" page. `interview_probability` is never rendered as a
 percentage.
 
+### Tailoring Engine v2: evidence-grounded iterative optimization (completed)
+
+ApplicationKit v6 (`schema application-kit/v6`,
+`orchestration grounded-orchestration/v6`) adds a typed, deterministic tailoring
+path without changing the boundary between the engine, API, and web app. Its
+purpose is not to maximize keyword repetition; it is to surface job-description
+terminology **only** where the candidate's source resume already supports the
+same fact. The current path is enabled by default and may be temporarily
+disabled for compatibility with `ENGINE_TAILORING_V2=0`.
+
+The v2 flow is deliberately ordered. A later stage cannot manufacture evidence
+that an earlier stage did not establish:
+
+```
+resume source ──► extraction ──► Profile (source facts + source taxonomy)
+                                      │
+job description ──► requirements ─► RequirementTerm[]
+                                      │
+                                      ▼
+                                  resolver
+                                      │
+                                      ▼
+                            EvidenceLink[] (source provenance)
+                                      │
+                                      ▼
+                         planner / placement actions
+                                      │
+                                      ▼
+                    optimizer (score → gate → bisect → accept)
+                                      │
+                                      ▼
+                         validators + grounding + rendering
+                                      │
+                                      ▼
+                     authoritative scorer → MatchReport / trace
+```
+
+1. **Extraction** (`parsing.document_extraction`, `parsing.resume`) normalizes
+   wrapped document text before building the candidate `Profile`. It preserves
+   source skill-group headings, locations such as `(Remote)`, certification
+   credential IDs, and structured bullet boundaries. A company-like line that
+   looks like an orphaned verb phrase is surfaced as `EXTRACTION_SUSPECT` rather
+   than being silently promoted to an employer.
+2. **Requirements** (`parsing.vocab`, `parsing.jd_requirements`) are extracted
+   from the JD alone, phrase-first and section-aware. `RequirementTerm` records
+   a canonical form, JD surface form, aliases, category, weight, section, and
+   the source JD line. Generic unigrams and candidate-seeded terms are
+   structurally inadmissible; preferred and soft requirements receive lower
+   bounded weight.
+3. **Resolution** (`evidence.resolver`) maps each requirement to an
+   `EvidenceLink` using structured source evidence in a fixed ladder:
+   experience (A), summary (B), skills (C), a conservative certification
+   implication (`cert`), adjacency, or `missing`. Normalization handles safe
+   spelling and alias variants. Missing and adjacency-only links never authorize
+   the bare JD term in a candidate-facing artifact.
+4. **Planning** (`generation.integration_planner`) emits bounded,
+   provenance-carrying `PlacementAction`s. It retains the candidate's own skills
+   taxonomy and wording, may use the JD spelling of an already-supported fact,
+   and never turns a gap into a claimed skill. Source bullets remain source
+   bullets; placement annotations do not license paraphrasing away metrics or
+   terminal clauses.
+5. **Optimization** (`generation.optimizer`) starts from a source-content plan,
+   evaluates placements in deterministic weight-ordered batches, and accepts a
+   batch only when it strictly improves the v2 score and every gate passes.
+   Failed batches are bisected down to safe actions. The persisted
+   `OptimizationTrace` records the score path, accepted/rejected actions, and
+   truthful-but-unreachable requirements.
+6. **Validators** combine the existing grounding, format, style, LaTeX, and
+   completeness checks with raw-source fidelity and scoped anti-stuffing gates.
+   Fidelity protects employers, titles, dates, locations, education,
+   certification IDs, metrics, team-size facts, named entities, and bullet
+   terminal clauses. Stuffing limits term frequency, density, summary/bullet
+   placements, skills additions, and repeated bigrams. Violations are fatal for
+   the v2 resume path rather than silently repaired into a weaker candidate fact.
+7. **Scoring** (`scoring.ats_v2`) is the one authoritative keyword-match scorer
+   used by the optimizer and match report. A requirement receives boolean,
+   weighted credit only when it appears in the measured resume and its
+   `EvidenceLink` is source-backed (A/B/C/cert/variant). A tailored-only phrase
+   also needs an accepted provenance action, which prevents JD append and
+   keyword-stuffing attacks. Density penalties are capped and a small
+   cross-section placement bonus is bounded. The legacy `scoring.ats` public
+   functions remain compatibility wrappers.
+
+The orchestrator makes the monotonicity contract explicit: a v2 tailored score
+must not be below the original score. It asserts that invariant after final
+grounding/rendering; a mismatch blocks delivery instead of reporting an
+optimistic comparison. `MatchReport.score_basis` identifies the v2 scorer and
+its additive `optimization_trace` makes the deterministic decisions observable.
+Older v1–v5 persisted kits continue through the serialization compatibility
+boundary. See [ADR-0022](adr/0022-tailoring-engine-v2-evidence-grounded-iterative-optimization.md).
+
 ### Request/data flow (deterministic pipeline)
 
 ```
 resume (PDF/text) + job description
         │
-        ▼  parsing            → Profile (candidate source of truth) + JDProfile
-        ▼  evidence           → evidence matrix (gap ladder per JD keyword)
-        ▼  planning           → ResumePlan / CoverLetterPlan / AnswerPlan
-        ▼  generation         → resume/cover/answers text + LaTeX artifacts
-        ▼  validation gates   → claims, style, latex, output-format, completeness
+        ▼  extraction         → Profile (candidate source of truth) + JDProfile
+        ▼  requirements       → JD-only RequirementTerm[] (v2; legacy flag path retained)
+        ▼  resolver           → EvidenceLink[] + legacy-compatible evidence matrix
+        ▼  planner            → source-preserving ResumePlan + PlacementAction[]
+        ▼  optimizer          → monotone score/gate/bisect loop (v2)
+        ▼  validation gates   → grounding, fidelity, stuffing, style, LaTeX, format, completeness
+        ▼  scorer             → ats_v2 MatchReport + OptimizationTrace
         ▼  severity           → fatal (block) vs warning (surface)
-      PipelineResult (with validation_errors)
+      PipelineResult / ApplicationKit v6
 ```
 
 The LLM (a `provider`) participates only in parsing quality and prose writing.
@@ -840,6 +933,8 @@ Recorded as ADRs under [`docs/adr/`](adr/):
 - [ADR-0018](adr/0018-local-pdf-rendering.md) — Local server-side PDF rendering (WeasyPrint in `apps/api` only) for direct Resume/Cover Letter download.
 - [ADR-0019](adr/0019-application-kit-v5-match-report-and-change-ledger.md) — ApplicationKit v5 match report (three honest scores, confidence, fit categories) and change ledger.
 - [ADR-0020](adr/0020-change-action-revision-and-irreversibility-policy.md) — Change-action revision, optimistic concurrency, and grounding-removal irreversibility.
+- [ADR-0021](adr/0021-results-first-application-kit-and-docx-export.md) — Results-first Kit presentation and local DOCX export.
+- [ADR-0022](adr/0022-tailoring-engine-v2-evidence-grounded-iterative-optimization.md) — Evidence-grounded Tailoring Engine v2, raw-source fidelity, and monotone optimization.
 
 ## 7. Future / planned work (not yet implemented)
 
