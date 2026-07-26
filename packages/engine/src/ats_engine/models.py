@@ -89,6 +89,60 @@ class Certification:
     name: str
     date: str = ""
     link: str = ""
+    # Keep the credential identifier as a distinct field instead of folding it
+    # into the certificate name.  It is candidate supplied evidence and several
+    # certification providers use it as the only stable way to verify a record.
+    credential_id: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class RequirementTerm:
+    """One typed, JD-derived requirement used by Tailoring Engine v2.
+
+    This type intentionally carries no candidate data.  Keeping requirement
+    extraction separate from evidence resolution is what prevents a resume from
+    seeding the job vocabulary.
+    """
+
+    canonical: str
+    surface: str
+    aliases: tuple[str, ...]
+    kind: str
+    section: str
+    weight: float
+    ngram: int
+    category: str
+    jd_evidence_line: str
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceLink:
+    """Source-resume provenance for one :class:`RequirementTerm`.
+
+    ``resume_span`` and ``resume_location`` are deliberately retained even for
+    certificate inference.  A placement can therefore be accepted only when it
+    traces back to candidate-authored source material rather than a pasted JD.
+    """
+
+    requirement: RequirementTerm
+    tier: str
+    resume_span: str = ""
+    resume_location: str = ""
+    match_type: str = "missing"
+    surface_to_use: str = ""
+    max_placement: str = "none"
+
+
+@dataclass(frozen=True, slots=True)
+class PlacementAction:
+    """A deterministic, provenance-carrying resume integration operation."""
+
+    term: str
+    link: EvidenceLink
+    target: str
+    operation: str
+    rendered_text: str
+    grounded_by: str
 
 
 @dataclass(slots=True)
@@ -113,6 +167,15 @@ class Profile:
     certifications: list[Certification]
     supported_metrics: list[str]
     raw_markdown: str = ""
+    # Verbatim candidate-authored summary text.  The optimizer may add
+    # source-backed targeting prose around it, but must not discard metrics or
+    # other facts stated in the original summary.
+    source_summary: str = ""
+    # The source resume's own skills taxonomy.  Older parsers produced only
+    # tiered flat maps; retaining this optional representation lets the v2
+    # planner preserve headings and ordering without fabricating a new layout.
+    source_skill_groups: list[tuple[str, list[str]]] = field(default_factory=list)
+    extraction_warnings: list[str] = field(default_factory=list)
 
     @property
     def official_titles(self) -> dict[str, str]:
@@ -156,6 +219,9 @@ class JDProfile:
     employment_conditions: list[str] = field(default_factory=list)
     compensation_benefits: list[str] = field(default_factory=list)
     organizational_boilerplate: list[str] = field(default_factory=list)
+    # Additive v2 requirement representation.  ``technical_keywords`` remains
+    # populated for the v1-compatible consumers and persisted-kit readers.
+    requirements: list[RequirementTerm] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -218,6 +284,12 @@ class ResumePlan:
     interview_probability: int
     analysis: list[str]
     plan_decisions: list[PlanDecision] = field(default_factory=list)
+    # Shared v2 inputs. Keeping these on the plan means the planner, optimizer,
+    # job-fit projection, scorer, and change ledger reason over the same
+    # JD-only requirement set and source-resume provenance.
+    requirements: list[RequirementTerm] = field(default_factory=list)
+    evidence_links: list[EvidenceLink] = field(default_factory=list)
+    placement_actions: list[PlacementAction] = field(default_factory=list)
 
 
 @dataclass(slots=True)

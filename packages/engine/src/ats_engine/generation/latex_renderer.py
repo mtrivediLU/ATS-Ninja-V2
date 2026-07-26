@@ -93,6 +93,10 @@ CERTIFICATION_FIELD_ALIASES = {
     "link": "link",
     "url": "link",
     "verify": "link",
+    "credential id": "credential_id",
+    "credential identifier": "credential_id",
+    "certification id": "credential_id",
+    "credential #": "credential_id",
 }
 
 
@@ -400,29 +404,35 @@ def _parse_certification_line(line: str) -> dict[str, str] | None:
     values = _parse_key_value_segments(line, CERTIFICATION_FIELD_ALIASES)
     if values:
         name = values.get("name") or values.get("issuer", "")
-        if not name:
-            return None
-        return {
-            "name": name,
-            "issuer": values.get("issuer", ""),
-            "date": values.get("date", ""),
-            "link": values.get("link", ""),
-            "link_label": _display_url(values.get("link", "")) or "Verify",
-        }
+        if name:
+            return {
+                "name": name,
+                "issuer": values.get("issuer", ""),
+                "date": values.get("date", ""),
+                "link": values.get("link", ""),
+                "link_label": _display_url(values.get("link", "")) or "Verify",
+                "credential_id": values.get("credential_id", ""),
+            }
 
     cleaned = _clean_content_line(line)
     if not cleaned:
         return None
 
     parts = [part.strip() for part in re.split(r"\s+\|\s+|\s+-\s+", cleaned) if part.strip()]
-    date_value = ""
-    link = ""
+    date_value = values.get("date", "")
+    link = values.get("link", "")
+    credential_id = values.get("credential_id", "")
     name_parts: list[str] = []
     for part in parts or [cleaned]:
         if not date_value and re.fullmatch(r"(19|20)\d{2}", part):
             date_value = part
         elif not link and _looks_like_url(part):
             link = part
+        elif re.match(r"^credential\s*(?:id|identifier|#)\s*:", part, flags=re.IGNORECASE):
+            if not credential_id:
+                credential_id = re.sub(
+                    r"^credential\s*(?:id|identifier|#)\s*:\s*", "", part, flags=re.IGNORECASE
+                ).strip()
         else:
             name_parts.append(part)
 
@@ -432,6 +442,7 @@ def _parse_certification_line(line: str) -> dict[str, str] | None:
         "date": date_value,
         "link": link,
         "link_label": _display_url(link) or "Verify",
+        "credential_id": credential_id,
     }
 
 
@@ -517,6 +528,7 @@ def _latex_resume_context(context: dict[str, Any]) -> dict[str, Any]:
                 "date": latex_escape(item.get("date", "")),
                 "link": latex_escape(item.get("link", "")),
                 "link_label": latex_escape(item.get("link_label", "Verify")),
+                "credential_id": latex_escape(item.get("credential_id", "")),
             }
             for item in context.get("certifications", [])
         ],

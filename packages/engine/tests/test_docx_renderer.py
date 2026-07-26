@@ -50,7 +50,7 @@ def _resume_document() -> ResumeDocument:
                 details=[],
             )
         ],
-        certifications=[ResumeCertificationEntry("AWS Certified Developer", "2022", "")],
+        certifications=[ResumeCertificationEntry("AWS Certified Developer", "2022", "", "AWS-123")],
         remaining_sections=[("Projects", ["Built an internal tool"])],
     )
 
@@ -95,6 +95,7 @@ def test_resume_docx_renders_all_sections_in_order() -> None:
     assert "2019 - 2024" in joined
     assert "State University" in joined
     assert "AWS Certified Developer" in joined
+    assert "Credential ID: AWS-123" in joined
     assert "Built an internal tool" in joined
 
     # Order: name/summary precede experience, which precedes education.

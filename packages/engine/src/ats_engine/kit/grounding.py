@@ -14,6 +14,7 @@ from ats_engine.kit.contract import (
     EvidenceRef,
 )
 from ats_engine.models import JDProfile, Profile
+from ats_engine.parsing.vocab import certification_implications
 from ats_engine.validation.claims import HIGH_RISK_METRIC_PATTERN
 
 """Structured claim extraction and evidence grounding — the Phase 2A truth gate.
@@ -488,6 +489,11 @@ def build_evidence_context(profile: Profile, jd_profile: JDProfile) -> EvidenceC
         evidence_parts.extend([education.institution, education.degree, education.dates, *education.bullets])
     for cert in profile.certifications:
         evidence_parts.append(cert.name)
+        evidence_parts.append(cert.credential_id)
+        # A curated certification implication is candidate evidence with a
+        # tighter scope than free-form semantic inference. It permits the v2
+        # optimizer to mention the implied skill only alongside the certificate.
+        evidence_parts.extend(certification_implications(cert))
     for tier in (profile.tier_a, profile.tier_b, profile.tier_c):
         evidence_parts.extend(tier.keys())
         evidence_parts.extend(tier.values())
@@ -519,6 +525,9 @@ def build_evidence_context(profile: Profile, jd_profile: JDProfile) -> EvidenceC
         for key, value in tier.items():
             skills.add(_word_normalize(key))
             skills.add(_word_normalize(value))
+    for cert in profile.certifications:
+        for implied in certification_implications(cert):
+            skills.add(_word_normalize(implied))
 
     max_degree_level = max((_degree_level(education.degree) for education in profile.education), default=0)
 

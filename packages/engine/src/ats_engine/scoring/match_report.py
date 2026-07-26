@@ -11,11 +11,13 @@ from ats_engine.kit.contract import (
     FitCategory,
     JobFitArtifact,
     MatchReport,
+    OptimizationTrace,
     ScoreConfidence,
     WeightedKeyword,
 )
 from ats_engine.models import EvidenceItem, JDProfile, Profile, ResumePlan
 from ats_engine.scoring.ats import keyword_in_text
+from ats_engine.scoring.ats_v2 import AtsScoreV2, score_resume_v2
 from ats_engine.scoring.job_priorities import build_job_priorities
 from ats_engine.validation.style import validate_style
 
@@ -432,6 +434,7 @@ def build_match_report(
     tailored_resume_text: str | None,
     job_fit: JobFitArtifact | None,
     extraction_warnings: list[str] | None = None,
+    optimization_trace: OptimizationTrace | None = None,
 ) -> MatchReport:
     """Assemble the complete v5 match report from already-computed pipeline data.
 
@@ -444,12 +447,38 @@ def build_match_report(
     keywords = build_weighted_keywords(evidence, jd_profile)
     tier_by_keyword = {item.keyword.casefold().strip(): item.evidence_tier for item in evidence}
 
-    original = score_resume(original_resume_text, keywords, profile, tier_by_keyword)
-    tailored = (
-        score_resume(tailored_resume_text, keywords, profile, tier_by_keyword)
-        if tailored_resume_text is not None
-        else None
-    )
+    if resume_plan.requirements and resume_plan.evidence_links:
+        original = _v2_contract_score(
+            score_resume_v2(
+                original_resume_text,
+                resume_plan.requirements,
+                resume_plan.evidence_links,
+                source_resume_text=original_resume_text,
+            )
+        )
+        tailored = (
+            _v2_contract_score(
+                score_resume_v2(
+                    tailored_resume_text,
+                    resume_plan.requirements,
+                    resume_plan.evidence_links,
+                    source_resume_text=original_resume_text,
+                    tailored=True,
+                    placements=resume_plan.placement_actions,
+                )
+            )
+            if tailored_resume_text is not None
+            else None
+        )
+    else:
+        # Retained solely for the ENGINE_TAILORING_V2=0 path and historical
+        # direct consumers. All default pipeline scoring uses ats_v2 above.
+        original = score_resume(original_resume_text, keywords, profile, tier_by_keyword)
+        tailored = (
+            score_resume(tailored_resume_text, keywords, profile, tier_by_keyword)
+            if tailored_resume_text is not None
+            else None
+        )
 
     if job_fit is not None:
         alignment = job_fit.requirement_coverage_score
@@ -530,6 +559,22 @@ def build_match_report(
         kit_summary=kit_summary,
         quality_report=payload,
         disclaimer=DISCLAIMER,
+        score_basis="ats_v2" if resume_plan.requirements else "legacy_v1",
+        optimization_trace=optimization_trace or OptimizationTrace(),
+    )
+
+
+def _v2_contract_score(score: AtsScoreV2) -> AtsMatchScore:
+    """Project the richer v2 score onto the stable persisted score shape."""
+    return AtsMatchScore(
+        score=score.score,
+        matched_keywords=list(score.matched_keywords),
+        missing_keywords=list(score.missing_keywords),
+        total_keywords=score.total_keywords,
+        required_matched=score.required_matched,
+        required_total=score.required_total,
+        preferred_matched=score.preferred_matched,
+        preferred_total=score.preferred_total,
     )
 
 

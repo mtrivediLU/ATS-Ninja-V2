@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import warnings
 from collections import Counter
 
 """Deterministic ATS keyword scoring.
@@ -81,7 +82,58 @@ def extract_keywords(text: str, limit: int = 30) -> list[str]:
 
 
 def calculate_ats_score(resume_text: str, job_description: str) -> dict[str, float | int | list[str]]:
-    """Calculate an ATS keyword match score for a resume against a job description."""
+    """Compatibility wrapper over the authoritative v2 scorer when possible.
+
+    ``extract_keywords`` remains available for legacy diagnostics, but new
+    score callers should use :func:`ats_engine.scoring.ats_v2.score_resume_v2`
+    with typed requirements and evidence links. A thin fallback preserves the
+    historical behavior for heading-less/free-form text that has no v2
+    requirement section to resolve.
+    """
+    from ats_engine.evidence.resolver import resolve_requirements
+    from ats_engine.parsing.jd_requirements import extract_requirements
+    from ats_engine.parsing.resume import build_profile
+    from ats_engine.scoring.ats_v2 import score_resume_v2
+
+    requirements = extract_requirements(job_description or "")
+    # Preserve the public wrapper's historical free-form behavior. The v2
+    # scorer is authoritative for an actual posting with requirement sections;
+    # a one-sentence diagnostic string still uses the documented legacy
+    # frequency calculation rather than pretending it has structured resume
+    # provenance.
+    structured_jd = bool(
+        re.search(
+            r"\b(?:required\s+qualifications?|preferred\s+qualifications?|responsibilities|must[-\s]have|"
+            r"what\s+we(?:'|’)re\s+looking\s+for|minimum\s+qualifications?)\b",
+            job_description or "",
+            flags=re.IGNORECASE,
+        )
+    )
+    if requirements and structured_jd:
+        profile = build_profile(resume_text or "")
+        links = resolve_requirements(requirements, profile, resume_text or "")
+        result = score_resume_v2(
+            resume_text or "",
+            requirements,
+            links,
+            source_resume_text=resume_text or "",
+        )
+        return {
+            "score": result.score,
+            "matched_keywords": result.matched_keywords,
+            "missing_keywords": result.missing_keywords,
+            "total_keywords": result.total_keywords,
+            "keyword_density": round(
+                sum(result.term_frequencies.values()) / max(1, len((resume_text or "").split())), 2
+            ),
+        }
+
+    warnings.warn(
+        "calculate_ats_score fell back to legacy frequency scoring because no typed JD requirements were found; "
+        "prefer score_resume_v2 for new integrations.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     keywords = extract_keywords(job_description or "")
     if not keywords:
         return {

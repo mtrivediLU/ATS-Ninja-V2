@@ -27,6 +27,10 @@ MAX_PRIORITIES = 6
 # (see ``ats_engine.evidence.matrix.classify_requirement_category``). A category
 # with no evidence-backed presence in this JD simply never produces a theme.
 _CATEGORY_LABELS: dict[str, str] = {
+    "bi_analytics": "Business intelligence and analytics",
+    "data_engineering": "Data engineering and pipelines",
+    "geospatial": "Geospatial systems and mapping",
+    "security_governance": "Security and data governance",
     "platform": "Platform and automation experience",
     "web development": "Web development",
     "integration": "APIs and system integration",
@@ -40,6 +44,13 @@ _CATEGORY_LABELS: dict[str, str] = {
     "documentation": "Documentation",
     "communication": "Communication and collaboration",
     "work conditions": "Work arrangement",
+    "web_development": "Web development",
+    "source_control": "Source control practices",
+    "testing_quality": "Testing and quality",
+    "business_analysis": "Business analysis and stakeholder work",
+    "operations_support": "Operations and support",
+    "productivity": "Productivity and collaboration tools",
+    "domain": "Domain knowledge",
 }
 
 
@@ -57,6 +68,11 @@ def build_job_priorities(evidence: list[EvidenceItem]) -> list[JobPriorityItem]:
     groups: dict[str, list[EvidenceItem]] = {}
     order: list[str] = []
     for item in evidence:
+        # A generic singleton is never a standalone job priority. The v2
+        # extractor already structurally excludes them; this remains a
+        # presentation-layer defense for legacy matrices/persisted records.
+        if item.category == "other" and len(item.keyword.split()) < 2:
+            continue
         key = item.category if item.category != "other" else f"__keyword__{item.keyword.casefold().strip()}"
         if key not in groups:
             groups[key] = []

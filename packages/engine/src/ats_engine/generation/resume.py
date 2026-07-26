@@ -3,7 +3,6 @@ from __future__ import annotations
 from ats_engine.generation.document_normalization import normalize_document_text
 from ats_engine.generation.latex_renderer import resume_to_latex
 from ats_engine.models import ResumePlan
-from ats_engine.validation.repair import soften_banned_style
 
 
 def generate_resume_text(plan: ResumePlan) -> str:
@@ -64,8 +63,13 @@ def generate_resume_text(plan: ResumePlan) -> str:
             parts.append(cert.date)
         if cert.link:
             parts.append(cert.link)
+        if cert.credential_id:
+            parts.append(f"Credential ID: {cert.credential_id}")
         lines.append("- " + " | ".join(parts))
-    return normalize_document_text(soften_banned_style(_strip_banned_dashes("\n".join(lines).strip())))
+    # Do not run style repair across the rendered document: it would silently
+    # rewrite candidate-authored experience bullets (for example
+    # "Architected"/"Streamlined") after the grounded plan had approved them.
+    return normalize_document_text(_strip_banned_dashes("\n".join(lines).strip()))
 
 
 def generate_resume_latex(plan: ResumePlan) -> str:

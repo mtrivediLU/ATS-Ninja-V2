@@ -157,7 +157,7 @@
 \begin{itemize}[leftmargin=0.12in, label={}, itemsep=2pt, parsep=0pt, topsep=2pt]
     \small
 {% for item in certifications %}
-    \item \textbf{ {{ item.name }} }{% if item.issuer %}, {{ item.issuer }}{% endif %}{% if item.date %} \hfill \textit{ {{ item.date }} }{% endif %}{% if item.link %} \ \ \href{ {{ item.link }} }{ {{ item.link_label }} }{% endif %}
+    \item \textbf{ {{ item.name }} }{% if item.issuer %}, {{ item.issuer }}{% endif %}{% if item.date %} \hfill \textit{ {{ item.date }} }{% endif %}{% if item.link %} \ \ \href{ {{ item.link }} }{ {{ item.link_label }} }{% endif %}{% if item.credential_id %} \ \ \textit{Credential ID: {{ item.credential_id }}}{% endif %}
 {% endfor %}
 \end{itemize}
 {% endif %}

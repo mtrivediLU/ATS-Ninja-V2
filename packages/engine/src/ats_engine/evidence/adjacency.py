@@ -71,6 +71,10 @@ TOOL_CATEGORIES: dict[str, dict[str, object]] = {
             "dataflow",
         ],
     },
+    "geospatial": {
+        "label": "geospatial data and mapping tooling",
+        "tools": ["esri arcgis", "arcgis", "qgis", "geocoding"],
+    },
     "cloud_provider": {
         "label": "cloud platform experience",
         "tools": ["aws", "amazon web services", "azure", "gcp", "google cloud"],

@@ -18,6 +18,9 @@ FATAL_MARKERS: tuple[str, ...] = (
     "email not present in resume",
     "retired email used",
     "official title altered",
+    "fidelity:",
+    "stuffing:",
+    "extraction_suspect",
     "missing \\end{document}",
     "unbalanced braces",
 )
@@ -25,6 +28,13 @@ FATAL_MARKERS: tuple[str, ...] = (
 
 def is_fatal_validation_error(error: str) -> bool:
     """True when a validation error is truth-critical or structural and must block."""
+    # The older production-naturalness detector can observe a duplicate that
+    # already exists in candidate-authored source bullets. It is deliberately
+    # advisory: deleting that source evidence would violate the stronger
+    # preservation invariant. The v2 ``validation.stuffing`` gate remains
+    # blocking and is emitted without this naturalness prefix.
+    if "naturalness: stuffing:" in error.casefold():
+        return False
     return any(marker in error for marker in FATAL_MARKERS)
 
 

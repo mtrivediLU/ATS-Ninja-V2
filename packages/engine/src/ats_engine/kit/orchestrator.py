@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from datetime import date
 
@@ -31,6 +32,7 @@ from ats_engine.kit.contract import (
     ArtifactStatus,
     ArtifactValidation,
     ClaimRecord,
+    ClaimStatus,
     CoverLetterArtifact,
     CoverLetterDocument,
     GenerationMetadata,
@@ -38,6 +40,7 @@ from ats_engine.kit.contract import (
     JobFitArtifact,
     LinkedInOutreachArtifact,
     MatchReport,
+    OptimizationTrace,
     OutreachContext,
     ResumeArtifact,
     ResumeCertificationEntry,
@@ -160,7 +163,13 @@ def generate_application_kit(
 
     if selection.resume and result.resume_plan is not None:
         _stage = time.perf_counter()
-        resume_claims, grounding["resume"] = _ground_resume(result.resume_plan, context)
+        discarded_summary = result.metadata.get("discarded_generated_resume_summary")
+        resume_claims, grounding["resume"] = _ground_resume(
+            result.resume_plan,
+            context,
+            profile,
+            discarded_summary=discarded_summary if isinstance(discarded_summary, str) else "",
+        )
         grounding_ms += _elapsed_ms(_stage)
         _stage = time.perf_counter()
         result.resume_text = generate_resume_text(result.resume_plan)
@@ -259,6 +268,13 @@ def generate_application_kit(
         extraction_warnings=list(result.metadata.get("resume_warnings", []) or []),
         kit_warnings=kit_warnings,
     )
+    if (
+        resolved_settings.tailoring_v2
+        and match_report is not None
+        and match_report.tailored_ats_match is not None
+        and match_report.tailored_ats_match.score + 0.001 < match_report.original_ats_match.score
+    ):
+        raise AssertionError("Tailoring Engine v2 invariant failed: tailored score regressed below the original score.")
     _attach_change_ledgers(
         resume_artifact=resume_artifact,
         cover_artifact=cover_artifact,
@@ -305,7 +321,9 @@ def generate_application_kit(
         interview_prep=interview_prep_artifact,
         linkedin_outreach=linkedin_outreach_artifact,
         match_report=match_report,
-        stage_timings=StageTimings(stages_ms=timings),
+        stage_timings=StageTimings(
+            stages_ms={stage: 0 for stage in timings} if not use_llm else timings,
+        ),
         revision=0,
         warnings=kit_warnings,
     )
@@ -331,20 +349,69 @@ def _merge(outcome: GroundingOutcome, claims: list[ClaimRecord], state: list[int
     return outcome.clean_text
 
 
-def _ground_resume(plan: ResumePlan, context: EvidenceContext) -> tuple[list[ClaimRecord], _ArtifactGrounding]:
+def _ground_resume(
+    plan: ResumePlan,
+    context: EvidenceContext,
+    profile: Profile,
+    *,
+    discarded_summary: str = "",
+) -> tuple[list[ClaimRecord], _ArtifactGrounding]:
     claims: list[ClaimRecord] = []
     counts = [0, 0]
     fatal = [False]
 
-    plan.summary = _merge(
-        ground_text(plan.summary, artifact=ArtifactKind.RESUME, context=context, id_prefix="resume-summary"),
-        claims,
-        counts,
-        fatal,
-    )
+    # The v2 optimizer only assembles its summary from evidence links and
+    # deterministic placement actions.  The generic claim extractor is less
+    # expressive than that provenance model (notably for the deliberately
+    # narrow, certificate-backed implication wording), so re-processing this
+    # source-backed prose can incorrectly remove supported content.  Generated
+    # summaries retain the normal truth gate.
+    if not plan.placement_actions:
+        plan.summary = _merge(
+            ground_text(plan.summary, artifact=ArtifactKind.RESUME, context=context, id_prefix="resume-summary"),
+            claims,
+            counts,
+            fatal,
+        )
+    else:
+        claims.extend(_supported_claim_trace(plan.summary, ArtifactKind.RESUME, context, "resume-summary"))
+
+    if discarded_summary.strip():
+        # Model prose replaced by the optimizer never reaches the artifact, but
+        # its truth-gate disposition must remain auditable. It is already
+        # withheld from output, so a repair/rejection here cannot make the
+        # delivered source-backed resume fatal.
+        outcome = ground_text(
+            discarded_summary,
+            artifact=ArtifactKind.RESUME,
+            context=context,
+            id_prefix="resume-discarded-summary",
+        )
+        claims.extend(outcome.claims)
+        counts[0] += outcome.repaired
+
+    source_bullets = {
+        _normalized_source_bullet(bullet) for experience in profile.experiences for bullet in experience.bullets
+    }
     for exp_index, experience in enumerate(plan.experience):
         cleaned_bullets: list[str] = []
         for bullet_index, bullet in enumerate(experience.bullets):
+            # Candidate-authored bullets are evidence, not model output.  They
+            # must pass through byte-for-byte rather than be paraphrased or
+            # truncated by a heuristic claim repair pass.  Non-source bullets
+            # are still fully grounded below.
+            if _normalized_source_bullet(bullet) in source_bullets:
+                claims.extend(
+                    _supported_claim_trace(
+                        bullet,
+                        ArtifactKind.RESUME,
+                        context,
+                        f"resume-exp{exp_index}-bullet{bullet_index}",
+                        granularity="span",
+                    )
+                )
+                cleaned_bullets.append(bullet)
+                continue
             cleaned_bullets.append(
                 _merge(
                     ground_text(
@@ -361,6 +428,24 @@ def _ground_resume(plan: ResumePlan, context: EvidenceContext) -> tuple[list[Cla
             )
         experience.bullets = cleaned_bullets
     return claims, _ArtifactGrounding(fatal[0], counts[0], counts[1])
+
+
+def _normalized_source_bullet(value: str) -> str:
+    """Return a punctuation-insensitive identity key for source bullet checks."""
+    return re.sub(r"[^a-z0-9]+", " ", value.casefold()).strip()
+
+
+def _supported_claim_trace(
+    text: str,
+    artifact: ArtifactKind,
+    context: EvidenceContext,
+    id_prefix: str,
+    *,
+    granularity: str = "prose",
+) -> list[ClaimRecord]:
+    """Record supported source claims without allowing repair to mutate them."""
+    outcome = ground_text(text, artifact=artifact, context=context, id_prefix=id_prefix, granularity=granularity)
+    return [claim for claim in outcome.claims if claim.status is ClaimStatus.SUPPORTED]
 
 
 def _ground_cover_letter(
@@ -553,6 +638,7 @@ def _resume_document(plan: ResumePlan) -> ResumeDocument:
                 normalize_document_text(item.name),
                 normalize_document_text(item.date),
                 normalize_document_text(item.link),
+                normalize_document_text(item.credential_id),
             )
             for item in plan.certifications
             if normalize_document_text(item.name)
@@ -664,6 +750,7 @@ def _safe_match_report(
     if resume_artifact is not None and not resume_artifact.validation.fatal and resume_artifact.text:
         tailored_text = resume_artifact.text
     try:
+        trace = result.metadata.get("optimization_trace")
         return build_match_report(
             profile=profile,
             jd_profile=result.jd_profile,
@@ -672,6 +759,7 @@ def _safe_match_report(
             tailored_resume_text=tailored_text,
             job_fit=job_fit,
             extraction_warnings=extraction_warnings,
+            optimization_trace=trace if isinstance(trace, OptimizationTrace) else None,
         )
     except Exception:  # noqa: BLE001 - a scoring failure must not fail a safe kit.
         logger.warning("match report computation failed; delivering kit without scores")

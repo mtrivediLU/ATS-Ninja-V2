@@ -214,10 +214,12 @@ def test_gap_keyword_with_internal_period_and_self_colliding_name_does_not_withh
     genuine_gaps = {
         item.requirement.lower() for item in kit.job_fit.requirements if item.classification.value == "genuine_gap"
     }
-    # ".net" (period-containing) and "user experience" (self-colliding with
-    # the generic word "experience") are exactly the two trap shapes; both
-    # must still land as honest genuine gaps, not silently disappear.
-    assert ".net" in genuine_gaps
+    # ".net framework" (period-containing) and "user experience"
+    # (self-colliding with the generic word "experience") are exactly the two
+    # trap shapes; both must still land as honest genuine gaps, not silently
+    # disappear.  V2 retains the more-specific source requirement rather than
+    # collapsing it to the broader ".net" framework family.
+    assert ".net framework" in genuine_gaps
     assert "user experience" in genuine_gaps
 
 

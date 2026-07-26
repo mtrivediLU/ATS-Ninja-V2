@@ -39,6 +39,8 @@ from ats_engine.kit import (
     APPLICATION_KIT_V2,
     APPLICATION_KIT_V3,
     APPLICATION_KIT_V4,
+    APPLICATION_KIT_V5,
+    APPLICATION_KIT_V6,
     ORCHESTRATION_VERSION,
     SCHEMA_VERSION,
     AnswerArtifact,
@@ -100,6 +102,7 @@ from ats_engine.kit import (
     is_application_kit_v3,
     is_application_kit_v4,
     is_application_kit_v5,
+    is_application_kit_v6,
     normalize_persisted_result,
 )
 from ats_engine.models import (
@@ -190,6 +193,8 @@ __all__ = [
     "APPLICATION_KIT_V2",
     "APPLICATION_KIT_V3",
     "APPLICATION_KIT_V4",
+    "APPLICATION_KIT_V5",
+    "APPLICATION_KIT_V6",
     "SCHEMA_VERSION",
     "AnswerArtifact",
     "AnswerItem",
@@ -201,6 +206,7 @@ __all__ = [
     "ChangeActionResult",
     "apply_change_actions",
     "is_application_kit_v5",
+    "is_application_kit_v6",
     "ClaimRecord",
     "ClaimStatus",
     "ClaimType",

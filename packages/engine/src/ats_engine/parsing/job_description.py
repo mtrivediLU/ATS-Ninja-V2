@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from collections.abc import Iterable
+from dataclasses import replace
 
-from ats_engine.models import JDProfile, Profile
+from ats_engine.models import JDProfile, Profile, RequirementTerm
+from ats_engine.parsing.jd_requirements import extract_requirements
 from ats_engine.parsing.line_refs import number_lines, render_numbered_lines, resolve_line_numbers
 from ats_engine.parsing.resume import empty_profile
 from ats_engine.providers.base import LLMProvider, generate_json
@@ -209,7 +212,13 @@ COMMON_TECH_TERMS = [
 ]
 
 
-def parse_jd(job_description: str, profile: Profile | None = None, provider: LLMProvider | None = None) -> JDProfile:
+def parse_jd(
+    job_description: str,
+    profile: Profile | None = None,
+    provider: LLMProvider | None = None,
+    *,
+    tailoring_v2: bool = True,
+) -> JDProfile:
     """Parse a job description into structured planning fields.
 
     Runs the deterministic heuristic parser first (always available), then, if a
@@ -218,7 +227,14 @@ def parse_jd(job_description: str, profile: Profile | None = None, provider: LLM
     LLM while giving materially better extraction when one is available.
     """
     profile = profile or empty_profile()
-    heuristic = _parse_jd_heuristic(job_description, profile)
+    # V2 requirement extraction is JD-only by construction.  Retain the
+    # historical candidate-seeded heuristic behind the explicit flag for
+    # persisted/legacy callers that need it, never as the default path.
+    heuristic_profile = empty_profile() if tailoring_v2 else profile
+    heuristic = _parse_jd_heuristic(job_description, heuristic_profile)
+    requirements = extract_requirements(job_description) if tailoring_v2 else []
+    if requirements:
+        heuristic = _apply_v2_requirements(heuristic, requirements)
     if provider is None:
         return heuristic
 
@@ -230,6 +246,41 @@ def parse_jd(job_description: str, profile: Profile | None = None, provider: LLM
 
     llm_data = _resolve_line_list_fields(llm_data, lines)
     return _merge_jd_profile(heuristic, llm_data)
+
+
+def _apply_v2_requirements(heuristic: JDProfile, requirements: list[RequirementTerm]) -> JDProfile:
+    """Project typed v2 requirements onto legacy JD fields without losing them."""
+
+    def lines(section: str) -> list[str]:
+        return _dedupe_requirement_lines(item.jd_evidence_line for item in requirements if item.section == section)
+
+    # Responsibilities remain a useful presentation/letter input. A
+    # requirement labelled responsibility gets its own source line rather than
+    # being promoted into a generic unigram keyword list.
+    required = lines("required")
+    preferred = lines("preferred")
+    responsibilities = lines("responsibility")
+    keywords = _dedupe_requirement_lines(item.surface for item in requirements)
+    return replace(
+        heuristic,
+        required_qualifications=required or heuristic.required_qualifications,
+        preferred_qualifications=preferred or heuristic.preferred_qualifications,
+        responsibilities=responsibilities or heuristic.responsibilities,
+        technical_keywords=keywords[:30] or heuristic.technical_keywords,
+        requirements=requirements,
+    )
+
+
+def _dedupe_requirement_lines(values: Iterable[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        text = str(value).strip()
+        key = text.casefold()
+        if text and key not in seen:
+            seen.add(key)
+            result.append(text)
+    return result
 
 
 def _resolve_line_list_fields(data: dict[str, object], lines: list[str]) -> dict[str, object]:
@@ -406,6 +457,7 @@ def _merge_jd_profile(heuristic: JDProfile, llm_data: dict[str, object]) -> JDPr
         technical_keywords=merged_list("technical_keywords", heuristic.technical_keywords, limit=30),
         domain=text_field("domain", heuristic.domain),
         ats_platform=ats_platform,
+        requirements=heuristic.requirements,
     )
 
 
@@ -428,21 +480,39 @@ def _extract_title(text: str, lines: list[str]) -> str:
         if ":" in line:
             continue
         lowered = line.lower()
-        if any(word in lowered for word in ["engineer", "developer", "analyst", "scientist", "architect"]):
+        if any(
+            word in lowered
+            for word in ["engineer", "developer", "analyst", "scientist", "architect", "specialist", "manager"]
+        ):
             if len(line) <= 90 and not line.endswith("."):
                 return _clean_title(line)
+    # Government and enterprise postings often use a standalone
+    # ``Role – Department`` heading immediately before the first section.
+    for index, line in enumerate(lines[:40]):
+        if not re.search(r"\s[-–—]\s", line) or ":" in line or len(line) > 100:
+            continue
+        following = " ".join(lines[index + 1 : index + 4]).casefold()
+        if any(marker in following for marker in ("responsibil", "qualification", "requirements", "what you will")):
+            return _clean_title(line)
     return ""
 
 
 def _extract_company(text: str, lines: list[str], title: str = "") -> str:
     patterns = [
         r"(?:company|organization|employer)\s*[:\-]\s*([^\n|]+)",
+        r"\bthe\s+([A-Z][A-Za-z0-9 &.,'-]{2,60}?)\s+(?:is|are|has|serves|works|supports)\b",
         r"\bat\s+([A-Z][A-Za-z0-9 &.,-]{2,60})\s+(?:is|we are|seeks|seeking|hiring)",
     ]
     for pattern in patterns:
         match = re.search(pattern, text, flags=re.IGNORECASE)
         if match:
-            return _trim_company(match.group(1))
+            candidate = _trim_company(match.group(1))
+            # Boilerplate frequently says "The Company is committed ..."
+            # before it introduces the actual employer.  "Company" is a
+            # common noun, not an organization name; continue scanning so a
+            # later explicit or repeated proper name can win.
+            if not _is_generic_company_candidate(candidate):
+                return candidate
 
     for line in lines[:6]:
         if line.lower().startswith("about "):
@@ -462,11 +532,21 @@ def _extract_company(text: str, lines: list[str], title: str = "") -> str:
             continue
         if re.fullmatch(r"\d+(?:\.\d+)?", cleaned):
             continue
-        if any(word in lowered for word in ["engineer", "developer", "analyst", "scientist", "architect"]):
+        if any(
+            word in lowered
+            for word in ["engineer", "developer", "analyst", "scientist", "architect", "specialist", "manager"]
+        ):
             continue
         if re.search(r"[A-Za-z]", cleaned):
             return _trim_company(cleaned)
     return ""
+
+
+def _is_generic_company_candidate(value: str) -> bool:
+    """Whether an extracted employer phrase is only a boilerplate noun."""
+
+    normalized = _ARTICLE_PREFIX.sub("", value).casefold().strip(" .,:;-")
+    return normalized in {"company", "organization", "organisation", "employer"}
 
 
 _HEADING_WORDS = {

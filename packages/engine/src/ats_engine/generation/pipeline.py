@@ -12,6 +12,7 @@ from ats_engine.generation.cover_letter import (
     generate_cover_letter_latex,
     generate_cover_letter_text,
 )
+from ats_engine.generation.optimizer import optimize
 from ats_engine.generation.planning import (
     build_answer_plan,
     build_cover_letter_plan,
@@ -31,12 +32,14 @@ from ats_engine.providers.base import LLMProvider, run_concurrently
 from ats_engine.providers.ollama import ollama_provider_pair
 from ats_engine.validation.claims import validate_claims
 from ats_engine.validation.completeness import validate_completeness
+from ats_engine.validation.fidelity import validate_resume_fidelity
 from ats_engine.validation.latex import validate_latex
 from ats_engine.validation.naturalness import production_naturalness_warnings
 from ats_engine.validation.output_format import (
     validate_cover_letter_word_count,
     validate_output_format,
 )
+from ats_engine.validation.stuffing import validate_resume_stuffing
 from ats_engine.validation.style import validate_style
 
 """End-to-end generation pipeline.
@@ -110,10 +113,15 @@ def run_pipeline(
     else:
         extraction, prose = ollama_provider_pair(resolved_settings, model=model_name or None)
 
-    profile, jd_profile = _parse_profile_and_jd(parsed_input, extraction)
+    profile, jd_profile = _parse_profile_and_jd(
+        parsed_input,
+        extraction,
+        tailoring_v2=resolved_settings.tailoring_v2,
+    )
 
     result = PipelineResult(parsed_input=parsed_input, jd_profile=jd_profile)
     result.metadata["llm_available"] = extraction is not None
+    result.metadata["resume_warnings"] = list(profile.extraction_warnings)
     resume_plan = None
     if selection.resume or selection.cover_letter or selection.application_answers or require_resume_plan:
         resume_plan = build_resume_plan(
@@ -123,6 +131,21 @@ def run_pipeline(
             provider=prose,
             batch_provider=extraction,
         )
+        if resolved_settings.tailoring_v2 and resume_plan.requirements and resume_plan.evidence_links:
+            generated_summary = resume_plan.summary
+            resume_plan, optimization_trace = optimize(
+                profile,
+                jd_profile,
+                resume_plan.requirements,
+                resume_plan.evidence_links,
+                resume_plan,
+            )
+            result.metadata["optimization_trace"] = optimization_trace
+            if prose is not None and generated_summary.strip() and generated_summary != resume_plan.summary:
+                # The optimizer intentionally starts from source content. Keep
+                # discarded model prose for the orchestrator's claim trace so
+                # an unsafe model attempt is visible rather than silently lost.
+                result.metadata["discarded_generated_resume_summary"] = generated_summary
         result.resume_plan = resume_plan
 
     if selection.resume and resume_plan is not None:
@@ -180,7 +203,12 @@ def resolve_artifact_selection(
     )
 
 
-def _parse_profile_and_jd(parsed_input: ParsedInput, extraction: LLMProvider | None) -> tuple[Profile, JDProfile]:
+def _parse_profile_and_jd(
+    parsed_input: ParsedInput,
+    extraction: LLMProvider | None,
+    *,
+    tailoring_v2: bool,
+) -> tuple[Profile, JDProfile]:
     """Build the candidate profile and parse the JD.
 
     Both are independent provider calls, so when a model is available they run
@@ -190,13 +218,23 @@ def _parse_profile_and_jd(parsed_input: ParsedInput, extraction: LLMProvider | N
     """
     if extraction is None:
         profile = build_profile(parsed_input.resume_text, provider=None)
-        jd_profile = parse_jd(parsed_input.job_description, profile=profile, provider=None)
+        jd_profile = parse_jd(
+            parsed_input.job_description,
+            profile=profile,
+            provider=None,
+            tailoring_v2=tailoring_v2,
+        )
         return profile, jd_profile
 
     results = run_concurrently(
         {
             "profile": lambda: build_profile(parsed_input.resume_text, provider=extraction),
-            "jd_profile": lambda: parse_jd(parsed_input.job_description, profile=None, provider=extraction),
+            "jd_profile": lambda: parse_jd(
+                parsed_input.job_description,
+                profile=None,
+                provider=extraction,
+                tailoring_v2=tailoring_v2,
+            ),
         }
     )
     return cast(Profile, results["profile"]), cast(JDProfile, results["jd_profile"])
@@ -207,6 +245,7 @@ def validate_pipeline_result(result: PipelineResult, profile: Profile | None = N
     if profile is None:
         profile = build_profile(result.parsed_input.resume_text)
     errors: list[str] = []
+    errors.extend(f"extraction_suspect: {warning}" for warning in profile.extraction_warnings)
     errors.extend(validate_completeness(result, profile))
     # Non-fatal by design (the "contact:" prefix is not in FATAL_MARKERS): a
     # syntactically odd contact field is worth a review warning, not a
@@ -218,7 +257,37 @@ def validate_pipeline_result(result: PipelineResult, profile: Profile | None = N
     job_description = result.parsed_input.job_description
     if result.resume_latex:
         errors.extend([f"resume: {error}" for error in validate_latex(result.resume_latex)])
-        errors.extend([f"resume: {error}" for error in validate_style(result.resume_latex)])
+        # Style policy governs generated prose, not verbatim candidate bullets.
+        # Checking the complete rendered document used to force a global repair
+        # pass that weakened source wording. Validate only the plan units that
+        # the engine authored or explicitly rewrote.
+        if result.resume_plan is not None:
+            errors.extend(f"resume: {error}" for error in validate_style(result.resume_plan.summary))
+            for decision in result.resume_plan.plan_decisions:
+                if decision.kind == "bullet" and decision.original_text != decision.tailored_text:
+                    errors.extend(f"resume: {error}" for error in validate_style(decision.tailored_text))
+            if result.resume_plan.requirements:
+                errors.extend(
+                    f"resume: {error}"
+                    for error in validate_resume_fidelity(
+                        result.parsed_input.resume_text,
+                        result.resume_text,
+                        profile=profile,
+                    )
+                )
+                errors.extend(
+                    f"resume: {error}"
+                    for error in validate_resume_stuffing(
+                        summary=result.resume_plan.summary,
+                        bullets=[
+                            bullet for experience in result.resume_plan.experience for bullet in experience.bullets
+                        ],
+                        skill_groups=result.resume_plan.skill_groups,
+                        requirements=result.resume_plan.requirements,
+                        source_skill_groups=profile.source_skill_groups,
+                        source_resume_text=result.parsed_input.resume_text,
+                    )
+                )
         errors.extend([f"resume: {error}" for error in validate_claims(result.resume_latex, profile)])
         errors.extend(
             [
@@ -229,7 +298,7 @@ def validate_pipeline_result(result: PipelineResult, profile: Profile | None = N
         # Authoritative anti-stuffing / JD-echo gate on the delivered resume text
         # (the same gate the change-action path runs). Warnings, not fatal.
         errors.extend(
-            f"resume: {message}"
+            f"resume: naturalness: {message}"
             for message in production_naturalness_warnings(
                 text=result.resume_text,
                 units=_resume_bullet_units(result.resume_text),
@@ -245,7 +314,7 @@ def validate_pipeline_result(result: PipelineResult, profile: Profile | None = N
             [f"cover letter: {error}" for error in validate_cover_letter_word_count(result.cover_letter_text)]
         )
         errors.extend(
-            f"cover letter: {message}"
+            f"cover letter: naturalness: {message}"
             for message in production_naturalness_warnings(
                 text=result.cover_letter_text,
                 units=_cover_paragraph_units(result.cover_letter_text),

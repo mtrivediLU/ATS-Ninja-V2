@@ -197,13 +197,15 @@ def test_dev_and_test_role_surfaces_testing_without_fabrication() -> None:
     assert kit.resume is not None and kit.resume.validation.fatal is False
     assert kit.job_fit is not None
 
-    adjacent = {value.lower() for value in kit.job_fit.adjacent_capabilities}
+    strongest = {value.lower() for value in kit.job_fit.strongest_matches}
     gaps = {value.lower() for value in kit.job_fit.genuine_gaps}
 
-    # The candidate genuinely wrote unit and integration tests: those transfer.
-    assert {"unit testing", "integration testing"} & adjacent
+    # The candidate genuinely wrote unit and integration tests.  The V2
+    # resolver recognizes these as direct aliases in an experience bullet, so
+    # they are proven matches rather than merely transferable adjacency.
+    assert {"unit testing", "integration testing"} & strongest
     # The candidate did NOT write automated tests: test automation stays a gap.
-    assert "test automation" not in adjacent
+    assert "test automation" not in strongest
 
     # Named tools the candidate lacks remain honest gaps and are never fabricated.
     assert "selenium" in gaps
@@ -212,8 +214,8 @@ def test_dev_and_test_role_surfaces_testing_without_fabrication() -> None:
     assert "selenium" not in resume_lower
     assert "performance testing" not in resume_lower
 
-    # The truthful umbrella phrase is surfaced; development evidence stays prominent.
-    assert _UMBRELLA in resume_lower
+    # Direct source wording is preserved; development evidence stays prominent.
+    assert "unit tests and integration tests" in resume_lower
     assert "react" in resume_lower
     assert "rest" in resume_lower
 
