@@ -98,6 +98,41 @@ def test_bullet_fidelity_allows_source_scoped_term_but_rejects_new_entity() -> N
     assert not any("Power BI" in error for error in errors)
 
 
+def test_raw_source_bullet_loss_is_detected_when_profile_omits_it() -> None:
+    """Raw glyph bullets remain a fidelity source even after parser loss."""
+    profile = _profile()
+    profile.experiences[0].bullets = []
+    rendered = RAW_RESUME.replace(f"- {SOURCE_BULLET}\n", "")
+
+    errors = validate_resume_fidelity(
+        RAW_RESUME,
+        rendered,
+        profile=profile,
+        # A stale parsed-pair view cannot override the delivered-text diff.
+        bullet_pairs=[BulletPair(original=SOURCE_BULLET, candidate=SOURCE_BULLET)],
+    )
+
+    assert any("raw source bullet" in error and "content not retained" in error for error in errors)
+    assert any("raw source bullet" in error and "terminal clause facts" in error for error in errors)
+
+
+def test_raw_source_bullet_keeps_uppercase_orphan_continuation() -> None:
+    raw = (
+        "Professional Experience\n"
+        "- Developed integrations for Google\n"
+        "Cloud SQL Auth Proxy, configuring secure database connectivity for reporting.\n"
+    )
+    preserved = (
+        "Professional Experience\n"
+        "- Developed integrations for Google Cloud SQL Auth Proxy, configuring secure database connectivity for reporting.\n"
+    )
+    lost_continuation = "Professional Experience\n- Developed integrations for Google\n"
+
+    assert validate_resume_fidelity(raw, preserved) == []
+    errors = validate_resume_fidelity(raw, lost_continuation)
+    assert any("raw source bullet" in error and "content not retained" in error for error in errors)
+
+
 def test_rendered_text_stuffing_api_uses_action_terms() -> None:
     action = SimpleNamespace(term="Power BI")
 

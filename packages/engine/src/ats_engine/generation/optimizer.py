@@ -58,14 +58,18 @@ def optimize(
     current_plan = source_plan
     current_score = _score_plan(current_plan, source, requirements, links, accepted)
 
-    # An incomplete legacy parse should never cause an optimizer regression.
-    # Keep the base plan in that rare case; orchestration applies the final hard
-    # score check after rendering and can withhold the tailored projection.
+    # An incomplete parse should never make the optimizer return the legacy
+    # base plan: it may contain LLM-rewritten prose that has not passed the V2
+    # source-content boundary.  Preserve the safe source projection instead,
+    # and make the score-based refusal visible in the persisted trace.
     if current_score.score + 0.001 < original.score:
         trace.rejected_actions.append(
-            OptimizationRejection(action="source_content_plan", reason="source projection scored below raw resume")
+            OptimizationRejection(
+                action="source_content_plan",
+                reason="source projection scored below raw resume; retained safe source-content fallback",
+            )
         )
-        return base_plan, trace
+        return source_plan, trace
 
     for offset in range(0, len(actions), _BATCH_SIZE):
         if trace.iterations >= _MAX_ITERATIONS:

@@ -43,6 +43,22 @@ _TRAILING_CLAUSE_RE = re.compile(
     r",\s*((?:for|to|while|with|through|resulting\s+in|which)\b.+)$",
     flags=re.IGNORECASE,
 )
+# Keep this deliberately local to the fidelity boundary instead of reusing the
+# profile parser's bullet list.  A parser can be incomplete or corrupt a
+# wrapped source line; raw-source fidelity must still see what the candidate
+# actually supplied.  Numbered list markers are included because a few common
+# resume exporters replace bullet glyphs with ordered-list markers.
+_RAW_BULLET_RE = re.compile(r"^\s*(?:(?:-(?!\d))|[*•●▪◦‣–—]|(?:\d+|[A-Za-z])[.)])\s*(?P<text>\S.*)$")
+_RAW_BULLET_CONTINUATION_RE = re.compile(
+    r"^(?:[,;:)]|(?:and|or|but|with|for|to|through|while|which|that|including|"
+    r"ensuring|supporting|resulting)\b)",
+    flags=re.IGNORECASE,
+)
+_RAW_ORPHAN_BULLET_CONTINUATION_RE = re.compile(
+    r"^[A-Za-z0-9+#./ -]{1,80},\s*"
+    r"(?:configuring|using|with|for|and|or|to|which|that|including|ensuring|supporting)\b",
+    flags=re.IGNORECASE,
+)
 
 # Words which are useful grammar but do not identify the factual content of a
 # terminal clause.  The set is deliberately small: retaining an extra content
@@ -68,6 +84,42 @@ _CONTENT_STOP_WORDS = frozenset(
         "while",
         "with",
         "within",
+    }
+)
+_LOW_SIGNAL_BULLET_TERMS = frozenset(
+    {
+        "architected",
+        "build",
+        "built",
+        "collaborated",
+        "collaborate",
+        "created",
+        "create",
+        "delivered",
+        "deliver",
+        "designed",
+        "design",
+        "developed",
+        "develop",
+        "implemented",
+        "implement",
+        "improved",
+        "improve",
+        "led",
+        "lead",
+        "maintained",
+        "maintain",
+        "managed",
+        "manage",
+        "optimized",
+        "optimize",
+        "supported",
+        "support",
+        "used",
+        "use",
+        "using",
+        "worked",
+        "work",
     }
 )
 _GENERIC_ENTITY_WORDS = frozenset(
@@ -132,8 +184,11 @@ def validate_raw_source_fidelity(
     The gate preserves parsed experience, education, certificate, credential-ID,
     metric, and remote/location facts *only when the raw source actually
     contains them*.  That condition prevents a suspicious parser extraction
-    from being turned into a new hard requirement.  ``bullet_pairs`` supplies
-    the stronger bidirectional fact-retention checks for rewritten bullets.
+    from being turned into a new hard requirement.  It also independently
+    extracts explicit raw-source bullet lines and their continuations, so a
+    bullet lost before :class:`Profile` construction cannot evade this gate.
+    ``bullet_pairs`` supplies an additional, location-aware check for known
+    rewritten bullets.
 
     ``candidate_text`` may be plain text or LaTeX-like text.  Basic LaTeX
     escapes and typography are normalized only for comparison; no generated
@@ -154,6 +209,7 @@ def validate_raw_source_fidelity(
 
     errors.extend(_unsupported_candidate_metrics(raw_source, candidate_text))
     errors.extend(_unsupported_credential_ids(raw_source, candidate_text))
+    errors.extend(_raw_source_bullet_errors(raw_source, candidate_text))
 
     for index, pair in enumerate(bullet_pairs):
         prefix = pair.location.strip() or f"bullet {index + 1}"
@@ -202,33 +258,18 @@ def bullet_fidelity_errors(
     raw source.  Passing ``source_text`` therefore enables valid cross-bullet
     integration without weakening the raw-evidence boundary.
     """
-    errors: list[str] = []
+    errors = _bullet_retention_errors(original, candidate)
     evidence_text = source_text or original
 
-    original_metrics = _normalized_metric_set(original)
     candidate_metrics = _normalized_metric_set(candidate)
-    for metric in sorted(original_metrics - candidate_metrics):
-        errors.append(f"fidelity: missing original metric: {metric}")
     source_metrics = _normalized_metric_set(evidence_text)
     for metric in sorted(candidate_metrics - source_metrics):
         errors.append(f"fidelity: unsupported metric introduced: {metric}")
 
-    for team_fact in _team_facts(original):
-        if not _contains_fact(candidate, team_fact):
-            errors.append(f"fidelity: missing original team fact: {team_fact}")
-
-    original_entities = extract_named_entities(original)
     candidate_entities = extract_named_entities(candidate)
-    for entity in original_entities:
-        if not _contains_fact(candidate, entity):
-            errors.append(f"fidelity: missing original named entity: {entity}")
     for entity in candidate_entities:
         if not _contains_fact(evidence_text, entity):
             errors.append(f"fidelity: unsupported named entity introduced: {entity}")
-
-    terminal_clause = _terminal_clause(original)
-    if terminal_clause and not _terminal_clause_preserved(terminal_clause, candidate):
-        errors.append(f"fidelity: terminal clause facts not retained: {terminal_clause}")
 
     return _dedupe(errors)
 
@@ -236,6 +277,126 @@ def bullet_fidelity_errors(
 def bullet_preserves_facts(original: str, candidate: str, *, source_text: str = "") -> bool:
     """True when :func:`bullet_fidelity_errors` finds no fact loss or invention."""
     return not bullet_fidelity_errors(original, candidate, source_text=source_text)
+
+
+def _raw_source_bullet_errors(
+    raw_source: str,
+    candidate_text: str,
+) -> list[str]:
+    """Check source glyph bullets even when no parsed profile preserved them.
+
+    The comparison intentionally targets the full rendered document.  A valid,
+    approved rewrite can move a source-backed fact from a bullet to a summary
+    or another faithful placement; requiring exact whole-bullet identity would
+    reject that harmless presentation change.  What must survive is the
+    candidate fact content, including terminal-clause facts such as scope,
+    result, or audience.
+    """
+    errors: list[str] = []
+
+    for index, original in enumerate(_extract_raw_source_bullets(raw_source), start=1):
+        prefix = f"raw source bullet {index}"
+        errors.extend(f"{prefix}: {error}" for error in _bullet_retention_errors(original, candidate_text))
+        if not _raw_bullet_content_survives(original, candidate_text):
+            errors.append(f"{prefix}: fidelity: raw source bullet content not retained: {original}")
+
+    return errors
+
+
+def _extract_raw_source_bullets(source_text: str) -> tuple[str, ...]:
+    """Extract explicit source bullet glyph lines with conservative wraps.
+
+    This intentionally does not call the resume parser or inspect a
+    :class:`Profile`: it is the independent backstop for a parser that drops a
+    bullet entirely.  A continuation is joined only when its shape strongly
+    signals that it belongs to the preceding glyph line, so headings and a
+    subsequent employer are never silently absorbed as bullet prose.
+    """
+    bullets: list[str] = []
+    current: str = ""
+
+    def finish_current() -> None:
+        nonlocal current
+        cleaned = re.sub(r"\s+", " ", current).strip()
+        if cleaned:
+            bullets.append(cleaned)
+        current = ""
+
+    for raw_line in (source_text or "").splitlines():
+        marker = _RAW_BULLET_RE.match(raw_line)
+        if marker is not None:
+            finish_current()
+            current = marker.group("text").strip()
+            continue
+
+        line = raw_line.strip()
+        if current and line and _is_raw_bullet_continuation(raw_line, current):
+            separator = "" if current.endswith("-") else " "
+            current = f"{current}{separator}{line}"
+            continue
+        finish_current()
+
+    finish_current()
+    return tuple(bullets)
+
+
+def _is_raw_bullet_continuation(raw_line: str, current: str) -> bool:
+    """Return whether an unmarked physical line continues a raw bullet."""
+    line = raw_line.strip()
+    if not line:
+        return False
+    if current.rstrip().endswith("-"):
+        return True
+    if raw_line[:1].isspace():
+        return True
+    return (
+        line[:1].islower()
+        or _RAW_BULLET_CONTINUATION_RE.match(line) is not None
+        or _RAW_ORPHAN_BULLET_CONTINUATION_RE.match(line) is not None
+    )
+
+
+def _raw_bullet_content_survives(original: str, candidate_text: str) -> bool:
+    """Check broad source-content coverage without demanding exact wording."""
+    original_terms = {term for term in _content_terms(original) if term not in _LOW_SIGNAL_BULLET_TERMS}
+    if not original_terms:
+        return True
+    candidate_terms = set(_content_terms(candidate_text))
+    retained = len(original_terms & candidate_terms)
+    # A half-overlap preserves meaningful content under ordinary paraphrases
+    # ("developed REST APIs in Python" -> "built Python API services") while
+    # a missing/corrupted raw bullet has no meaningful overlap at all.
+    return retained / len(original_terms) >= 0.5
+
+
+def _bullet_retention_errors(original: str, candidate: str) -> list[str]:
+    """Return only the source-fact loss portion of bullet validation.
+
+    Raw-source bullets are checked against the complete rendered document so
+    an approved rewrite may relocate a fact.  The document also contains
+    renderer labels (for example ``Professional Headline``), which must not be
+    mistaken for an entity invented by *this* source bullet.  Unsupported new
+    claims remain covered by the document-level validators.
+    """
+    errors: list[str] = []
+    original_metrics = _normalized_metric_set(original)
+    candidate_metrics = _normalized_metric_set(candidate)
+    for metric in sorted(original_metrics - candidate_metrics):
+        errors.append(f"fidelity: missing original metric: {metric}")
+
+    for team_fact in _team_facts(original):
+        if not _contains_fact(candidate, team_fact):
+            errors.append(f"fidelity: missing original team fact: {team_fact}")
+
+    for entity in extract_named_entities(original):
+        if not _contains_fact(candidate, entity):
+            errors.append(f"fidelity: missing original named entity: {entity}")
+
+    terminal_clause = _terminal_clause(original)
+    if terminal_clause and not _terminal_clause_preserved(terminal_clause, candidate):
+        errors.append(f"fidelity: terminal clause facts not retained: {terminal_clause}")
+
+    return _dedupe(errors)
 
 
 def extract_named_entities(text: str) -> tuple[str, ...]:

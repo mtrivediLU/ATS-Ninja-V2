@@ -131,7 +131,13 @@ def run_pipeline(
             provider=prose,
             batch_provider=extraction,
         )
-        if resolved_settings.tailoring_v2 and resume_plan.requirements and resume_plan.evidence_links:
+        # V2 always projects the generated plan back onto candidate-authored
+        # source content, even when the JD yields no actionable requirements.
+        # In that zero-requirements case the optimizer has no placements to
+        # make, but its source-content projection is still the boundary that
+        # prevents an otherwise-valid LLM bullet rewrite from becoming the
+        # delivered resume.
+        if resolved_settings.tailoring_v2:
             generated_summary = resume_plan.summary
             resume_plan, optimization_trace = optimize(
                 profile,
@@ -266,28 +272,29 @@ def validate_pipeline_result(result: PipelineResult, profile: Profile | None = N
             for decision in result.resume_plan.plan_decisions:
                 if decision.kind == "bullet" and decision.original_text != decision.tailored_text:
                     errors.extend(f"resume: {error}" for error in validate_style(decision.tailored_text))
-            if result.resume_plan.requirements:
-                errors.extend(
-                    f"resume: {error}"
-                    for error in validate_resume_fidelity(
-                        result.parsed_input.resume_text,
-                        result.resume_text,
-                        profile=profile,
-                    )
+            # These raw-source gates protect every delivered resume.  An empty
+            # V2 requirement set means "no tailoring terms", not "no source
+            # facts to preserve"; the stuffing validator still checks its
+            # source-relative repetition budgets with an empty term list.
+            errors.extend(
+                f"resume: {error}"
+                for error in validate_resume_fidelity(
+                    result.parsed_input.resume_text,
+                    result.resume_text,
+                    profile=profile,
                 )
-                errors.extend(
-                    f"resume: {error}"
-                    for error in validate_resume_stuffing(
-                        summary=result.resume_plan.summary,
-                        bullets=[
-                            bullet for experience in result.resume_plan.experience for bullet in experience.bullets
-                        ],
-                        skill_groups=result.resume_plan.skill_groups,
-                        requirements=result.resume_plan.requirements,
-                        source_skill_groups=profile.source_skill_groups,
-                        source_resume_text=result.parsed_input.resume_text,
-                    )
+            )
+            errors.extend(
+                f"resume: {error}"
+                for error in validate_resume_stuffing(
+                    summary=result.resume_plan.summary,
+                    bullets=[bullet for experience in result.resume_plan.experience for bullet in experience.bullets],
+                    skill_groups=result.resume_plan.skill_groups,
+                    requirements=result.resume_plan.requirements,
+                    source_skill_groups=profile.source_skill_groups,
+                    source_resume_text=result.parsed_input.resume_text,
                 )
+            )
         errors.extend([f"resume: {error}" for error in validate_claims(result.resume_latex, profile)])
         errors.extend(
             [
