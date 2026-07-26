@@ -10,7 +10,21 @@ from ats_engine.providers.base import LLMProvider, generate_json
 
 # Cache namespace for parsed profiles. Bump when parsing behavior changes so
 # stale cached profiles are not served after a logic update.
-PROFILE_CACHE_VERSION = "profile-v2-completeness-floor"
+PROFILE_CACHE_VERSION = "profile-v5-tailoring-v2-structure-summary-and-wraps"
+
+
+class ExtractionSuspectError(RuntimeError):
+    """Raised when parsed resume structure is unsafe to use for generation.
+
+    The fixed code is intentionally the entire exception message: parser
+    diagnostics can contain candidate-authored text and must not leak through
+    API error persistence or logs.
+    """
+
+    code = "EXTRACTION_SUSPECT"
+
+    def __init__(self) -> None:
+        super().__init__(self.code)
 
 
 # The resume below has already been split into numbered lines. The model is
@@ -32,7 +46,7 @@ Return ONLY a single JSON object with exactly this shape, no markdown fences, no
     {{"institution": "", "degree": "", "location": "", "dates": "", "bullet_lines": [30, 31]}}
   ],
   "certifications": [
-    {{"name": "", "date": "", "link": ""}}
+    {{"name": "", "date": "", "link": "", "credential_id": ""}}
   ],
   "skills_listed": ["..."],
   "summary_text": ""
@@ -42,6 +56,7 @@ Rules:
 - experiences must stay in the order they appear in the resume.
 - bullet_lines must be the exact line numbers shown below that belong to that entry's bullet points. Use [] if there are none.
 - skills_listed must contain every individual tool, language, platform, framework, or technology named anywhere in the resume (skills section AND bullet lines), each as a short token like "Python" or "Power BI", no duplicates.
+- For certifications, keep a source-written `Credential ID`/`Credential #` value in credential_id; otherwise use "". Do not treat a parenthesized vendor exam code as a credential ID.
 - summary_text is the resume's existing summary/objective/profile paragraph if one exists, else "".
 - If a field is not present, use "" or []. Do not guess or fill in plausible-sounding values.
 
@@ -74,12 +89,19 @@ def build_profile(resume_text: str, provider: LLMProvider | None = None) -> Prof
     key = make_key(f"{PROFILE_CACHE_VERSION}|{extractor}", text)
     cached = cache.get(key)
     if isinstance(cached, Profile):
+        _raise_if_extraction_suspect(cached)
         return cached
 
     profile = extract_profile(text, provider=provider)
+    _raise_if_extraction_suspect(profile)
     if profile.experiences or profile.tier_a:
         cache.set(key, profile)
     return profile
+
+
+def _raise_if_extraction_suspect(profile: Profile) -> None:
+    if profile.extraction_warnings:
+        raise ExtractionSuspectError
 
 
 def empty_profile() -> Profile:
@@ -198,13 +220,34 @@ def _build_profile(data: dict[str, Any], source_text: str) -> Profile:
 
     experiences = _clean_experiences(data.get("experiences") or [], source_text)
     education = _clean_education(data.get("education") or [])
+    # Skill taxonomy is source evidence in its own right.  Preserve the
+    # candidate-authored groups even when an LLM supplied a flatter skill list
+    # (or omitted some entries).  The flat list remains the compatibility
+    # surface used by the existing evidence matrix.
+    source_sections = _split_into_sections([line.strip() for line in source_text.splitlines()])
+    source_summary = _source_summary_text(source_text)
+    source_skill_groups = _heuristic_skill_groups(source_sections.get("skills", []))
+    source_skills = [item for _, items in source_skill_groups for item in items]
+    skills_listed = _dedupe_terms([str(s) for s in (data.get("skills_listed") or []) if str(s).strip()] + source_skills)
+
+    # Certification identifiers are often omitted by an LLM because they look
+    # like opaque metadata.  Enrich the structured parse from the raw source so
+    # the identifier is retained as candidate evidence rather than discarded.
     certifications = _clean_certifications(data.get("certifications") or [])
-    skills_listed = _dedupe_terms([str(s) for s in (data.get("skills_listed") or []) if str(s).strip()])
+    certifications = _merge_source_certifications(
+        certifications,
+        _clean_certifications(_heuristic_certifications(source_sections.get("certifications", []))),
+    )
     summary_text = str(data.get("summary_text", "") or "")
 
     tier_a, tier_b, tier_c = _tier_skills(skills_listed, experiences, summary_text)
     supported_metrics = _extract_supported_metrics(experiences)
     role_identities = _dedupe_terms([exp.title for exp in experiences if exp.title])
+    extraction_warnings = [
+        f"EXTRACTION_SUSPECT: implausible employer header '{experience.company}'"
+        for experience in experiences
+        if _company_header_is_suspect(experience.company)
+    ]
 
     return Profile(
         contact=contact,
@@ -219,6 +262,9 @@ def _build_profile(data: dict[str, Any], source_text: str) -> Profile:
         certifications=certifications,
         supported_metrics=supported_metrics,
         raw_markdown=source_text,
+        source_summary=source_summary,
+        source_skill_groups=source_skill_groups,
+        extraction_warnings=extraction_warnings,
     )
 
 
@@ -280,7 +326,7 @@ def _clean_certifications(raw_entries: list[Any]) -> list[Certification]:
     for entry in raw_entries:
         if not isinstance(entry, dict):
             continue
-        name = str(entry.get("name", "")).strip()
+        name, embedded_credential_id = _split_credential_id(str(entry.get("name", "")))
         if not name:
             continue
         certifications.append(
@@ -288,9 +334,59 @@ def _clean_certifications(raw_entries: list[Any]) -> list[Certification]:
                 name=name,
                 date=str(entry.get("date", "")).strip(),
                 link=str(entry.get("link", "")).strip(),
+                credential_id=str(entry.get("credential_id", "")).strip() or embedded_credential_id,
             )
         )
     return certifications
+
+
+def _merge_source_certifications(parsed: list[Certification], source: list[Certification]) -> list[Certification]:
+    """Fill missing cert metadata from the deterministic source parse.
+
+    The LLM parser may improve visual structure, but source-provided
+    credential IDs must never be lost merely because they are opaque strings.
+    Conversely, an ID emitted only by an LLM is not evidence and is discarded.
+    Matching is intentionally conservative: exact normalized name first, then
+    a shared parenthesized credential code such as ``PL-300``.
+    """
+    if not source:
+        return [Certification(name=item.name, date=item.date, link=item.link) for item in parsed]
+
+    remaining = list(source)
+    merged: list[Certification] = []
+    for certification in parsed:
+        match_index = next(
+            (
+                index
+                for index, candidate in enumerate(remaining)
+                if _certification_keys(candidate.name) & _certification_keys(certification.name)
+            ),
+            None,
+        )
+        if match_index is None:
+            merged.append(Certification(name=certification.name, date=certification.date, link=certification.link))
+            continue
+        candidate = remaining.pop(match_index)
+        merged.append(
+            Certification(
+                name=certification.name,
+                date=certification.date or candidate.date,
+                link=certification.link or candidate.link,
+                credential_id=candidate.credential_id,
+            )
+        )
+
+    # A deterministic source parse can recognize a certification the model
+    # skipped entirely.  Preserve it instead of lowering the evidence floor.
+    merged.extend(remaining)
+    return merged
+
+
+def _certification_keys(name: str) -> set[str]:
+    normalized = re.sub(r"[^a-z0-9]+", " ", (name or "").lower()).strip()
+    keys = {normalized} if normalized else set()
+    keys.update(match.lower() for match in re.findall(r"\b[A-Za-z]{1,5}-\d{2,5}\b", name or ""))
+    return keys
 
 
 def _tier_skills(
@@ -319,8 +415,11 @@ def _tier_skills(
 
 METRIC_PATTERN = re.compile(
     r"\b\d+(?:\.\d+)?%"
-    r"|\b\d+\+?\s*(?:years?|engineers?|clients?|users?|customers?|platforms?|projects?|hours?)\b"
-    r"|\b\d+\s*(?:to|-)\s*\d+\s*(?:hours?|minutes?|days?)\b"
+    # Do not let ``\s`` bridge a line boundary: a certification year followed
+    # by the next certification's name (for example ``2024\nPlatform``) is not
+    # a candidate metric.
+    r"|\b\d+\+?[ \t]*(?:years?|engineers?|clients?|users?|customers?|platforms?|projects?|hours?)\b"
+    r"|\b\d+[ \t]*(?:to|-)[ \t]*\d+[ \t]*(?:hours?|minutes?|days?)\b"
     r"|\$\d[\d,.]*[kKmMbB]?",
     flags=re.IGNORECASE,
 )
@@ -448,25 +547,59 @@ _DATE_RANGE = re.compile(
     flags=re.IGNORECASE,
 )
 
-_LOCATION_TAIL = re.compile(r"([A-Z][A-Za-z.'\s]+,\s*[A-Z]{2,}(?:,\s*[A-Za-z]+)?)\s*$")
+_LOCATION_TAIL = re.compile(
+    r"(?P<location>[A-Z][A-Za-z.'-]*(?:\s+[A-Z][A-Za-z.'-]*){0,2},\s*"
+    r"(?:[A-Z]{2}|[A-Z][A-Za-z]+)(?:,\s*(?:[A-Z]{2}|[A-Z][A-Za-z]+))?)\s*$"
+)
 _YEAR = re.compile(r"\b(19|20)\d{2}\b")
 _URL = re.compile(r"(https?://[^\s|]+|www\.[^\s|]+)", flags=re.IGNORECASE)
 _EMAIL = re.compile(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}")
 _PHONE = re.compile(r"(?:\+?1[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]?\d{4}")
 _LINKEDIN = re.compile(r"(?:https?://)?(?:www\.)?linkedin\.com/in/[A-Za-z0-9_-]+/?", flags=re.IGNORECASE)
+_CREDENTIAL_ID_SEGMENT = re.compile(
+    r"(?:\s*(?:\||;|[-–—])\s*)?"
+    r"(?:credential|certification)\s*(?:id|identifier|#)\s*[:#]?\s*"
+    r"(?P<credential_id>[^|;]+?)\s*(?=(?:\||;|$))",
+    flags=re.IGNORECASE,
+)
+_ORPHAN_BULLET_CONTINUATION = re.compile(
+    r"^[A-Za-z0-9+#./ -]{1,80},\s*"
+    r"(?:configuring|using|with|for|and|or|to|which|that|including|ensuring|supporting)\b",
+    flags=re.IGNORECASE,
+)
+_SOURCE_SKILL_HEADING_HINTS = {
+    "analytics",
+    "backend",
+    "business intelligence",
+    "cloud",
+    "databases",
+    "devops",
+    "frameworks",
+    "frontend",
+    "languages",
+    "libraries",
+    "methodologies",
+    "platforms",
+    "programming languages",
+    "skills",
+    "technologies",
+    "tools",
+}
 
 
 def _heuristic_extract(text: str) -> dict[str, Any]:
     lines = [line.strip() for line in text.splitlines()]
     sections = _split_into_sections(lines)
+    skill_groups = _heuristic_skill_groups(sections.get("skills", []))
 
     return {
         "contact": _heuristic_contact(text),
         "experiences": _heuristic_entries(sections.get("experience", []), kind="experience"),
         "education": _heuristic_entries(sections.get("education", []), kind="education"),
         "certifications": _heuristic_certifications(sections.get("certifications", [])),
-        "skills_listed": _heuristic_skills(sections.get("skills", [])),
-        "summary_text": " ".join(line for line in sections.get("summary", []) if line).strip(),
+        "skills_listed": _dedupe_terms([item for _, items in skill_groups for item in items]),
+        "skill_groups": skill_groups,
+        "summary_text": _source_summary_text(text),
     }
 
 
@@ -482,6 +615,27 @@ def _split_into_sections(lines: list[str]) -> dict[str, list[str]]:
             continue
         sections.setdefault(current, []).append(line)
     return sections
+
+
+def _source_summary_text(text: str) -> str:
+    """Return an explicit summary section without accidentally including contact lines."""
+    collecting = False
+    summary_lines: list[str] = []
+    for raw_line in (text or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        heading = _detect_heading(line)
+        if heading == "summary":
+            collecting = True
+            continue
+        if heading is not None:
+            if collecting:
+                break
+            continue
+        if collecting:
+            summary_lines.append(line)
+    return " ".join(summary_lines).strip()
 
 
 def _detect_heading(line: str) -> str | None:
@@ -526,10 +680,10 @@ def _heuristic_entries(lines: list[str], *, kind: str) -> list[dict[str, Any]]:
         if paren_match:
             suffix = f" ({paren_match.group(1)})"
             head = head[: paren_match.start()].rstrip()
-        location_match = _LOCATION_TAIL.search(head)
-        if location_match and location_match.start() > 0:
-            entry["location"] = entry["location"] or (location_match.group(1).strip() + suffix)
-            head = head[: location_match.start()].strip(" |-,")
+        location, head_without_location = _split_location_tail(head)
+        if location:
+            entry["location"] = entry["location"] or (location + suffix)
+            head = head_without_location
         entry[primary] = head
         if len(header_lines) > 1 and not entry[secondary]:
             entry[secondary] = header_lines[1]
@@ -544,13 +698,17 @@ def _heuristic_entries(lines: list[str], *, kind: str) -> list[dict[str, Any]]:
             current = new_entry()
             current["dates"] = date_match.group(0)
             remainder = (line[: date_match.start()] + " " + line[date_match.end() :]).strip(" |-,")
-            location_match = _LOCATION_TAIL.search(remainder)
-            if location_match:
-                current["location"] = location_match.group(1).strip()
-                remainder = remainder[: location_match.start()].strip(" |-,")
+            location, remainder_without_location = _split_location_tail(remainder)
+            if location:
+                current["location"] = location
+                remainder = remainder_without_location
             if remainder:
                 current[secondary] = remainder
-            apply_header(current, header_buffer)
+            # A valid resume header is a company/institution line plus an
+            # optional title/degree immediately before its dates.  Restrict
+            # the parser to that local context so a PDF wrap orphan cannot be
+            # promoted into an employer for the next role.
+            apply_header(current, header_buffer[-2:])
             header_buffer = []
             continue
 
@@ -562,8 +720,17 @@ def _heuristic_entries(lines: list[str], *, kind: str) -> list[dict[str, Any]]:
             current["bullets"].append(line)
             continue
 
-        if current is not None and current["bullets"] and line[0].islower():
-            current["bullets"][-1] = f"{current['bullets'][-1]} {line}"
+        if (
+            current is not None
+            and current["bullets"]
+            and (
+                line[0].islower()
+                or _ORPHAN_BULLET_CONTINUATION.search(line) is not None
+                or current["bullets"][-1].rstrip().endswith("-")
+            )
+        ):
+            separator = "" if current["bullets"][-1].rstrip().endswith("-") else " "
+            current["bullets"][-1] = f"{current['bullets'][-1]}{separator}{line}"
         else:
             header_buffer.append(line)
 
@@ -576,19 +743,30 @@ def _heuristic_entries(lines: list[str], *, kind: str) -> list[dict[str, Any]]:
     return entries
 
 
+def _company_header_is_suspect(value: str) -> bool:
+    """Flag an extraction-shaped continuation mistaken for an employer name."""
+    normalized = re.sub(r"\s+", " ", value or "").strip()
+    lowered = normalized.casefold()
+    if not normalized:
+        return False
+    if re.search(r",\s*(?:configuring|using|building|maintaining|supporting|ensuring)\b", lowered):
+        return True
+    return normalized.endswith(".") and len(normalized.split()) > 6
+
+
 def _heuristic_certifications(lines: list[str]) -> list[dict[str, str]]:
     certifications: list[dict[str, str]] = []
     for line in lines:
         if not line:
             continue
-        year_match = _YEAR.search(line)
-        url_match = _URL.search(line)
-        name = line
+        name, credential_id = _split_credential_id(line)
+        year_match = _YEAR.search(name)
+        url_match = _URL.search(name)
         if year_match:
             name = (name[: year_match.start()] + name[year_match.end() :]).strip(" |-")
         if url_match:
             name = name.replace(url_match.group(0), "").strip(" |-")
-        name = re.sub(r"credential id:.*$", "", name, flags=re.IGNORECASE).strip(" |-:")
+        name = name.strip(" |-:")
         if not name:
             continue
         certifications.append(
@@ -596,18 +774,156 @@ def _heuristic_certifications(lines: list[str]) -> list[dict[str, str]]:
                 "name": name,
                 "date": year_match.group(0) if year_match else "",
                 "link": url_match.group(0) if url_match else "",
+                "credential_id": credential_id,
             }
         )
     return certifications
 
 
 def _heuristic_skills(lines: list[str]) -> list[str]:
-    skills: list[str] = []
-    for line in lines:
-        content = line.split(":", 1)[-1] if ":" in line and len(line.split(":", 1)[0]) <= 40 else line
-        parts = re.split(r"[,;|]|\s{2,}|•|\*", content)
-        skills.extend(part.strip() for part in parts if part.strip() and len(part.strip()) <= 40)
-    return _dedupe_terms(skills)
+    return _dedupe_terms([item for _, items in _heuristic_skill_groups(lines) for item in items])
+
+
+def _heuristic_skill_groups(lines: list[str]) -> list[tuple[str, list[str]]]:
+    """Parse source skill headings and items without inventing a taxonomy.
+
+    Resume writers commonly use one ``Heading: item, item`` line per group;
+    some put a heading on one line and its items below.  Preserve both the
+    headings and their source order, while applying only mechanical separator
+    cleanup to individual entries.
+    """
+    groups: list[tuple[str, list[str]]] = []
+    active_label = ""
+
+    def add_items(label: str, raw_content: str) -> None:
+        items = _skill_items(raw_content)
+        if not items:
+            return
+        normalized_label = label.strip().rstrip(":") or "Skills"
+        for index, (existing_label, existing_items) in enumerate(groups):
+            if existing_label.lower() == normalized_label.lower():
+                groups[index] = (existing_label, _dedupe_terms(existing_items + items))
+                return
+        groups.append((normalized_label, _dedupe_terms(items)))
+
+    for index, raw_line in enumerate(lines):
+        line = raw_line.strip().strip("•*- ")
+        if not line:
+            continue
+        if ":" in line:
+            maybe_label, content = line.split(":", 1)
+            if maybe_label.strip() and len(maybe_label.strip()) <= 48:
+                active_label = maybe_label.strip()
+                add_items(active_label, content)
+                continue
+        if _looks_like_skill_heading(line) and _is_source_skill_heading(lines, index, line):
+            active_label = line.rstrip(":")
+            continue
+        add_items(active_label, line)
+
+    return groups
+
+
+def _skill_items(content: str) -> list[str]:
+    parts = re.split(r"[,;|]|\s{2,}|•|\*", content)
+    items: list[str] = []
+    for part in parts:
+        cleaned = _clean_skill_item(part)
+        if cleaned:
+            items.append(cleaned)
+    return items
+
+
+def _clean_skill_item(value: str) -> str:
+    """Keep a source skill token while discarding conversational fragments."""
+    cleaned = value.strip().strip(".,;|")
+    cleaned = re.sub(
+        r"^(?:(?:pragmatic|practical|working)\s+)?use\s+of\s+",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(r"^(?:and|or|of|with|for)\s+", "", cleaned, flags=re.IGNORECASE)
+    cleaned = cleaned.strip().strip(".,;|")
+    if not cleaned or len(cleaned) > 80:
+        return ""
+    if not re.search(r"[A-Za-z0-9]", cleaned):
+        return ""
+    normalized = re.sub(r"[^a-z]+", " ", cleaned.casefold()).strip()
+    if normalized in {"and", "or", "of", "with", "for", "use", "use of", "pragmatic use"}:
+        return ""
+    return cleaned
+
+
+def _looks_like_skill_heading(line: str) -> bool:
+    words = line.strip().rstrip(":").split()
+    if not words or len(words) > 5 or any(character.isdigit() for character in line):
+        return False
+    return all(word[:1].isupper() or word.lower() in {"&", "and", "of"} for word in words)
+
+
+def _is_source_skill_heading(lines: list[str], index: int, line: str) -> bool:
+    """Avoid misclassifying a one-skill-per-line list as a taxonomy heading."""
+    normalized = line.strip().rstrip(":").casefold()
+    if normalized in _SOURCE_SKILL_HEADING_HINTS:
+        return True
+    for candidate in lines[index + 1 :]:
+        next_line = candidate.strip().strip("•*- ")
+        if not next_line:
+            continue
+        # A delimiter-bearing next line is clearly a list of items under the
+        # current heading.  A new ``Heading: ...`` line is not.
+        return ":" not in next_line and bool(re.search(r"[,;|•*]", next_line))
+    return False
+
+
+def _split_credential_id(value: str) -> tuple[str, str]:
+    """Separate a labeled credential identifier from display text.
+
+    Certification names frequently include vendor codes in parentheses
+    (``PL-300``); those are part of the name and are deliberately retained.
+    Only an explicit ``Credential ID``/``Credential #`` label becomes the
+    separate verification identifier.
+    """
+    match = _CREDENTIAL_ID_SEGMENT.search(value or "")
+    if match is None:
+        return (value or "").strip(), ""
+    credential_id = match.group("credential_id").strip(" |-:")
+    without_identifier = (value[: match.start()] + value[match.end() :]).strip(" |;-:")
+    return without_identifier, credential_id
+
+
+def _split_location_tail(value: str) -> tuple[str, str]:
+    """Return ``(location, remaining_header)`` for a plausible location tail.
+
+    A conventional greedy regex turns ``Flosonics Medical Toronto, ON`` into
+    one giant location.  Consider each capitalized token boundary and choose
+    the rightmost valid city/region tail instead.  Municipal employer names
+    such as ``City of Greater Sudbury, ON`` remain intact unless the city is
+    repeated as an actual location suffix.
+    """
+    text = value.strip()
+    candidates: list[tuple[int, str]] = []
+    for start_match in re.finditer(r"(?<!\S)[A-Z]", text):
+        match = _LOCATION_TAIL.match(text[start_match.start() :])
+        if match is not None:
+            candidates.append((start_match.start(), match.group("location").strip()))
+    if not candidates:
+        return "", text
+
+    start, location = candidates[-1]
+    remainder = text[:start].strip(" |-,")
+    if not remainder:
+        return "", text
+
+    municipal = re.match(r"^(?:city|town|county|regional municipality)\s+of\s+", text, flags=re.IGNORECASE)
+    if municipal is not None:
+        city_tokens = re.sub(r",.*$", "", location).lower().split()
+        prefix_tokens = remainder.lower().split()
+        if city_tokens and city_tokens[-1] not in prefix_tokens:
+            return "", text
+
+    return location, remainder
 
 
 def _heuristic_contact(text: str) -> dict[str, str]:

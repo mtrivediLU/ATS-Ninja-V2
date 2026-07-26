@@ -92,7 +92,7 @@ export function listKits(limit = 20, offset = 0, signal?: AbortSignal): Promise<
 }
 
 /**
- * Apply a batch of accept/reject/restore change actions to a completed v5 kit.
+ * Apply a batch of accept/reject/restore change actions to a completed v5 or v6 kit.
  * Returns the updated kit with an incremented revision. A 409 (revision
  * conflict) or 422 (irreversible change) surfaces as an {@link ApiError}.
  */

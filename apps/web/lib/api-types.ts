@@ -144,7 +144,7 @@ export interface CoverLetterArtifact {
 export interface ResumeSkillGroup { label: string; items: string[]; }
 export interface ResumeExperienceEntry { employer: string; title: string; location: string; date_range: string; bullets: string[]; }
 export interface ResumeEducationEntry { institution: string; degree: string; location: string; date_range: string; details: string[]; }
-export interface ResumeCertificationEntry { name: string; date: string; link: string; }
+export interface ResumeCertificationEntry { name: string; date: string; link: string; credential_id?: string; }
 export interface RemainingResumeSection { heading: string; lines: string[]; }
 export interface ResumeDocument {
   candidate_name: string;
@@ -419,6 +419,19 @@ export interface JobPriorityItem {
   detail: string;
 }
 
+export interface OptimizationRejection {
+  action: string;
+  reason: string;
+}
+
+export interface OptimizationTrace {
+  iterations: number;
+  score_path: number[];
+  accepted_actions: string[];
+  rejected_actions: OptimizationRejection[];
+  unreachable_terms: string[];
+}
+
 export interface MatchReport {
   original_ats_match: AtsMatchScore;
   tailored_ats_match: AtsMatchScore | null;
@@ -438,6 +451,8 @@ export interface MatchReport {
   kit_summary: string;
   quality_report: AtsQualityReportPayload;
   disclaimer: string;
+  score_basis?: string;
+  optimization_trace?: OptimizationTrace;
 }
 
 export interface StageTimings {

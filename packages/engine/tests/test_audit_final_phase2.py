@@ -211,4 +211,9 @@ def test_required_only_requirement_is_still_must_have() -> None:
     assert kit.job_fit is not None
     kubernetes = next(item for item in kit.job_fit.requirements if item.requirement.lower() == "kubernetes")
     assert kubernetes.must_have is True
-    assert kubernetes.requirement in kit.job_fit.must_have_gaps
+    # V2 distinguishes a required requirement from a genuine gap. Docker is
+    # source-backed adjacent evidence for Kubernetes, so it remains a required
+    # item but is presented as adjacent rather than overstated as a missing
+    # must-have capability.
+    assert kubernetes.requirement in kit.job_fit.adjacent_capabilities
+    assert kubernetes.requirement not in kit.job_fit.must_have_gaps

@@ -135,7 +135,7 @@ def render_resume_html(document: ResumeDocument, template: str) -> str:
 
     if document.certifications:
         items = "".join(
-            f"<li>{_e(' · '.join(part for part in (item.name, item.date, item.link) if part))}</li>"
+            f"<li>{_e(' · '.join(part for part in (item.name, item.date, item.link, _credential_id_text(item.credential_id)) if part))}</li>"
             for item in document.certifications
             if item.name
         )
@@ -149,6 +149,10 @@ def render_resume_html(document: ResumeDocument, template: str) -> str:
 
     parts.append("</article>")
     return _wrap_html(document.candidate_name or "Resume", "".join(parts))
+
+
+def _credential_id_text(credential_id: str) -> str:
+    return f"Credential ID: {credential_id}" if credential_id else ""
 
 
 def render_cover_letter_html(document: CoverLetterDocument, template: str) -> str:

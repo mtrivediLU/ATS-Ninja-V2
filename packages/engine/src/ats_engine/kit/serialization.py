@@ -7,7 +7,8 @@ from ats_engine.kit.contract import (
     APPLICATION_KIT_V2,
     APPLICATION_KIT_V3,
     APPLICATION_KIT_V4,
-    SCHEMA_VERSION,
+    APPLICATION_KIT_V5,
+    APPLICATION_KIT_V6,
     AnswerArtifact,
     AnswerItem,
     ApplicationKit,
@@ -42,6 +43,8 @@ from ats_engine.kit.contract import (
     JobPriorityItem,
     LinkedInOutreachArtifact,
     MatchReport,
+    OptimizationRejection,
+    OptimizationTrace,
     OutreachAudience,
     OutreachContextKind,
     OutreachContextRef,
@@ -204,6 +207,16 @@ def _match_report_to_dict(report: MatchReport) -> dict[str, Any]:
         "kit_summary": report.kit_summary,
         "quality_report": _quality_payload_to_dict(report.quality_report),
         "disclaimer": report.disclaimer,
+        "score_basis": report.score_basis,
+        "optimization_trace": {
+            "iterations": report.optimization_trace.iterations,
+            "score_path": list(report.optimization_trace.score_path),
+            "accepted_actions": list(report.optimization_trace.accepted_actions),
+            "rejected_actions": [
+                {"action": item.action, "reason": item.reason} for item in report.optimization_trace.rejected_actions
+            ],
+            "unreachable_terms": list(report.optimization_trace.unreachable_terms),
+        },
     }
 
 
@@ -286,7 +299,13 @@ def _resume_document_to_dict(document: ResumeDocument) -> dict[str, Any]:
             for item in document.education
         ],
         "certifications": [
-            {"name": item.name, "date": item.date, "link": item.link} for item in document.certifications
+            {
+                "name": item.name,
+                "date": item.date,
+                "link": item.link,
+                "credential_id": item.credential_id,
+            }
+            for item in document.certifications
         ],
         "remaining_sections": [
             {"heading": heading, "lines": list(lines)} for heading, lines in document.remaining_sections
@@ -638,6 +657,8 @@ def _match_report_from_dict(raw: object) -> MatchReport | None:
     if not isinstance(raw, dict):
         return None
     tailored = raw.get("tailored_ats_match")
+    trace_raw = raw.get("optimization_trace")
+    trace_data = trace_raw if isinstance(trace_raw, dict) else {}
     return MatchReport(
         original_ats_match=_ats_match_score_from_dict(raw.get("original_ats_match")),
         alignment_score=float(raw.get("alignment_score", 0.0)),
@@ -661,6 +682,18 @@ def _match_report_from_dict(raw: object) -> MatchReport | None:
         kit_summary=str(raw.get("kit_summary", "")),
         quality_report=_quality_payload_from_dict(raw.get("quality_report")),
         disclaimer=str(raw.get("disclaimer", "")),
+        score_basis=str(raw.get("score_basis", "ats_v2")),
+        optimization_trace=OptimizationTrace(
+            iterations=int(trace_data.get("iterations", 0)),
+            score_path=[float(item) for item in trace_data.get("score_path") or []],
+            accepted_actions=[str(item) for item in trace_data.get("accepted_actions") or []],
+            rejected_actions=[
+                OptimizationRejection(action=str(item.get("action", "")), reason=str(item.get("reason", "")))
+                for item in trace_data.get("rejected_actions") or []
+                if isinstance(item, dict)
+            ],
+            unreachable_terms=[str(item) for item in trace_data.get("unreachable_terms") or []],
+        ),
     )
 
 
@@ -761,7 +794,10 @@ def _resume_document_from_dict(raw: object) -> ResumeDocument | None:
         ],
         certifications=[
             ResumeCertificationEntry(
-                name=str(item.get("name", "")), date=str(item.get("date", "")), link=str(item.get("link", ""))
+                name=str(item.get("name", "")),
+                date=str(item.get("date", "")),
+                link=str(item.get("link", "")),
+                credential_id=str(item.get("credential_id", "")),
             )
             for item in raw.get("certifications") or []
             if isinstance(item, dict)
@@ -1075,8 +1111,13 @@ def is_application_kit_v4(raw: dict[str, Any]) -> bool:
 
 
 def is_application_kit_v5(raw: dict[str, Any]) -> bool:
-    """True when a persisted result is a v5 ApplicationKit (current)."""
-    return str(raw.get("schema_version", "")) == SCHEMA_VERSION
+    """True when a persisted result is a v5 ApplicationKit."""
+    return str(raw.get("schema_version", "")) == APPLICATION_KIT_V5
+
+
+def is_application_kit_v6(raw: dict[str, Any]) -> bool:
+    """True when a persisted result is the current v6 ApplicationKit."""
+    return str(raw.get("schema_version", "")) == APPLICATION_KIT_V6
 
 
 def _looks_like_phase1_result(raw: dict[str, Any]) -> bool:
@@ -1184,8 +1225,26 @@ def normalize_persisted_result(raw: dict[str, Any] | None) -> dict[str, Any] | N
     """
     if raw is None:
         return None
-    if is_application_kit_v5(raw):
+    if is_application_kit_v6(raw):
         return raw
+    if is_application_kit_v5(raw):
+        normalized = dict(raw)
+        match_report = normalized.get("match_report")
+        if isinstance(match_report, dict):
+            match_report = dict(match_report)
+            match_report.setdefault("score_basis", "legacy_v1")
+            match_report.setdefault(
+                "optimization_trace",
+                {
+                    "iterations": 0,
+                    "score_path": [],
+                    "accepted_actions": [],
+                    "rejected_actions": [],
+                    "unreachable_terms": [],
+                },
+            )
+            normalized["match_report"] = match_report
+        return normalized
     if is_application_kit_v4(raw):
         # A stored v4 kit is read as-is: it never had a match report or change
         # ledgers, and it is NOT rewritten into v5 (its schema_version stays v4).

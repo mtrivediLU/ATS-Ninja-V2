@@ -61,7 +61,8 @@ def test_heuristic_parser_attaches_bullets_with_no_space_after_marker() -> None:
     assert len(acme.bullets) == 2
     assert any("Built Python" in bullet for bullet in acme.bullets)
     assert any("Reduced processing time" in bullet for bullet in acme.bullets)
-    assert beta.company == "Beta Retail Group Ottawa, ON"
+    assert beta.company == "Beta Retail Group"
+    assert beta.location == "Ottawa, ON"
     assert len(beta.bullets) == 1
     assert "Built SQL reporting" in beta.bullets[0]
 
@@ -77,7 +78,7 @@ def test_full_pipeline_with_no_space_bullets_is_not_withheld() -> None:
     )
     assert result.validation_errors == []
     assert "Acme Corp Remote" in result.resume_text
-    assert "Beta Retail Group Ottawa, ON" in result.resume_text
+    assert "Company: Beta Retail Group | Location: Ottawa, ON" in result.resume_text
 
 
 def test_experience_entry_with_zero_bullets_is_not_dropped() -> None:
@@ -97,7 +98,7 @@ def test_experience_entry_with_zero_bullets_is_not_dropped() -> None:
     )
     assert result.validation_errors == []
     assert "Acme Corp Remote" in result.resume_text
-    assert "Beta Retail Group Ottawa, ON" in result.resume_text
+    assert "Company: Beta Retail Group | Location: Ottawa, ON" in result.resume_text
     assert "Legacy Systems Inc" in result.resume_text
 
 

@@ -97,15 +97,93 @@ def _proven(job_fit: JobFitArtifact) -> list[RequirementAssessment]:
     ]
 
 
+def _evidence_key(item: RequirementAssessment) -> tuple[tuple[str, str, str], ...]:
+    return tuple((ref.source, ref.locator, ref.excerpt) for ref in item.evidence)
+
+
+def _normalized_phrase(value: str) -> str:
+    return re.sub(r"[^a-z0-9+#.]+", " ", value.casefold()).strip()
+
+
+def _specific_group_phrase(
+    group: list[RequirementAssessment],
+) -> tuple[str, list[RequirementAssessment]]:
+    """Select one concise requirement phrase from a shared evidence span.
+
+    Tailoring v2 preserves the JD's authored order and splits compound
+    requirements into atomic terms. Outreach previously depended on the legacy
+    parser's length-sorted order, so taking the first two terms could repeat one
+    evidence span and omit a stronger, distinct proof point. Prefer the longest
+    contiguous compound that the shared source excerpt actually contains (for
+    example ``Tableau dashboards``), otherwise the most specific atomic term.
+    """
+    excerpt = _normalized_phrase(" ".join(ref.excerpt for item in group for ref in item.evidence))
+    best_phrase = ""
+    best_items: list[RequirementAssessment] = []
+    for start in range(len(group)):
+        for end in range(start + 2, len(group) + 1):
+            items = group[start:end]
+            phrase = " ".join(item.requirement.strip() for item in items)
+            phrase_key = _normalized_phrase(phrase)
+            if phrase_key and f" {phrase_key} " in f" {excerpt} ":
+                if (len(items), len(phrase)) > (len(best_items), len(best_phrase)):
+                    best_phrase = phrase
+                    best_items = items
+    if best_phrase:
+        return best_phrase, best_items
+    item = max(
+        enumerate(group),
+        key=lambda pair: (len(_normalized_phrase(pair[1].requirement)), -pair[0]),
+    )[1]
+    return item.requirement, [item]
+
+
+def _proven_highlights(proven: list[RequirementAssessment]) -> tuple[list[str], list[EvidenceRef]]:
+    """Return at most three concise highlights spanning up to two proof sources."""
+    groups: list[list[RequirementAssessment]] = []
+    group_indexes: dict[tuple[tuple[str, str, str], ...], int] = {}
+    for item in proven:
+        key = _evidence_key(item)
+        index = group_indexes.get(key)
+        if index is None:
+            group_indexes[key] = len(groups)
+            groups.append([item])
+        else:
+            groups[index].append(item)
+    if not groups:
+        return [], []
+
+    selected = groups[0][:2]
+    phrases = [item.requirement for item in selected]
+    refs = [ref for item in selected for ref in item.evidence]
+    if len(groups) > 1:
+        phrase, support = _specific_group_phrase(groups[1])
+        phrases.append(phrase)
+        refs.extend(ref for item in support for ref in item.evidence)
+    unique_refs: list[EvidenceRef] = []
+    seen_refs: set[tuple[str, str, str]] = set()
+    for ref in refs:
+        ref_key = (ref.source, ref.locator, ref.excerpt)
+        if ref_key not in seen_refs:
+            seen_refs.add(ref_key)
+            unique_refs.append(ref)
+    return list(dict.fromkeys(phrases)), unique_refs
+
+
+def _join_phrases(values: list[str]) -> str:
+    if len(values) == 1:
+        return values[0]
+    if len(values) == 2:
+        return f"{values[0]} and {values[1]}"
+    return f"{', '.join(values[:-1])}, and {values[-1]}"
+
+
 def _candidate_phrases(profile: Profile, job_fit: JobFitArtifact) -> tuple[str, str, str, list[EvidenceRef]]:
     proven = _proven(job_fit)
-    skills = [item.requirement for item in proven[:2]]
-    refs = [ref for item in proven[:2] for ref in item.evidence]
+    skills, refs = _proven_highlights(proven)
     skill_phrase = ""
-    if len(skills) >= 2:
-        skill_phrase = f"My experience includes {skills[0]} and {skills[1]}."
-    elif skills:
-        skill_phrase = f"My experience includes {skills[0]}."
+    if skills:
+        skill_phrase = f"My experience includes {_join_phrases(skills)}."
 
     identity_phrase = ""
     if profile.experiences:
@@ -139,7 +217,14 @@ def _candidate_phrases(profile: Profile, job_fit: JobFitArtifact) -> tuple[str, 
         topic = job_fit.working_knowledge[0]
         skill_phrase = f"I have working knowledge of {topic}, not production expertise."
     elif not skill_phrase and job_fit.adjacent_capabilities:
-        topic = job_fit.adjacent_capabilities[0]
+        # Legacy extraction happened to length-sort technical terms. Tailoring
+        # v2 correctly preserves JD order, so select the most specific adjacent
+        # term explicitly instead of relying on that obsolete ordering side
+        # effect. Keep one topic to avoid keyword stuffing.
+        topic = max(
+            enumerate(job_fit.adjacent_capabilities),
+            key=lambda pair: (len(_normalized_phrase(pair[1])), -pair[0]),
+        )[1]
         skill_phrase = f"My background is adjacent to {topic}, rather than direct expertise."
     return skill_phrase, identity_phrase, result_phrase, refs
 

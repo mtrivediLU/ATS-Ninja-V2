@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import pytest
+
+from ats_engine import ExtractionSuspectError
 from ats_engine.generation.pipeline import mode_from_text
 from ats_engine.models import Mode
 from ats_engine.parsing.input import extract_contacts, resolve_contacts
 from ats_engine.parsing.pdf import clean_extracted_text
-from ats_engine.parsing.resume import extract_profile
+from ats_engine.parsing.resume import build_profile, extract_profile
 from ats_engine.providers.base import LLMProvider
 from conftest import SYNTHETIC_RESUME, WRAPPED_RESUME_TEXT, sample_profile
 
@@ -44,6 +47,17 @@ def test_email_from_uploaded_resume_is_kept_not_blocked() -> None:
     assert resolved.email == "jordan.rivera@oldschool.edu"
 
 
+def test_international_contact_location_wins_over_later_skill_lines() -> None:
+    contacts = extract_contacts(
+        "Wei Chen\n"
+        "Lagos, Lagos, Nigeria\n"
+        "TECHNICAL SKILLS\n"
+        "Databases & Data Engineering: PostgreSQL, Data Warehousing, Data Modeling\n"
+    )
+
+    assert contacts.location == "Lagos, Lagos, Nigeria"
+
+
 def test_wrapped_pdf_lines_do_not_become_garbage_employers() -> None:
     profile = extract_profile(WRAPPED_RESUME_TEXT)
     companies = [experience.company for experience in profile.experiences]
@@ -55,6 +69,22 @@ def test_wrapped_pdf_lines_do_not_become_garbage_employers() -> None:
     first = profile.experiences[0]
     assert first.title == "Senior Data Engineer"
     assert any("millions of users" in bullet for bullet in first.bullets)
+
+
+def test_suspect_employer_aborts_generation_profile_build() -> None:
+    resume = (
+        "PROFESSIONAL EXPERIENCE\n"
+        "Cloud SQL Auth Proxy, configuring secure communication between services.\n"
+        "Software Engineer 2022 - 2024\n"
+        "- Built Python tools.\n"
+        "TECHNICAL SKILLS\n"
+        "Python\n"
+    )
+
+    diagnostic = extract_profile(resume)
+    assert diagnostic.extraction_warnings
+    with pytest.raises(ExtractionSuspectError, match="^EXTRACTION_SUSPECT$"):
+        build_profile(resume)
 
 
 def test_pdf_extractor_merges_wrapped_continuation_lines() -> None:
@@ -72,6 +102,65 @@ def test_heuristic_extract_keeps_complete_synthetic_profile() -> None:
     assert len(profile.education) == 2
     assert len(profile.certifications) == 4
     assert "power bi" in profile.tier_a or "power bi" in profile.tier_b or "power bi" in profile.tier_c
+
+
+def test_resume_parser_preserves_source_skill_groups_credential_ids_and_remote_location() -> None:
+    resume = """
+TECHNICAL SKILLS
+Languages: Python, C, C++.
+BI & Analytics: Power BI, Power Query
+PROFESSIONAL EXPERIENCE
+Flosonics Medical Toronto, ON (Remote)
+IT Specialist Jan 2020 - Present
+- Integrated services with Google
+Cloud SQL Auth Proxy, configuring secure communication between services.
+CERTIFICATIONS
+Microsoft Certified: Power BI Data Analyst Associate (PL-300) | Credential ID: ABC-123 | 2025
+"""
+
+    profile = extract_profile(resume)
+
+    assert profile.source_skill_groups == [
+        ("Languages", ["Python", "C", "C++"]),
+        ("BI & Analytics", ["Power BI", "Power Query"]),
+    ]
+    assert profile.experiences[0].company == "Flosonics Medical"
+    assert profile.experiences[0].location == "Toronto, ON (Remote)"
+    assert profile.experiences[0].bullets == [
+        "Integrated services with Google Cloud SQL Auth Proxy, configuring secure communication between services."
+    ]
+    certification = profile.certifications[0]
+    assert certification.name.endswith("(PL-300)")
+    assert certification.credential_id == "ABC-123"
+
+
+def test_source_skill_group_parser_keeps_one_skill_per_line_lists() -> None:
+    profile = extract_profile("TECHNICAL SKILLS\nPython\nSQL\nPower BI\n")
+
+    assert profile.source_skill_groups == [("Skills", ["Python", "SQL", "Power BI"])]
+
+
+def test_llm_cannot_replace_a_source_credential_id() -> None:
+    class FabricatedCredentialProvider(LLMProvider):
+        @property
+        def identity(self) -> str:
+            return "fabricated-credential"
+
+        def complete(self, prompt: str) -> str:
+            return (
+                '{"contact": {}, "experiences": [], "education": [], "certifications": '
+                '[{"name": "Microsoft Certified: Power BI Data Analyst Associate (PL-300)", '
+                '"date": "2025", "link": "", "credential_id": "FABRICATED"}], '
+                '"skills_listed": ["Python"], "summary_text": ""}'
+            )
+
+    profile = extract_profile(
+        "TECHNICAL SKILLS\nPython\nCERTIFICATIONS\n"
+        "Microsoft Certified: Power BI Data Analyst Associate (PL-300) | Credential ID: SOURCE-123 | 2025\n",
+        provider=FabricatedCredentialProvider(),
+    )
+
+    assert profile.certifications[0].credential_id == "SOURCE-123"
 
 
 def test_near_empty_llm_resume_parse_falls_back_to_complete_heuristic() -> None:

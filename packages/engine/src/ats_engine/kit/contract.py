@@ -9,7 +9,7 @@ This module is the engine's *public, persistable* representation of a generated
 application kit. It is deliberately:
 
 - **Versioned.** ``SCHEMA_VERSION`` is an explicit, human-readable string
-  (currently ``application-kit/v4``) so a stored kit always declares which contract it was
+  (currently ``application-kit/v6``) so a stored kit always declares which contract it was
   written under. A bare integer with ambiguous meaning is intentionally avoided.
 - **Truthful by construction.** Every candidate-specific claim the AI produced is
   represented as a :class:`ClaimRecord` with an explicit :class:`ClaimStatus` and
@@ -34,13 +34,15 @@ APPLICATION_KIT_V1 = "application-kit/v1"
 APPLICATION_KIT_V2 = "application-kit/v2"
 APPLICATION_KIT_V3 = "application-kit/v3"
 APPLICATION_KIT_V4 = "application-kit/v4"
-SCHEMA_VERSION = "application-kit/v5"
+APPLICATION_KIT_V5 = "application-kit/v5"
+APPLICATION_KIT_V6 = "application-kit/v6"
+SCHEMA_VERSION = APPLICATION_KIT_V6
 
 # The orchestration contract version identifies the grounded-generation behavior
 # (claim extraction + repair/rejection policy). It participates in cache identity
 # (see ADR-0013) so a change in grounding behavior never reuses prose produced by
-# an older contract. The v5 bump invalidates any cached v4 orchestration output.
-ORCHESTRATION_VERSION = "grounded-orchestration/v5"
+# an older contract. The v6 bump invalidates any cached v5 orchestration output.
+ORCHESTRATION_VERSION = "grounded-orchestration/v6"
 
 # Bound every evidence excerpt so the trace never becomes a second copy of the
 # candidate's resume (privacy: see ADR-0008).
@@ -376,6 +378,25 @@ class JobPriorityItem:
 
 
 @dataclass(slots=True)
+class OptimizationRejection:
+    """One planner action that an optimizer gate declined, with its reason."""
+
+    action: str
+    reason: str
+
+
+@dataclass(slots=True)
+class OptimizationTrace:
+    """Bounded, persistable trace of deterministic Tailoring Engine v2 work."""
+
+    iterations: int = 0
+    score_path: list[float] = field(default_factory=list)
+    accepted_actions: list[str] = field(default_factory=list)
+    rejected_actions: list[OptimizationRejection] = field(default_factory=list)
+    unreachable_terms: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class MatchReport:
     """The v5 honest-scoring report: three distinct scores plus diagnostics.
 
@@ -405,6 +426,8 @@ class MatchReport:
     kit_summary: str = ""
     quality_report: AtsQualityReportPayload = field(default_factory=AtsQualityReportPayload)
     disclaimer: str = ""
+    score_basis: str = "ats_v2"
+    optimization_trace: OptimizationTrace = field(default_factory=OptimizationTrace)
 
 
 @dataclass(slots=True)
@@ -487,6 +510,7 @@ class ResumeCertificationEntry:
     name: str
     date: str = ""
     link: str = ""
+    credential_id: str = ""
 
 
 @dataclass(slots=True)

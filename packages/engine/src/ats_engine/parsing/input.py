@@ -202,12 +202,29 @@ _PROVINCES_AND_COUNTRIES = {
     "united states",
     "usa",
     "india",
+    "nigeria",
 }
 
 
 def _looks_like_resume_location(line: str) -> bool:
+    # A location is a compact contact value, never a labelled skills row.  In
+    # particular, a line such as ``Databases & Data Engineering: PostgreSQL,
+    # ...`` can otherwise satisfy the permissive city/region fallback below
+    # and leak technical keywords into the rendered contact block (and, in
+    # turn, into quality checks).  Reject labelled/long prose before testing
+    # geographic shapes.
+    if ":" in line or len(line) > 80:
+        return False
     lowered = line.lower()
     if any(mode in lowered for mode in ["remote", "hybrid", "on-site", "onsite"]):
+        return True
+    # International contact lines often use ``City, Region, Country`` rather
+    # than a North-American province abbreviation.  Accept that concise shape
+    # without relying on a closed country list (for example, Lagos, Lagos,
+    # Nigeria), while keeping the labelled-skills rejection above.
+    location_parts = [part.strip() for part in line.rstrip(".").split(",")]
+    compact_part = re.compile(r"[A-Z][A-Za-z.'-]*(?:\s+[A-Z][A-Za-z.'-]*){0,3}$")
+    if len(location_parts) == 3 and all(compact_part.fullmatch(part) for part in location_parts):
         return True
     if any(place in lowered for place in _PROVINCES_AND_COUNTRIES):
         return bool(re.search(r"\b[A-Z][A-Za-z.'-]+,\s*[A-Z][A-Za-z.'-]+", line))

@@ -86,7 +86,9 @@ def render_resume_docx(document: ResumeDocument, template: str) -> bytes:
 
     if document.certifications:
         certification_items = [
-            " · ".join(part for part in (item.name, item.date, item.link) if part)
+            " · ".join(
+                part for part in (item.name, item.date, item.link, _credential_id_text(item.credential_id)) if part
+            )
             for item in document.certifications
             if item.name
         ]
@@ -103,6 +105,10 @@ def render_resume_docx(document: ResumeDocument, template: str) -> bytes:
                 _add_paragraph(doc, line)
 
     return _to_bytes(doc)
+
+
+def _credential_id_text(credential_id: str) -> str:
+    return f"Credential ID: {credential_id}" if credential_id else ""
 
 
 def render_cover_letter_docx(document: CoverLetterDocument, template: str) -> bytes:

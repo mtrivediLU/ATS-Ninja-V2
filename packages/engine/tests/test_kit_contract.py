@@ -15,6 +15,8 @@ from ats_engine import (
     is_application_kit_v2,
     is_application_kit_v3,
     is_application_kit_v4,
+    is_application_kit_v5,
+    is_application_kit_v6,
     normalize_persisted_result,
 )
 from ats_engine.kit.serialization import LEGACY_SCHEMA_VERSION, UNKNOWN_SCHEMA_VERSION
@@ -40,7 +42,7 @@ def _kit(mode: Mode = Mode.RESUME_AND_COVER) -> ApplicationKit:
 
 
 def test_schema_version_is_explicit_and_versioned() -> None:
-    assert SCHEMA_VERSION == "application-kit/v5"
+    assert SCHEMA_VERSION == "application-kit/v6"
     kit = _kit()
     assert kit.schema_version == SCHEMA_VERSION
     assert kit.engine_version  # populated
@@ -196,11 +198,25 @@ PHASE1_RESULT = {
 }
 
 
-def test_v5_result_is_detected_and_passed_through() -> None:
+def test_v6_result_is_detected_and_passed_through() -> None:
     kit = _kit()
     data = application_kit_to_dict(kit)
-    assert data["schema_version"] == "application-kit/v5"
+    assert data["schema_version"] == "application-kit/v6"
+    assert is_application_kit_v6(data)
     assert normalize_persisted_result(data) == data
+
+
+def test_v5_result_remains_readable_with_v6_defaults() -> None:
+    data = application_kit_to_dict(_kit())
+    data["schema_version"] = "application-kit/v5"
+    if isinstance(data.get("match_report"), dict):
+        data["match_report"].pop("score_basis", None)
+        data["match_report"].pop("optimization_trace", None)
+    assert is_application_kit_v5(data)
+    normalized = normalize_persisted_result(data)
+    assert normalized is not None
+    assert normalized["schema_version"] == "application-kit/v5"
+    assert normalized["match_report"]["score_basis"] == "legacy_v1"
 
 
 def test_v4_result_remains_readable_and_is_not_rewritten() -> None:

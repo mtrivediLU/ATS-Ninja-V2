@@ -51,7 +51,7 @@ async def pg_sessionmaker(pg_engine: AsyncEngine) -> async_sessionmaker[AsyncSes
     return create_sessionmaker(pg_engine)
 
 
-async def _seed_completed_v5_kit(sessionmaker: async_sessionmaker[AsyncSession]) -> uuid.UUID:
+async def _seed_completed_kit(sessionmaker: async_sessionmaker[AsyncSession]) -> uuid.UUID:
     kit_result = generate_application_kit(
         resume_text=SAMPLE_RESUME,
         job_description=SAMPLE_JD,
@@ -89,7 +89,7 @@ async def _apply(sessionmaker: async_sessionmaker[AsyncSession], kit_id: uuid.UU
 
 
 async def test_concurrent_change_actions_are_atomic(pg_sessionmaker: async_sessionmaker[AsyncSession]) -> None:
-    kit_id = await _seed_completed_v5_kit(pg_sessionmaker)
+    kit_id = await _seed_completed_kit(pg_sessionmaker)
 
     # Two independent sessions both read revision 0 and try to advance it.
     results = await asyncio.gather(

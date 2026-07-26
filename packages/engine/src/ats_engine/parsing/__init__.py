@@ -24,6 +24,7 @@ from ats_engine.parsing.job_description import parse_jd
 from ats_engine.parsing.line_refs import number_lines, render_numbered_lines, resolve_line_numbers
 from ats_engine.parsing.pdf import clean_extracted_text, extract_text_from_pdf
 from ats_engine.parsing.resume import (
+    ExtractionSuspectError,
     build_profile,
     empty_profile,
     extract_profile,
@@ -33,6 +34,7 @@ from ats_engine.parsing.resume import (
 
 __all__ = [
     "build_profile",
+    "ExtractionSuspectError",
     "ResumeExtraction",
     "ResumeExtractionError",
     "clean_extracted_text",

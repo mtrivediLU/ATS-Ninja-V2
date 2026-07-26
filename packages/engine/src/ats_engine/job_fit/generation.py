@@ -22,6 +22,7 @@ from ats_engine.kit.grounding import EvidenceContext, GroundingOutcome, ground_t
 from ats_engine.models import EvidenceItem, JDProfile, Profile, ResumePlan
 from ats_engine.providers.base import LLMProvider, generate_text
 from ats_engine.scoring import calculate_ats_score
+from ats_engine.scoring.ats_v2 import score_resume_v2
 
 _UNSUITABLE_STANDALONE_REQUIREMENTS = frozenset(
     {"ability", "development", "experience", "knowledge", "power", "production", "proficiency"}
@@ -205,8 +206,16 @@ def build_job_fit_artifact(
     assessments = [_assessment(item, index, profile) for index, item in enumerate(fit_evidence, start=1)]
     score = requirement_coverage_score(fit_evidence)
     band = fit_band_for_score(score)
-    ats = calculate_ats_score(resume_text, job_description)
-    ats_score = float(ats["score"]) if isinstance(ats["score"], (int, float)) else 0.0
+    if plan.requirements and plan.evidence_links:
+        ats_score = score_resume_v2(
+            resume_text,
+            plan.requirements,
+            plan.evidence_links,
+            source_resume_text=resume_text,
+        ).score
+    else:
+        ats = calculate_ats_score(resume_text, job_description)
+        ats_score = float(ats["score"]) if isinstance(ats["score"], (int, float)) else 0.0
     fallback = _deterministic_summary(score, band.value, assessments)
     candidate = generate_text(provider, _prompt(score, band.value, assessments, fallback))
     raw_summary = candidate or fallback

@@ -140,6 +140,16 @@ def extract_resume_document(
 
 
 _BULLET_MARKER_NO_GAP = re.compile(r"^(\s*[\-*•])([A-Za-z])", flags=re.MULTILINE)
+# A leading numeric hyphen (``-5%``) is a value, not a bullet marker.  Treating
+# it as a bullet can incorrectly merge the following physical line into a
+# numeric statement during PDF cleanup.
+_WRAP_BULLET = re.compile(r"^\s*[\-*•]\s*(?!\d)\S")
+_WRAP_SECTION = re.compile(
+    r"^(?:professional\s+)?(?:summary|experience|professional experience|work experience|education|"
+    r"certifications?|technical skills|skills|projects?|publications?)\s*:?$",
+    flags=re.IGNORECASE,
+)
+_WRAP_DATE = re.compile(r"\b(?:19|20)\d{2}\b")
 
 
 def normalize_extracted_text(text: str) -> str:
@@ -157,7 +167,39 @@ def normalize_extracted_text(text: str) -> str:
     # detection sees a normal marker; letters only, so numeric leads like
     # "-5%" are left untouched.
     normalized = _BULLET_MARKER_NO_GAP.sub(r"\1 \2", normalized)
+    normalized = _join_wrapped_bullet_lines(normalized)
     return re.sub(r"\n{4,}", "\n\n\n", normalized).strip()
+
+
+def _join_wrapped_bullet_lines(text: str) -> str:
+    """Join extraction-only continuations back into their preceding bullet.
+
+    PDF engines commonly emit an orphan line for a visually wrapped bullet. A
+    continuation is safe to join only while the preceding line is a bullet,
+    does not already end a sentence, and the next line is neither a bullet,
+    recognised section heading, nor date-bearing header. This intentionally
+    preserves ordinary resume line structure while keeping fragments such as
+    ``Cloud SQL Auth Proxy, configuring ...`` attached to their source bullet.
+    """
+    lines = text.split("\n")
+    joined: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        previous = joined[-1].strip() if joined else ""
+        can_join = (
+            bool(previous)
+            and bool(stripped)
+            and _WRAP_BULLET.match(previous) is not None
+            and _WRAP_BULLET.match(stripped) is None
+            and _WRAP_SECTION.match(stripped) is None
+            and _WRAP_DATE.search(stripped) is None
+            and previous[-1:] not in {".", "!", "?", ":"}
+        )
+        if can_join:
+            joined[-1] = f"{joined[-1].rstrip()} {stripped}"
+        else:
+            joined.append(line)
+    return "\n".join(joined)
 
 
 def _validate_filename(filename: str | None) -> str:
@@ -171,7 +213,7 @@ def _validate_filename(filename: str | None) -> str:
     return f"{base}.{extension.lower()}"
 
 
-_LINE_BREAK_HYPHEN = re.compile(r"([A-Za-z])-\n([A-Za-z])")
+_LINE_BREAK_HYPHEN = re.compile(r"([A-Za-z])-\s*\n\s*([A-Za-z])")
 
 
 def _repair_line_break_hyphens(text: str) -> str:

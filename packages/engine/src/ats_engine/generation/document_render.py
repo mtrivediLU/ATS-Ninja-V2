@@ -73,6 +73,8 @@ def render_resume_text_from_document(document: ResumeDocument) -> str:
                 parts.append(cert.date)
             if cert.link:
                 parts.append(cert.link)
+            if cert.credential_id:
+                parts.append(f"Credential ID: {cert.credential_id}")
             lines.append("- " + " | ".join(parts))
 
     return normalize_document_text("\n".join(lines).strip())

@@ -1,0 +1,19 @@
+Chiefs of Ontario
+IT Specialist – Economic Development
+
+The Chiefs of Ontario is seeking an IT Specialist to support Economic Development programs.
+
+Responsibilities:
+- Develop Power BI data models using data modelling practices (DAX, Power Query, star schema design) and manage Power BI Service workspaces and refresh cycles.
+- Build multi-source data pipelines from Excel datasets and ESRI ArcGIS visuals with geocoding.
+- Support data governance, audit logging, and access controls for reporting systems.
+
+Required Qualifications:
+- Experience with Power BI Desktop, Power BI Service, DAX, Power Query, M-Files, document management, and OCAP.
+- Knowledge of cybersecurity, audit logging, access controls, and systems administration.
+
+Preferred Qualifications:
+- SharePoint experience and strong stakeholder communication are assets.
+
+Salary range: $80,000 to $95,000. We are an equal opportunity employer.
+Apply through the COO careers portal. PM-V&C, plan B, C-suite technical support systems information related environment.

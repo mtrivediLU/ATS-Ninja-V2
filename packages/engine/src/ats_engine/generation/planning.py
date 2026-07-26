@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import cast
 
 from ats_engine.evidence.matrix import build_evidence_matrix, interview_probability
+from ats_engine.evidence.resolver import resolve_requirements
 from ats_engine.generation.prompts import PROHIBITED_INVENTION_CLAUSE
 from ats_engine.models import (
     AnswerPlan,
@@ -20,6 +21,7 @@ from ats_engine.models import (
 )
 from ats_engine.parsing.resume import find_metrics, term_in_text
 from ats_engine.providers.base import LLMProvider, generate_json, generate_text, run_concurrently
+from ats_engine.validation.fidelity import bullet_fidelity_errors
 from ats_engine.validation.naturalness import (
     bullet_safety_errors,
     normalized_bullet_key,
@@ -53,7 +55,10 @@ def build_resume_plan(
     the same provider for both if there is no need to distinguish them.
     """
     batch_provider = batch_provider if batch_provider is not None else provider
-    evidence = build_evidence_matrix(jd_profile, profile)
+    evidence_links = (
+        resolve_requirements(jd_profile.requirements, profile, profile.raw_markdown) if jd_profile.requirements else []
+    )
+    evidence = build_evidence_matrix(jd_profile, profile, links=evidence_links)
     role_identity = choose_role_identity(jd_profile, profile)
     top_keywords = _top_keywords(evidence)
     years_span = _career_years(profile.experiences)
@@ -96,6 +101,8 @@ def build_resume_plan(
         interview_probability=probability,
         analysis=analysis,
         plan_decisions=plan_decisions,
+        requirements=list(jd_profile.requirements),
+        evidence_links=evidence_links,
     )
 
 
@@ -492,8 +499,13 @@ def _is_real_target_title(title: str) -> bool:
 # hardcoded "Power Platform resume" layout, it is the same ordering rule
 # applied to whatever categories this JD and candidate actually produced.
 _CATEGORY_ORDER = [
+    "bi_analytics",
+    "data_engineering",
+    "geospatial",
+    "security_governance",
     "platform",
     "web development",
+    "web_development",
     "integration",
     "cloud",
     "database",
@@ -504,10 +516,21 @@ _CATEGORY_ORDER = [
     "operations and support",
     "documentation",
     "communication",
+    "productivity",
+    "domain",
+    "testing_quality",
+    "operations_support",
+    "business_analysis",
+    "source_control",
 ]
 _CATEGORY_LABELS = {
+    "bi_analytics": "Business Intelligence & Analytics",
+    "data_engineering": "Data Engineering",
+    "geospatial": "Geospatial & Mapping",
+    "security_governance": "Security & Data Governance",
     "platform": "Platform & Automation",
     "web development": "Web Development",
+    "web_development": "Web Development",
     "integration": "APIs & Integrations",
     "cloud": "Cloud & DevOps",
     "database": "Databases & Data",
@@ -518,6 +541,12 @@ _CATEGORY_LABELS = {
     "operations and support": "Operations & Support",
     "documentation": "Documentation",
     "communication": "Communication",
+    "productivity": "Productivity & Collaboration",
+    "domain": "Domain Knowledge",
+    "testing_quality": "Testing & Quality",
+    "operations_support": "Operations & Support",
+    "business_analysis": "Business Analysis",
+    "source_control": "Source Control",
 }
 
 
@@ -598,7 +627,10 @@ def _select_experience(
         #     prose is handled separately, after rewriting, without ever reducing
         #     the source bullet count (see `_reject_generated_duplicates`).
         source_bullets = list(experience.bullets)
-        chosen: list[str] = [soften_banned_style(bullet) for bullet in source_bullets]
+        # Candidate-authored bullets are evidence, not generated prose.  Their
+        # wording must survive exactly unless an explicit, ledgered rewrite is
+        # accepted after fact-retention validation.
+        chosen: list[str] = list(source_bullets)
         # Keep the entry even with zero bullets (company/title/dates only):
         # dropping it here would silently discard a verified source-profile entry
         # that `validate_completeness` still counts. `source_bullets` are the raw
@@ -734,7 +766,12 @@ def _rewrite_bullets_batch(
     return rewritten
 
 
-def _bullet_is_valid(candidate: str, original: str, known_skills: list[str]) -> bool:
+def _bullet_is_valid(
+    candidate: str,
+    original: str,
+    known_skills: list[str],
+    allowed_new_skills: list[str] | None = None,
+) -> bool:
     if not candidate or len(candidate.split()) > 45:
         return False
     if not _style_ok(candidate):
@@ -743,7 +780,16 @@ def _bullet_is_valid(candidate: str, original: str, known_skills: list[str]) -> 
     found = {metric.lower() for metric in find_metrics(candidate)}
     if not found.issubset(allowed):
         return False
-    if _introduces_new_skill(candidate, original, known_skills):
+    # Fact retention is deliberately bidirectional.  The older one-way check
+    # blocked invented metrics but still allowed a rewrite to discard "team of
+    # four engineers" or "100% uptime".  Reuse the shared fidelity gate so
+    # named entities, team facts, and explicitly delimited outcome clauses use
+    # the same semantics here as the final rendered-resume validation.
+    if not allowed.issubset(found):
+        return False
+    if bullet_fidelity_errors(original, candidate):
+        return False
+    if _introduces_new_skill(candidate, original, known_skills, allowed_new_skills):
         return False
     # Deterministic naturalness/anti-stuffing gate: rejects first-person, ownership
     # or seniority escalation, awkward length, and new tools/metrics not in the
@@ -752,12 +798,28 @@ def _bullet_is_valid(candidate: str, original: str, known_skills: list[str]) -> 
     return not bullet_safety_errors(candidate, original, known_skills)
 
 
-def _introduces_new_skill(rewritten: str, original: str, known_skills: list[str]) -> bool:
-    """True when the rewrite names a known tool/skill that the original bullet did not."""
+def _introduces_new_skill(
+    rewritten: str,
+    original: str,
+    known_skills: list[str],
+    allowed_new_skills: list[str] | None = None,
+) -> bool:
+    """True when a rewrite names an unsupported skill absent from its source.
+
+    V2 placement actions may introduce a term into another bullet only when a
+    resolver link provides tier-A provenance and the planner passed it in
+    ``allowed_new_skills``.  The default remains conservative for all legacy
+    callers.
+    """
     original_lower = original.lower()
     rewritten_lower = rewritten.lower()
+    allowed = {skill.casefold().strip() for skill in allowed_new_skills or []}
     for skill in known_skills:
-        if term_in_text(skill, rewritten_lower) and not term_in_text(skill, original_lower):
+        if (
+            term_in_text(skill, rewritten_lower)
+            and not term_in_text(skill, original_lower)
+            and skill.casefold().strip() not in allowed
+        ):
             return True
     return False
 

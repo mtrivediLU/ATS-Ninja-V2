@@ -3,8 +3,9 @@ from __future__ import annotations
 import re
 
 from ats_engine.evidence.adjacency import find_category
+from ats_engine.evidence.resolver import resolve_requirements
 from ats_engine.evidence.transfer import transfer_match
-from ats_engine.models import EvidenceItem, JDProfile, Profile
+from ats_engine.models import EvidenceItem, EvidenceLink, JDProfile, Profile
 from ats_engine.parsing.resume import term_in_text_affirmative
 
 """The evidence matrix and gap ladder.
@@ -24,7 +25,12 @@ over-claim a keyword beyond its evidence.
 """
 
 
-def build_evidence_matrix(jd_profile: JDProfile, profile: Profile) -> list[EvidenceItem]:
+def build_evidence_matrix(
+    jd_profile: JDProfile,
+    profile: Profile,
+    *,
+    links: list[EvidenceLink] | None = None,
+) -> list[EvidenceItem]:
     """Build the keyword evidence matrix for required and preferred JD keywords.
 
     A keyword named only in the day-to-day responsibilities (e.g. "perform
@@ -41,6 +47,10 @@ def build_evidence_matrix(jd_profile: JDProfile, profile: Profile) -> list[Evide
     JD-segmentation note) without responsibilities noise ever overriding an
     explicit required/preferred split.
     """
+    if jd_profile.requirements:
+        resolved_links = links or resolve_requirements(jd_profile.requirements, profile, profile.raw_markdown)
+        return [_evidence_item_from_link(link) for link in resolved_links]
+
     # Plain substring matching against each line pool, no implicit fallback:
     # a JD with no "Preferred"/"Nice-to-have" section at all (the common
     # case) must yield a genuinely empty preferred list, not a synthetic
@@ -72,6 +82,50 @@ def build_evidence_matrix(jd_profile: JDProfile, profile: Profile) -> list[Evide
         if keyword.lower() not in {item.keyword.lower() for item in matrix}:
             matrix.append(classify_keyword(keyword, "preferred", profile))
     return matrix
+
+
+def _evidence_item_from_link(link: object) -> EvidenceItem:
+    """Adapt a v2 resolver link to the durable legacy evidence-matrix shape."""
+    from ats_engine.models import EvidenceLink
+
+    assert isinstance(link, EvidenceLink)
+    requirement = link.requirement
+    tier = link.tier
+    # Existing job-fit and presentation callers only understand A/B/C,
+    # adjacency, and missing. Certification implications remain available on
+    # ResumePlan.evidence_links while projecting to C-equivalent here.
+    legacy_tier = "C" if tier == "cert" else tier
+    required_or_preferred = "preferred" if requirement.section == "preferred" else "required"
+    if legacy_tier == "A":
+        allowed = "summary, skills, supported bullets"
+        strength = "strong"
+        planned = "summary, skills, experience bullet"
+    elif legacy_tier == "B":
+        allowed = "summary and skills"
+        strength = "medium"
+        planned = "summary and skills"
+    elif legacy_tier == "C":
+        allowed = "skills only; certification-backed terms must name the certification"
+        strength = "weak" if tier != "cert" else "medium"
+        planned = "working knowledge or certified skills"
+    elif legacy_tier == "adjacency":
+        allowed = "adjacency phrasing naming the real tool"
+        strength = "weak"
+        planned = "analysis or adjacent capability phrasing"
+    else:
+        allowed = "do not claim"
+        strength = "missing"
+        planned = "analysis snapshot only"
+    return EvidenceItem(
+        keyword=requirement.surface or requirement.canonical,
+        required_or_preferred=required_or_preferred,
+        evidence_tier=legacy_tier,
+        real_evidence=link.resume_span,
+        allowed_placement=allowed,
+        strength=strength,
+        planned_placement=planned,
+        category=requirement.category,
+    )
 
 
 def classify_keyword(keyword: str, required_or_preferred: str, profile: Profile) -> EvidenceItem:
