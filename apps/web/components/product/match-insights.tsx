@@ -4,7 +4,7 @@ import type { AtsMatchScore, MatchReport } from "@/lib/api-types";
 import { Badge, Banner, Card } from "@/components/ui/primitives";
 
 /**
- * The v5 honest-scoring panel. Renders the three deliberately distinct scores
+ * The versioned honest-scoring panel. Renders the three deliberately distinct scores
  * (original keyword match, tailored keyword match, evidence-based alignment),
  * the fit category, confidence with reasons, strengths, gaps, and the estimate
  * disclaimer. Never a single unexplained "ATS score"; never a percentage-shaped

@@ -33,7 +33,7 @@ async def test_submit_kit_runs_lifecycle_to_completion(client: httpx.AsyncClient
     assert kit["status"] == "completed"
     result = kit["result"]
     # The versioned ApplicationKit contract with typed artifacts.
-    assert result["schema_version"] == "application-kit/v5"
+    assert result["schema_version"] == "application-kit/v6"
     assert result["job_fit"] is not None
     assert result["job_fit"]["requirements"]
     assert result["job_fit"]["consistency"]["passed"] is True
@@ -103,8 +103,11 @@ async def test_completed_kit_with_legacy_phase1_result_is_served(
 async def test_older_v5_kit_missing_job_priorities_defaults_to_empty_list(
     client: httpx.AsyncClient, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
-    """A v5 kit persisted before ``job_priorities`` existed must still serve
-    (Pydantic backfills the field's default), never a 500."""
+    """A pre-v6 v5 kit missing additive match-report fields still serves.
+
+    The persistence boundary adds v6's trace fields and Pydantic backfills the
+    existing optional response fields, never returning a 500 for old kits.
+    """
     from app.models import Kit
 
     response = await client.post(
@@ -122,14 +125,28 @@ async def test_older_v5_kit_missing_job_priorities_defaults_to_empty_list(
         stripped_result = dict(kit.result)
         stripped_match_report = dict(stripped_result["match_report"])
         del stripped_match_report["job_priorities"]
+        stripped_match_report.pop("score_basis", None)
+        stripped_match_report.pop("optimization_trace", None)
         stripped_result["match_report"] = stripped_match_report
+        stripped_result["schema_version"] = "application-kit/v5"
         kit.result = stripped_result  # whole-object reassignment for JSON dirty-tracking
         session.add(kit)
         await session.commit()
 
     refetched = await client.get(f"/api/v1/kits/{kit_id}")
     assert refetched.status_code == 200
-    assert refetched.json()["result"]["match_report"]["job_priorities"] == []
+    result = refetched.json()["result"]
+    assert result["schema_version"] == "application-kit/v5"
+    report = result["match_report"]
+    assert report["job_priorities"] == []
+    assert report["score_basis"] == "legacy_v1"
+    assert report["optimization_trace"] == {
+        "iterations": 0,
+        "score_path": [],
+        "accepted_actions": [],
+        "rejected_actions": [],
+        "unreachable_terms": [],
+    }
 
 
 async def test_submit_kit_rejects_empty_inputs(client: httpx.AsyncClient) -> None:
@@ -146,6 +163,19 @@ async def test_openapi_exposes_product_intelligence_requests_and_typed_responses
     assert create_properties["include_interview_prep"]["default"] is True
     assert create_properties["include_linkedin_outreach"]["default"] is True
     assert "outreach_context" in create_properties
+    assert {"OptimizationTraceResponse", "OptimizationRejectionResponse"} <= schemas.keys()
+    match_report_properties = schemas["MatchReportResponse"]["properties"]
+    assert {"score_basis", "optimization_trace"} <= match_report_properties.keys()
+    trace_properties = schemas["OptimizationTraceResponse"]["properties"]
+    assert {
+        "iterations",
+        "score_path",
+        "accepted_actions",
+        "rejected_actions",
+        "unreachable_terms",
+    } <= trace_properties.keys()
+    certification_properties = schemas["ResumeCertificationEntryResponse"]["properties"]
+    assert "credential_id" in certification_properties
     assert "InterviewPrepArtifactResponse" in schemas
     prep_properties = schemas["InterviewPrepArtifactResponse"]["properties"]
     assert {
@@ -244,7 +274,7 @@ async def test_submit_kit_can_persistently_disable_job_fit(client: httpx.AsyncCl
     fetched = await client.get(f"/api/v1/kits/{response.json()['id']}")
     body = fetched.json()
     assert body["include_job_fit"] is False
-    assert body["result"]["schema_version"] == "application-kit/v5"
+    assert body["result"]["schema_version"] == "application-kit/v6"
     assert body["result"]["job_fit"] is None
     assert body["include_interview_prep"] is True
     assert body["result"]["interview_prep"] is not None
@@ -385,7 +415,7 @@ async def test_process_kit_completes_and_persists_result(
         assert done is not None
         assert done.status == KitStatus.COMPLETED
         assert done.result is not None
-        assert done.result["schema_version"] == "application-kit/v5"
+        assert done.result["schema_version"] == "application-kit/v6"
         assert done.result["job_fit"] is not None
         assert done.result["interview_prep"] is not None
         assert done.result["linkedin_outreach"] is not None
@@ -531,7 +561,7 @@ async def test_mark_kit_failed_is_noop_on_completed_kit(
 
 
 # --------------------------------------------------------------------------- #
-# ApplicationKit v5: match report, change actions, lineage
+# ApplicationKit v6: match report, optimization trace, change actions, lineage
 # --------------------------------------------------------------------------- #
 async def _create_completed_kit(client: httpx.AsyncClient) -> dict:
     response = await client.post(
@@ -551,16 +581,18 @@ async def _create_completed_kit(client: httpx.AsyncClient) -> dict:
     return body
 
 
-async def test_new_kit_is_v5_with_match_report_and_revision(client: httpx.AsyncClient) -> None:
+async def test_new_kit_is_v6_with_match_report_and_revision(client: httpx.AsyncClient) -> None:
     body = await _create_completed_kit(client)
     result = body["result"]
-    assert result["schema_version"] == "application-kit/v5"
+    assert result["schema_version"] == "application-kit/v6"
     assert result["match_report"] is not None
     report = result["match_report"]
     assert 0 <= report["original_ats_match"]["score"] <= 100
     assert 0 <= report["alignment_score"] <= 100
     assert report["fit_category"] in {"strong_fit", "good_fit", "partial_fit", "stretch_role", "low_alignment"}
     assert report["disclaimer"]
+    assert report["score_basis"] == "ats_v2"
+    assert isinstance(report["optimization_trace"]["score_path"], list)
     assert body["revision"] == 0
     assert body["parent_kit_id"] is None
     assert "stages_ms" in result["stage_timings"]

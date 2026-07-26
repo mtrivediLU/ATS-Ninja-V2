@@ -4,7 +4,7 @@ import test from "node:test";
 
 const read = (rel) => readFile(new URL(rel, import.meta.url), "utf8");
 
-test("api types define the v5 match report, change ledger, and lineage fields", async () => {
+test("api types define versioned match-report, optimization-trace, change-ledger, and lineage fields", async () => {
   const source = await read("../lib/api-types.ts");
   assert.match(source, /export interface MatchReport/);
   assert.match(source, /original_ats_match: AtsMatchScore/);
@@ -14,6 +14,9 @@ test("api types define the v5 match report, change ledger, and lineage fields", 
   assert.match(source, /change_ledger: ChangeRecord\[\]/);
   assert.match(source, /revision: number/);
   assert.match(source, /parent_kit_id: string \| null/);
+  assert.match(source, /export interface OptimizationTrace/);
+  assert.match(source, /optimization_trace\?: OptimizationTrace/);
+  assert.match(source, /score_basis\?: string/);
 });
 
 test("match insights presents three distinct, labelled scores with a11y and a disclaimer", async () => {
@@ -76,7 +79,7 @@ test("scoring page explains the three scores and irreversible grounding removals
   assert.match(source, /never earns strict exact-keyword credit/i);
 });
 
-test("results-first workspace composes the D4 hierarchy and knows v5 is current", async () => {
+test("results-first workspace composes the D4 hierarchy and supports v5 and v6 kits", async () => {
   const source = await read("../components/product/unified-kit-workspace.tsx");
   assert.match(source, /ResultsHeader/);
   assert.match(source, /ScoreComparison/);
@@ -85,6 +88,14 @@ test("results-first workspace composes the D4 hierarchy and knows v5 is current"
   assert.match(source, /FitPanels/);
   assert.match(source, /AdvancedDetails/);
   assert.match(source, /application-kit\/v5/);
+  assert.match(source, /application-kit\/v6/);
+  assert.match(source, /isSupportedSchema/);
+});
+
+test("history does not mark supported v5 or v6 kits as compatibility views", async () => {
+  const source = await read("../components/product/history-workspace.tsx");
+  assert.match(source, /schemaVersion !== "application-kit\/v5"/);
+  assert.match(source, /schemaVersion !== "application-kit\/v6"/);
 });
 
 test("advanced details wires match insights, change ledger, and lineage behind the quiet entry", async () => {

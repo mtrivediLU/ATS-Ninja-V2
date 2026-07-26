@@ -185,6 +185,7 @@ class ResumeCertificationEntryResponse(BaseModel):
     name: str = ""
     date: str = ""
     link: str = ""
+    credential_id: str = ""
 
 
 class RemainingResumeSectionResponse(BaseModel):
@@ -529,8 +530,21 @@ class JobPriorityItemResponse(BaseModel):
     detail: str = ""
 
 
+class OptimizationRejectionResponse(BaseModel):
+    action: str = ""
+    reason: str = ""
+
+
+class OptimizationTraceResponse(BaseModel):
+    iterations: int = 0
+    score_path: list[float] = Field(default_factory=list)
+    accepted_actions: list[str] = Field(default_factory=list)
+    rejected_actions: list[OptimizationRejectionResponse] = Field(default_factory=list)
+    unreachable_terms: list[str] = Field(default_factory=list)
+
+
 class MatchReportResponse(BaseModel):
-    """The v5 honest-scoring report: three distinct scores plus diagnostics."""
+    """The versioned honest-scoring report plus v2 optimization trace."""
 
     original_ats_match: AtsMatchScoreResponse = Field(default_factory=AtsMatchScoreResponse)
     tailored_ats_match: AtsMatchScoreResponse | None = None
@@ -550,6 +564,8 @@ class MatchReportResponse(BaseModel):
     kit_summary: str = ""
     quality_report: AtsQualityReportPayloadResponse = Field(default_factory=AtsQualityReportPayloadResponse)
     disclaimer: str = ""
+    score_basis: str = "ats_v2"
+    optimization_trace: OptimizationTraceResponse = Field(default_factory=OptimizationTraceResponse)
 
 
 class StageTimingsResponse(BaseModel):

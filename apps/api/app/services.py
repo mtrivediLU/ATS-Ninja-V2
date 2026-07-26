@@ -17,6 +17,7 @@ from ats_engine import (
     apply_change_actions,
     generate_application_kit,
     is_application_kit_v5,
+    is_application_kit_v6,
     normalize_persisted_result,
     resolve_artifact_selection,
 )
@@ -217,7 +218,7 @@ async def apply_kit_change_actions(
     expected_revision: int,
     actions: list[ChangeActionItem],
 ) -> ChangeActionOutcome:
-    """Apply a batch of accept/reject/restore actions to a completed v5 kit.
+    """Apply a batch of accept/reject/restore actions to a completed v5 or v6 kit.
 
     Deterministic and LLM-free. **Atomic** optimistic concurrency: the JSON
     artifact, revision, and timestamp are written by a single conditional UPDATE
@@ -233,8 +234,8 @@ async def apply_kit_change_actions(
         return ChangeActionOutcome(status="not_found")
     if kit.status != KitStatus.COMPLETED or kit.result is None:
         return ChangeActionOutcome(status="not_completed", kit=kit)
-    if not is_application_kit_v5(kit.result):
-        return ChangeActionOutcome(status="not_completed", kit=kit, errors=["Change actions require a v5 kit."])
+    if not (is_application_kit_v5(kit.result) or is_application_kit_v6(kit.result)):
+        return ChangeActionOutcome(status="not_completed", kit=kit, errors=["Change actions require a v5 or v6 kit."])
     if kit.revision != expected_revision:
         return ChangeActionOutcome(status="conflict", kit=kit, errors=["Revision conflict."])
 

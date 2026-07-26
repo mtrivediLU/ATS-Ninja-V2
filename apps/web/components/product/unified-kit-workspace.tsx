@@ -65,12 +65,13 @@ export function UnifiedKitWorkspace() {
     }
   }
 
-  const isCurrentSchema = result.schema_version === "application-kit/v5";
+  const isSupportedSchema =
+    result.schema_version === "application-kit/v5" || result.schema_version === "application-kit/v6";
   const isV4 = result.schema_version === "application-kit/v4";
 
   return (
     <div className="space-y-2 pb-20">
-      {!isCurrentSchema && (
+      {!isSupportedSchema && (
         <Banner tone="warning" title={isV4 ? "Earlier kit format (v4)." : "Older or unknown schema."} className="mb-4">
           {isV4
             ? "This Kit was generated before match reporting and the change ledger. Regenerate it to get the current scoring and tailoring transparency."
