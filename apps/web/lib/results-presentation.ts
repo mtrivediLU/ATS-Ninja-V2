@@ -24,11 +24,12 @@ export function buildHeadline({
 }): string {
   if (!targetConfirmed) return "Review the detected role and organization for this Application Kit.";
   const greeting = name ? `Hi ${name}, your` : "Your";
-  const subject = !hasRole && !hasCompany ? "Application Kit" : hasRole && hasCompany ? `Application Kit for the ${role} position at ${company}` : hasRole ? `Application Kit for the ${role} position` : `Application Kit for this position at ${company}`;
+  if (!hasRole && !hasCompany) return `${greeting} Application Kit is ready.`;
+  const subject = hasRole && hasCompany ? `Application Kit for the ${role} position at ${company}` : hasRole ? `Application Kit for the ${role} position` : `Application Kit for this position at ${company}`;
   if (lifecycle === "partially_completed") return `${greeting} ${subject} was partially delivered.`;
   if (lifecycle === "needs_input_review") return `${greeting} ${subject} needs input review.`;
   if (lifecycle === "failed") return `${greeting} ${subject} could not be delivered.`;
-  return `${greeting} ${subject} is ready.`;
+  return `${greeting} ${subject} is ready. All the best!`;
 }
 
 export type ScoreComparisonState = {
