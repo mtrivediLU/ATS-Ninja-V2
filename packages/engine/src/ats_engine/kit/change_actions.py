@@ -205,7 +205,9 @@ def apply_change_actions(
             job_description=job_description,
             profile=profile,
             keyword_terms=keyword_terms,
-            changed_record_ids={action.change_id for action in actions},
+            # Accept leaves already-delivered content unchanged; only a reject
+            # or restore creates a new source-retention delta to validate.
+            changed_record_ids={action.change_id for action in actions if action.action != ACTION_ACCEPT},
         )
         new_resume_text = outcome.text
         if outcome.fatal:
