@@ -65,13 +65,14 @@ def plan_placements(
 
 def _action(link: EvidenceLink, target: str, operation: str) -> PlacementAction:
     term = link.surface_to_use or link.requirement.surface or link.requirement.canonical
+    provenance = link.supporting_locations or link.supporting_spans
     return PlacementAction(
         term=term,
         link=link,
         target=target,
         operation=operation,
         rendered_text=term,
-        grounded_by=link.resume_location or link.resume_span,
+        grounded_by=" | ".join(provenance) if provenance else (link.resume_location or link.resume_span),
     )
 
 

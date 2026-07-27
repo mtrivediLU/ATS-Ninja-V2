@@ -67,7 +67,7 @@ export default function ComponentsPage() {
 
       <Section title="Badges and status labels" description="Every product status includes an icon and text; colour is secondary.">
         <div className="flex flex-wrap gap-2">
-          <StatusLabel presentation={kitStatusPresentation.completed} /><StatusLabel presentation={kitStatusPresentation.processing} /><StatusLabel presentation={kitStatusPresentation.pending} /><StatusLabel presentation={kitStatusPresentation.failed} />
+          <StatusLabel presentation={kitStatusPresentation.completed} /><StatusLabel presentation={kitStatusPresentation.partially_completed} /><StatusLabel presentation={kitStatusPresentation.needs_input_review} /><StatusLabel presentation={kitStatusPresentation.processing} /><StatusLabel presentation={kitStatusPresentation.pending} /><StatusLabel presentation={kitStatusPresentation.failed} />
           <StatusLabel presentation={claimStatusPresentation.supported} /><StatusLabel presentation={claimStatusPresentation.repaired} /><StatusLabel presentation={claimStatusPresentation.rejected} /><StatusLabel presentation={notRequestedPresentation} /><StatusLabel presentation={withheldPresentation} />
           <Badge tone="neutral"><Info aria-hidden="true" className="size-3.5" />Neutral badge</Badge>
         </div>

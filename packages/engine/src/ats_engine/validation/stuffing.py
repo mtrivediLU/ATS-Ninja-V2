@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import TypeAlias
 
 from ats_engine.models import RequirementTerm
+from ats_engine.validation.findings import ValidationFinding, ValidationSeverity
 
 MAX_TERM_OCCURRENCES = 4
 MAX_KEYWORD_DENSITY = 0.06
@@ -21,6 +22,7 @@ MAX_SUMMARY_REQUIREMENT_TERMS = 5
 MAX_BULLET_REQUIREMENT_TERMS = 2
 MAX_ADDED_SKILL_REQUIREMENTS = 6
 MAX_REPEATED_BIGRAM_OCCURRENCES = 4
+STUFFING_DETECTOR_VERSION = "stuffing-v2"
 
 RequirementInput: TypeAlias = str | RequirementTerm
 SkillGroups: TypeAlias = Sequence[tuple[str, Sequence[str]]]
@@ -122,7 +124,10 @@ def analyze_resume_stuffing(
         # applies to *new* repetition above the source baseline.
         allowed = max(MAX_TERM_OCCURRENCES, source_term_counts.get(canonical, 0))
         if count > allowed:
-            errors.append(f"stuffing: requirement '{canonical}' appears {count} times (limit {MAX_TERM_OCCURRENCES})")
+            errors.append(
+                f"stuffing: requirement '{canonical}' appears {count} times "
+                f"(source baseline {source_term_counts.get(canonical, 0)}, limit {MAX_TERM_OCCURRENCES})"
+            )
     if total_words and density > MAX_KEYWORD_DENSITY and density > source_density:
         errors.append(f"stuffing: requirement density is {density:.1%} (limit {MAX_KEYWORD_DENSITY:.0%})")
 
@@ -190,6 +195,70 @@ def validate_resume_stuffing(
             source_skill_groups=source_skill_groups,
             source_resume_text=source_resume_text,
         ).errors
+    )
+
+
+def validate_resume_stuffing_findings(
+    rendered_resume_text: str = "",
+    actions: Sequence[object] | None = None,
+    *,
+    summary: str = "",
+    bullets: Sequence[str] = (),
+    skill_groups: SkillGroups = (),
+    requirements: Sequence[RequirementInput] = (),
+    source_skill_groups: SkillGroups = (),
+    source_resume_text: str = "",
+) -> tuple[ValidationFinding, ...]:
+    """Structured anti-stuffing findings for calibrated delivery gates.
+
+    Stuffing is a degradable tailoring failure, not confirmed fabrication or
+    source-fact loss. Optimizers reject the offending action, while a readable
+    source-preserving floor remains deliverable with an honest warning.
+    """
+    errors = validate_resume_stuffing(
+        rendered_resume_text,
+        actions,
+        summary=summary,
+        bullets=bullets,
+        skill_groups=skill_groups,
+        requirements=requirements,
+        source_skill_groups=source_skill_groups,
+        source_resume_text=source_resume_text,
+    )
+    return tuple(_stuffing_finding(error) for error in errors)
+
+
+def _stuffing_finding(error: str) -> ValidationFinding:
+    code = "STUFF_CONTENT_REPETITION"
+    source_span = "resume"
+    fact = error
+    if "density" in error:
+        code = "STUFF_DENSITY"
+    elif "summary uses" in error:
+        code = "STUFF_SUMMARY_BUDGET"
+        source_span = "resume:summary"
+    elif "bullet " in error and "targeted requirement" in error:
+        code = "STUFF_BULLET_BUDGET"
+        match = re.search(r"bullet (\d+)", error)
+        source_span = f"resume:bullet:{match.group(1)}" if match else "resume:bullet"
+    elif "skills " in error:
+        code = "STUFF_SKILLS_BUDGET"
+        source_span = "resume:skills"
+    elif "requirement '" in error:
+        code = "STUFF_TERM_OCCURRENCES"
+        match = re.search(r"requirement '([^']+)'", error)
+        fact = _repetition_identity(match.group(1) if match else error, error)
+    elif "bigram '" in error:
+        code = "STUFF_BIGRAM_REPETITION"
+        match = re.search(r"bigram '([^']+)'", error)
+        fact = _repetition_identity(match.group(1) if match else error, error)
+    return ValidationFinding(
+        code=code,
+        severity=ValidationSeverity.DEGRADE,
+        fact=fact,
+        source_span=source_span,
+        detail=error,
+        detector_version=STUFFING_DETECTOR_VERSION,
     )
 
 
@@ -324,7 +393,10 @@ def _analyze_rendered_text(
     errors: list[str] = []
     for canonical, count in sorted(term_counts.items()):
         if count > max(MAX_TERM_OCCURRENCES, source_counts.get(canonical, 0)):
-            errors.append(f"stuffing: requirement '{canonical}' appears {count} times (limit {MAX_TERM_OCCURRENCES})")
+            errors.append(
+                f"stuffing: requirement '{canonical}' appears {count} times "
+                f"(source baseline {source_counts.get(canonical, 0)}, limit {MAX_TERM_OCCURRENCES})"
+            )
     if total_words and density > MAX_KEYWORD_DENSITY and density > source_density:
         errors.append(f"stuffing: requirement density is {density:.1%} (limit {MAX_KEYWORD_DENSITY:.0%})")
     errors.extend(_repeated_bigram_errors(text, source_resume_text))
@@ -354,7 +426,8 @@ def _repeated_bigram_errors(text: str, source_text: str = "") -> list[str]:
     counts = _bigram_counts(text)
     source_counts = _bigram_counts(source_text)
     return [
-        f"stuffing: repeated content bigram '{bigram}' appears {count} times (limit {MAX_REPEATED_BIGRAM_OCCURRENCES})"
+        f"stuffing: repeated content bigram '{bigram}' appears {count} times "
+        f"(source baseline {source_counts.get(bigram, 0)}, limit {MAX_REPEATED_BIGRAM_OCCURRENCES})"
         for bigram, count in sorted(counts.items())
         # A v2 placement may legitimately repeat a branded bigram in its
         # summary and skills representation. Permit up to two such new
@@ -362,6 +435,16 @@ def _repeated_bigram_errors(text: str, source_text: str = "") -> list[str]:
         # deterministic stuffing signal.
         if count > max(MAX_REPEATED_BIGRAM_OCCURRENCES, source_counts.get(bigram, 0) + 2)
     ]
+
+
+def _repetition_identity(subject: str, error: str) -> str:
+    """Retain stuffing magnitude in the exact calibration fact identity."""
+    observed = re.search(r"\bappears\s+(\d+)\s+times\b", error)
+    baseline = re.search(r"\bsource baseline\s+(\d+)\b", error)
+    return (
+        f"{subject} | observed={observed.group(1) if observed else 'unknown'}"
+        f" | source-baseline={baseline.group(1) if baseline else 'unknown'}"
+    )
 
 
 def _bigram_counts(text: str) -> dict[str, int]:
@@ -426,8 +509,10 @@ __all__ = [
     "MAX_REPEATED_BIGRAM_OCCURRENCES",
     "MAX_SUMMARY_REQUIREMENT_TERMS",
     "MAX_TERM_OCCURRENCES",
+    "STUFFING_DETECTOR_VERSION",
     "StuffingReport",
     "analyze_resume_stuffing",
     "requirement_occurrences",
     "validate_resume_stuffing",
+    "validate_resume_stuffing_findings",
 ]

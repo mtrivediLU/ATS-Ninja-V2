@@ -94,20 +94,43 @@ def _generate_kit_body(task: Any, kit_id: str) -> None:
     (``self``) and monkeypatched ``_process`` / ``_fail``.
     """
     kid = UUID(kit_id)
+    retry_request: tuple[int, str] | None = None
     try:
         _process(kid)
     except TRANSIENT_EXCEPTIONS as exc:
         retries = task.request.retries
         if retries < task.max_retries:
-            logger.warning("generate_kit: transient failure for kit %s (attempt %s): %r", kid, retries, exc)
-            # task.retry() raises celery.exceptions.Retry (control flow); Celery
-            # chains the original exception via exc=exc.
-            raise task.retry(exc=exc, countdown=retry_countdown(retries)) from exc
-        logger.error("generate_kit: transient failure exhausted for kit %s: %r", kid, exc)
-        _fail(kid, f"transient infrastructure failure after {retries} retries: {type(exc).__name__}")
+            logger.warning(
+                "generate_kit: transient failure for kit %s (attempt=%s, type=%s)",
+                kid,
+                retries,
+                type(exc).__name__,
+            )
+            # Leave the exception handler before asking Celery to retry. Calling
+            # ``task.retry`` here would attach the raw SQLAlchemy/OSError as the
+            # Retry exception's cause/context, and Celery may render that object
+            # (including SQL parameters or paths) in worker logs.
+            retry_request = (retry_countdown(retries), type(exc).__name__)
+        else:
+            logger.error(
+                "generate_kit: transient failure exhausted for kit %s (type=%s)",
+                kid,
+                type(exc).__name__,
+            )
+            _fail(kid, f"transient infrastructure failure after {retries} retries: {type(exc).__name__}")
     except Exception as exc:  # noqa: BLE001 - non-transient/unexpected: terminal, do not retry.
-        logger.exception("generate_kit: unexpected worker failure for kit %s", kid)
+        # Log only the fixed exception type. Messages and tracebacks may contain
+        # candidate inputs, generated prose, provider prompts, paths, or secrets.
+        logger.error("generate_kit: unexpected worker failure for kit %s (type=%s)", kid, type(exc).__name__)
         _fail(kid, f"unexpected worker failure: {type(exc).__name__}")
+
+    if retry_request is not None:
+        countdown, error_type = retry_request
+        # Celery needs an exception for its retry status, but never the original:
+        # database exceptions can contain full statements/parameters, including
+        # persisted candidate inputs and generated artifacts.
+        safe_exc = RuntimeError(f"transient infrastructure failure ({error_type})")
+        raise task.retry(exc=safe_exc, countdown=countdown) from None
 
 
 @celery_app.task(bind=True, name=GENERATE_KIT_TASK, max_retries=MAX_RETRIES)  # type: ignore[untyped-decorator]

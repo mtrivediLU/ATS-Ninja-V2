@@ -32,6 +32,10 @@ class EngineSettings:
         llm_cache_ttl_seconds: Time-to-live for cached generations.
         llm_request_timeout: Per-request timeout (seconds) for provider calls.
         tailoring_v2: Enables the evidence-grounded Tailoring Engine v2 path.
+        delivery_first: Enables calibrated validation and the delivery-first
+            optimizer. This is a one-release rollout switch; disabling it uses
+            the retained PR-21 score-only optimizer while keeping detector
+            correctness, grounding, and additive wire-contract fixes in place.
     """
 
     ollama_base_url: str = DEFAULT_OLLAMA_BASE_URL
@@ -41,6 +45,7 @@ class EngineSettings:
     llm_cache_ttl_seconds: int = _ONE_WEEK_SECONDS
     llm_request_timeout: float = 120.0
     tailoring_v2: bool = True
+    delivery_first: bool = True
 
     @classmethod
     def from_env(cls, environ: dict[str, str] | None = None) -> EngineSettings:
@@ -55,4 +60,5 @@ class EngineSettings:
             llm_cache_ttl_seconds=int(env.get("ATS_ENGINE_LLM_CACHE_TTL", _ONE_WEEK_SECONDS)),
             llm_request_timeout=float(env.get("ATS_ENGINE_LLM_TIMEOUT", 120.0)),
             tailoring_v2=(env.get("ENGINE_TAILORING_V2", "1").strip().lower() not in {"0", "false", "no", "off"}),
+            delivery_first=(env.get("ENGINE_DELIVERY_FIRST", "1").strip().lower() not in {"0", "false", "no", "off"}),
         )

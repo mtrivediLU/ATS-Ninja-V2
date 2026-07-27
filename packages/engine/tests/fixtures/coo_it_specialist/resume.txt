@@ -1,45 +1,45 @@
 Alex Morgan
-alex.morgan@example.test | Toronto, ON (Remote) | linkedin.com/in/alex-morgan
+alex.morgan@example.test | Harbor City, ON (Remote) | linkedin.com/in/alex-morgan
 
 Professional Summary
 Senior Software Engineer with experience delivering reliable data products, cloud services, and business intelligence solutions.
 
 Professional Experience
-Flosonics Medical | Toronto, ON (Remote)
+Northstar Medical Systems | Harbor City, ON (Remote)
 Senior Software Engineer
-2022 - Present
+2021 - Present
 - Architected Power BI dashboards with ESRI ArcGIS visuals for clinical operations reporting.
 - Streamlined quality checks for Mission-Critical Reporting, maintaining 100% uptime for a team of four engineers.
 
-LoopX | Toronto, ON
+Harborline Analytics | Harbor City, ON
 Software Engineer
-2020 - 2022
+2019 - 2021
 - Built multi-source data pipelines from Excel exports and operational APIs for internal reporting.
 - Collaborated with stakeholders to document data governance controls and audit logging requirements.
 
-City of Greater Sudbury | Sudbury, ON
+City of Northbridge | Lakeview, ON
 Application Developer
-2018 - 2020
+2017 - 2019
 - Designed geocoding services and data quality checks for municipal survey data.
 - Integrated Zoom-
 Info and Lead Forensics data into reporting workflows.
 
-Minax Inc. | Toronto, ON
+Cedar Peak Software | Harbor City, ON
 Software Engineer
-2016 - 2018
+2015 - 2017
 - Developed data ingestion services in Python and Google
 Cloud SQL Auth Proxy, configuring secure communication between services.
 - Maintained production integrations and technical documentation for customer-facing applications.
 
-Mineral Exploration Research Centre | Sudbury, ON
+Meridian Research Centre | Lakeview, ON
 Data Analyst
-2014 - 2016
+2013 - 2015
 - Created ETL/ELT pipelines and SQL reporting for mineral exploration datasets.
 - Supported version control and knowledge transfer across research teams.
 
-Tata Consultancy Services | Toronto, ON
+Global Systems Consulting | Harbor City, ON
 Systems Analyst
-2012 - 2014
+2011 - 2013
 - Improved CI/CD & Reliability practices for production services while maintaining release documentation.
 - Delivered user interface design and information architecture updates for an internal portal.
 
@@ -52,9 +52,9 @@ Languages: Python, Java, JavaScript, SQL, C, C++, PHP, HTML5, CSS3.
 Tools: pragmatic use of Cursor, Claude, and Git.
 
 Education
-Northern Ontario Institute of Technology | Sudbury, ON
+Northbridge Institute of Technology | Lakeview, ON
 BSc, Computer Science
-2008 - 2012
+2007 - 2011
 
 Certifications
 Microsoft Certified: Power BI Data Analyst Associate (PL-300) | Credential ID: MS-30001

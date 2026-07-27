@@ -8,10 +8,10 @@ import { useKit } from "@/components/product/kit-context";
 import { TrustSummary } from "@/components/product/trust-summary";
 import { useArtifactView } from "@/components/product/use-artifact-view";
 import { Banner, Button, Card } from "@/components/ui/primitives";
-import type { InterviewPrepArtifact, InterviewQuestion } from "@/lib/api-types";
+import type { DocumentState, InterviewPrepArtifact, InterviewQuestion } from "@/lib/api-types";
 import { copyText, safeFilename } from "@/lib/product";
 
-export function InterviewWorkspace({ artifact, company, role }: { artifact: InterviewPrepArtifact; company: string; role: string }) {
+export function InterviewWorkspace({ artifact, company, role, deliveryState }: { artifact: InterviewPrepArtifact; company: string; role: string; deliveryState?: DocumentState }) {
   const { notify } = useFeedback();
   const { openEvidence } = useKit();
   const [view, setView] = useArtifactView();
@@ -27,8 +27,8 @@ export function InterviewWorkspace({ artifact, company, role }: { artifact: Inte
   function markReviewed(id: string) { setReviewed((current) => new Set(current).add(id)); }
 
   return <div>
-    <ArtifactToolbar title="Interview preparation" validation={artifact.validation} claims={artifact.claims} text={exportText} filename={safeFilename(company, role, "interview-prep")} downloadExtension="md" view={view} onViewChange={setView} />
-    {view === "trust" ? <TrustSummary title="Interview preparation" claims={artifact.claims} validation={artifact.validation} text={exportText} readinessLabel={reviewed.size ? `${reviewed.size} question${reviewed.size === 1 ? "" : "s"} reviewed locally` : "No questions reviewed locally"} explanation="Question-review progress is an interaction-only study aid. It is not interview readiness, candidate quality, confidence, or a hiring prediction." onOpenContent={() => setView("content")} /> : focusMode ? <FocusMode questions={artifact.questions} index={focusIndex} reviewed={reviewed} onIndex={setFocusIndex} onReviewed={markReviewed} onExit={() => setFocusMode(false)} onCopy={copyAnswer} onEvidence={openEvidence} /> : <>
+    <ArtifactToolbar title="Interview preparation" validation={artifact.validation} claims={artifact.claims} text={exportText} filename={safeFilename(company, role, "interview-prep")} downloadExtension="md" view={view} onViewChange={setView} deliveryState={deliveryState} />
+    {view === "trust" ? <TrustSummary title="Interview preparation" claims={artifact.claims} validation={artifact.validation} text={exportText} deliveryState={deliveryState} readinessLabel={reviewed.size ? `${reviewed.size} question${reviewed.size === 1 ? "" : "s"} reviewed locally` : "No questions reviewed locally"} explanation="Question-review progress is an interaction-only study aid. It is not interview readiness, candidate quality, confidence, or a hiring prediction." onOpenContent={() => setView("content")} /> : focusMode ? <FocusMode questions={artifact.questions} index={focusIndex} reviewed={reviewed} onIndex={setFocusIndex} onReviewed={markReviewed} onExit={() => setFocusMode(false)} onCopy={copyAnswer} onEvidence={openEvidence} /> : <>
       <div className="mt-5 flex flex-wrap items-center justify-between gap-3"><Banner tone="neutral" title="Strategy." className="flex-1">{artifact.strategy_summary || "No strategy summary was returned."}</Banner><Button variant="secondary" onClick={() => { setFocusIndex(0); setFocusMode(true); }} disabled={!artifact.questions.length}>Study focus mode</Button></div>
       <p className="mt-3 text-sm text-ink-muted">Reviewed {reviewed.size}/{artifact.questions.length} questions locally. This is interaction progress only; it is not a readiness score and is not stored after reload.</p>
       {artifact.focus_areas.length > 0 && <section className="mt-5" aria-labelledby="focus-heading"><h2 id="focus-heading" className="mb-3 text-md font-semibold">Focus areas</h2><div className="grid gap-3 md:grid-cols-2">{artifact.focus_areas.map((area) => <Card key={`${area.requirement_id}-${area.topic}`} className="shadow-none"><div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-semibold">{area.topic}</h3><span className="rounded-pill border border-neutral-border bg-neutral-bg px-2.5 py-1 text-xs font-semibold capitalize text-neutral">{area.priority}</span></div><p className="mt-2 text-sm text-ink-secondary">{area.guidance}</p><p className="mt-2 text-xs capitalize text-ink-muted">Classification: {area.classification.replaceAll("_", " ")}</p>{area.evidence.length > 0 && <Button size="sm" variant="ghost" className="mt-3" onClick={() => openEvidence()}><ShieldCheck aria-hidden="true" className="size-4" />Evidence</Button>}</Card>)}</div></section>}

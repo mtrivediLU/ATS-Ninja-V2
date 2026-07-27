@@ -23,19 +23,24 @@ fields and can include optional structured presentation data. Classic and
 Modern templates change presentation only; browser Print / Save as PDF uses no
 external service and intentionally excludes application UI messages.
 
-> **Status: Phase 2 backend complete; Design Phase D2 private-local dogfooding polish.**
+> **Status: Phase 2 backend complete; delivery-first ApplicationKit v7 and the
+> results-first private-local product are implemented.**
 > The engine produces a tailored **resume, cover letter, and application answers**
 > and now assembles them into a versioned, truth-grounded **ApplicationKit**
-> (`application-kit/v5`): every candidate-specific claim in generated prose is
+> (`application-kit/v7`): every candidate-specific claim in generated prose is
 > validated against the candidate's own evidence, and anything unsupported is
 > removed (or the artifact withheld) before delivery — with a structured
-> claim/evidence trace. **ApplicationKit v5** adds an honest `MatchReport` (three
+> claim/evidence trace. **ApplicationKit v5** added an honest `MatchReport` (three
 > separate scores — original-resume keyword match, tailored-resume keyword match,
 > and evidence-based role alignment — plus deterministic confidence, five honest
 > fit categories, a constructive recommendation, and the internal ATS quality
 > report) and a transparent, evidence-linked **change ledger** with safe,
 > persisted accept/reject/restore actions (truth-grounding removals are
-> permanent). Kits carry a revision counter and regeneration lineage. The async API + Celery/Redis worker persist this contract
+> permanent). **ApplicationKit v7** adds a validated source-preserving delivery
+> floor, exact identity-only validation calibration, per-artifact delivery
+> reports, and honest completed/partial/input-review/failed kit states. Kits
+> carry a revision counter and regeneration lineage. The async API +
+> Celery/Redis worker persist this contract
 > to PostgreSQL. A structured `JobFitArtifact` now adds deterministic requirement
 > coverage, fit band, strengths, honest adjacency/working knowledge, and visible
 > gaps. A typed `InterviewPrepArtifact` adds evidence-bounded questions, answer
@@ -46,7 +51,7 @@ external service and intentionally excludes application UI messages.
 > sending, LinkedIn access, authentication, and billing remain future work.
 > The Next.js frontend now provides the approved responsive **Signal** shell and
 > privately usable local workflows: real Kit submission and polling, all six
-> ApplicationKit v4 workspaces, trust-first summaries, bounded evidence
+> ApplicationKit workspaces, trust-first summaries, bounded evidence
 > inspection, unvalidated local editing/compare/reset, safe local
 > copy/download, a direct locally-rendered Resume/Cover Letter PDF download,
 > recovery handling, and server-backed history. Authentication
@@ -70,8 +75,8 @@ Read [AGENTS.md](AGENTS.md) — the standing engineering contract — before con
 ```
 packages/engine   Pure-Python domain engine (ats_engine): parsing, evidence,
                   scoring, validation, caching, providers, generation, models
-apps/api          FastAPI backend (Phase 0: health + settings, engine-ready)
-apps/web          Next.js App Router frontend — D2 private-local dogfooding workflows
+apps/api          FastAPI backend: upload/extraction, lifecycle, exports, persistence, worker
+apps/web          Next.js App Router frontend — results-first private-local workflows
 infra             Dockerfiles + Docker Compose topology
 docs              Architecture documentation + ADRs
 ```
@@ -148,7 +153,9 @@ kit = generate_application_kit(
     requested_mode="resume and cover letter",
     use_llm=False,            # fully deterministic path (provider=None)
 )
-print(kit.schema_version)                 # "application-kit/v5"
+print(kit.schema_version)                 # "application-kit/v7"
+print(kit.state)                          # completed | partially_completed | ...
+print(kit.delivery_reports)               # per-artifact state + fallback diagnostics
 print(kit.match_report.original_ats_match.score)   # submitted-resume keyword match
 print(kit.match_report.tailored_ats_match.score)   # final grounded-resume keyword match
 print(kit.match_report.alignment_score)            # evidence-based role alignment
@@ -290,6 +297,38 @@ permanent and can never be restored. Kits also support
 `DELETE /api/v1/kits/{id}`. A static **How scoring works** page explains all of
 this. See [ADR-0019](docs/adr/0019-application-kit-v5-match-report-and-change-ledger.md)
 and [ADR-0020](docs/adr/0020-change-action-revision-and-irreversibility-policy.md).
+
+## ApplicationKit v7: delivery-first validation
+
+ApplicationKit v7 adds a validated source-preserving Resume floor and reuses one
+exactly calibrated gate context throughout optimization and final delivery.
+Calibration can downgrade only the precise
+`(detector_version, code, normalized_fact, source_span)` that failed against an
+unchanged identity projection; a real employer, title, date, metric,
+certification, technology, or responsibility deletion remains fatal. Both the
+original and delivered Resume use the authoritative ATS v2 scorer, so a
+validated fallback has a real score (which may equal the original) rather than
+`n/a`.
+
+Document states are `generated`, `generated_with_fallback`,
+`needs_input_review`, `failed`, and `not_requested`. Kit/API terminal states are
+`completed`, `partially_completed`, `needs_input_review`, and `failed`;
+`partially_completed` is never an individual-document state. Requested Resume
+and Cover Letter artifacts are delivery-critical. The API persists the engine
+roll-up instead of marking every non-exception `completed`.
+
+V1-v6 and known unversioned Phase 1 results remain readable without changing
+their stored schema. Their API read projection receives inferred delivery
+reports/state; an unknown schema is surfaced as unknown with no invented
+artifact. The projection does not backfill a historical row's separate
+lifecycle status. API clients must tolerate the additive `partially_completed`
+and `needs_input_review` lifecycle strings on `/api/v1`.
+
+`ENGINE_DELIVERY_FIRST=1` is default-on. A value of `0`, `false`, `no`, or
+`off` selects the retained PR-21 score-only optimizer after API/worker restart:
+identity calibration and delivery-first quality proposals are skipped.
+Detector fixes, grounding, and additive v7 states remain active. See
+[ADR-0023](docs/adr/0023-delivery-first-validation-and-application-kit-v7.md).
 
 ## License
 

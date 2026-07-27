@@ -10,10 +10,11 @@ display. The web template view has one dedicated, flowing print root for the
 selected document; controls, trust UI, and fallback notices are deliberately
 excluded from Print / Save as PDF. No external PDF service is used.
 
-Status: **Phase 2 backend complete; Design Phase K1 unified-results private-local dogfooding polish**. This
-document distinguishes what is **completed**, what **architecture is
-established**, and what is **future** planned work. It never describes
-unimplemented functionality as done.
+Status: **Phase 2 backend complete; delivery-first ApplicationKit v7 and the
+results-first private-local product are implemented**. This document
+distinguishes what is **completed**, what **architecture is established**, and
+what is **future** planned work. It never describes unimplemented functionality
+as done.
 
 ---
 
@@ -515,8 +516,8 @@ service, but run as independent processes so each scales on its own:
 ```
 POST /api/v1/kits   → persist Kit(status=pending) in Postgres → dispatch via Celery/Redis → 202
 worker (Celery)     → dequeue → status=processing → generate_application_kit (in a thread)
-                    → persist KitResult + status=completed|failed
-GET  /api/v1/kits/{id} → current status; full result once completed
+                    → persist ApplicationKit + honest terminal delivery status
+GET  /api/v1/kits/{id} → current status; persisted result when the engine produced one
 ```
 
 - **Persistence**: async SQLAlchemy 2.x (`asyncpg`) with an Alembic migration.
@@ -569,13 +570,15 @@ generate_application_kit(resume, jd, mode, provider?)
          unsupported→ remove (repair) ; if not removable → reject/withhold  [ADR-0011]
   → RE-RENDER text + LaTeX from the sanitized plans (clean by construction)
   → re-run the engine's artifact validators
-  → assemble ApplicationKit (schema application-kit/v4) with a full claim trace
+  → assemble ApplicationKit (current schema application-kit/v7) with a full claim trace
 ```
 
 - **Versioned contract** ([ADR-0007](adr/0007-application-kit-contract.md)):
-  `ApplicationKit` (schema `application-kit/v4`) with typed `ResumeArtifact` /
-  `CoverLetterArtifact` / `AnswerArtifact`, a `ValidationSummary`, and
-  persistence-safe `GenerationMetadata`. It models only today's real artifacts.
+  `ApplicationKit` (current schema `application-kit/v7`) with typed
+  `ResumeArtifact` / `CoverLetterArtifact` / `AnswerArtifact`, optional
+  JobFit/InterviewPrep/LinkedInOutreach artifacts, a `ValidationSummary`,
+  per-artifact `DeliveryReport`s, and persistence-safe `GenerationMetadata`.
+  It models only today's real artifacts.
 - **Claim/evidence trace** ([ADR-0008](adr/0008-claim-evidence-traceability.md)):
   each candidate-specific claim becomes a `ClaimRecord`
   (`supported`/`repaired`/`rejected`) with bounded `EvidenceRef`s, so the kit
@@ -584,7 +587,8 @@ generate_application_kit(resume, jd, mode, provider?)
   ([ADR-0011](adr/0011-repair-vs-rejection-policy.md)): unsupported claims are
   deterministically excised (sentence for prose, span for bullets) in a single
   bounded pass; an artifact that cannot be cleaned is withheld and the kit is
-  marked `fatal`.
+  marked validation-fatal. ApplicationKit v7 separately reports the artifact's
+  delivery state and rolls the complete Kit up honestly.
 - **All artifacts**: the gate runs over the resume, cover letter, **and** answers
   — cover letters and answers can hallucinate candidate facts too.
 - **Persistence**: no database migration is required — the result stays a JSON
@@ -611,7 +615,7 @@ generate_application_kit(resume, jd, mode, provider?)
 | `caching` | Content-hash cache (disk-backed, degrades to no-op) | Completed |
 | `providers` | `LLMProvider` interface + `OllamaProvider` (stdlib HTTP) | Completed |
 | `generation` | Source-preserving plans, placement planner, monotone optimizer, resume/cover-letter/answer generation, rendering, pipeline | Completed |
-| `kit` | Versioned `ApplicationKit` v6 contract, JSON serialization boundary (+ legacy adapter), grounding gate, provider routing, orchestrator | Completed (Phase 2A + Tailoring v2) |
+| `kit` | Versioned `ApplicationKit` v7 contract, delivery reports/state roll-up, JSON serialization boundary (+ legacy adapters), grounding gate, provider routing, orchestrator | Completed (Phase 2A + delivery-first validation) |
 | `eval` | Phase 2A quality-evaluation harness (synthetic cases; `python -m ats_engine.eval`) | Completed (Phase 2A) |
 | `job_fit` | Deterministic requirement assessment, fit policy, bounded narrative, consistency validation | Completed (Phase 2B1) |
 | `interview_prep` | Deterministic questions/answer guides, single-context STAR policy, honest gaps, bounded narrative validation | Completed (Phase 2B2) |
@@ -766,7 +770,8 @@ job description ──► requirements ─► RequirementTerm[]
    source skill-group headings, locations such as `(Remote)`, certification
    credential IDs, and structured bullet boundaries. A company-like line that
    looks like an orphaned verb phrase raises the content-safe
-   `EXTRACTION_SUSPECT` error before planning; the API records a failed kit and
+   `EXTRACTION_SUSPECT` error before planning; the API records a
+   `needs_input_review` kit and
    asks the user to review or re-upload rather than generating from corrupt
    structure.
 2. **Requirements** (`parsing.vocab`, `parsing.jd_requirements`) are extracted
@@ -817,6 +822,137 @@ its additive `optimization_trace` makes the deterministic decisions observable.
 Older v1–v5 persisted kits continue through the serialization compatibility
 boundary. See [ADR-0022](adr/0022-tailoring-engine-v2-evidence-grounded-iterative-optimization.md).
 
+### ApplicationKit v7: calibrated delivery-first validation (completed)
+
+ApplicationKit v7 (`schema application-kit/v7`,
+`orchestration grounded-orchestration/v7`) fixes the production failure mode
+where a fidelity detector could reject an unchanged source projection and every
+fallback then failed the same uncalibrated final gate. It preserves Tailoring
+Engine v2's evidence and scoring design; this is a validation, delivery, and
+state-contract correction, not a weaker tailoring algorithm.
+
+**Structured, calibrated gates.** Fidelity and anti-stuffing gates emit typed
+`ValidationFinding`s with `code`, `severity` (`fatal`, `degrade`, or `warn`),
+`fact`, exact `source_span`, `detail`, and `detector_version`. Extraction and
+containment share one canonical fact representation, and named-entity
+extraction cannot join tokens across punctuation boundaries. Raw-bullet
+retention is scoped to experience content; structured checks still protect
+every employer, title, date, location, education/certification entry,
+credential ID, metric, technology, responsibility, and remaining source
+section.
+
+Before optimization, the engine validates the unchanged source-preserving
+identity projection. A demonstrated false positive is calibrated only by the
+exact tuple `(detector_version, code, normalized_fact, source_span)`. A match
+becomes the auditable `CAL_FALSE_POSITIVE` warning; no code-only, fact-only, or
+fuzzy suppression exists. The full calibration identity stays in memory.
+Only calibrated detector codes are copied into the suppression audit fields;
+structured findings may be persisted inside the protected Kit result.
+Privacy-safe application logs expose detector codes/counts, never candidate
+facts or source spans. Tests separately prove that a real deletion of any
+protected fact class remains fatal even when another identity false positive
+was calibrated.
+
+**Delivery-first optimization.** The source-preserving plan is first validated
+as the delivery floor. One `ResumeGateContext` is then reused for action-level
+validation, batch bisection, rollback, rendering, and the final delivery pass.
+Safe siblings survive an unsafe action. Structured provider proposals for the
+headline, summary, and eligible bullets are mapped to source spans and validated
+per item. The headline proposal may only select/reorder exact credited
+tool/methodology terms around the immutable candidate role; otherwise the
+deterministic role-aligned headline wins. Malformed, unsupported, timed-out, or
+unavailable-provider results fall back only for the affected item. Every
+delivered summary crosses final truth grounding. Grounding, anti-fabrication,
+anti-stuffing, structural, and fidelity checks remain authoritative.
+
+Both the source and delivered resume use `score_resume_v2`; the delivered score
+cannot be lower. A validated unchanged fallback therefore has a real delivered
+score equal to the original rather than `n/a`, plus a user-readable reason that
+no safe evidence-backed improvement was accepted. Quality-only actions may be
+accepted at score parity, but unsupported terms never earn credit.
+
+**Input and prose quality.** JD parsing stops before application/contact,
+compensation, eligibility, EEO, and similar boilerplate tails; HR/person names
+are excluded from requirements. Title/company extraction rejects
+job-title-plus-verb captures and returns confidence with JD-owned target
+metadata. Curated resolver bridges remain evidence-span-bound and explicitly
+labelled `bridged`; adjacency and missing evidence never authorize a claim.
+Optional AI receives exact item evidence, allowed terms, and protected facts,
+then returns structured source-span proposals that are validated independently.
+For the headline it may only select/reorder exact resolver-credited terms and
+cannot alter candidate identity. Deterministic per-item fallback remains usable
+on malformed output, timeout, or outage. Every delivered summary crosses truth
+grounding. Generated Resume/Cover Letter prose contains no em dash, and
+PDF/DOCX exporters consume the same validated structured documents rather than
+rebuilding candidate facts.
+
+**State separation.** Per-artifact states and kit roll-up states are distinct:
+
+| Scope | States |
+| --- | --- |
+| Document/artifact | `generated`, `generated_with_fallback`, `needs_input_review`, `failed`, `not_requested` |
+| ApplicationKit | `completed`, `partially_completed`, `needs_input_review`, `failed` |
+
+`partially_completed` is never a document state. Requested Resume and Cover
+Letter artifacts are delivery-critical primary documents. `completed` requires
+all requested primary and secondary artifacts to be delivered
+(`generated`/`generated_with_fallback`). A missing secondary preserves delivered
+primary documents and rolls up to `partially_completed`; one delivered primary
+plus one failed primary is also partial. A primary that needs source review
+takes precedence as `needs_input_review`; it can retain independently
+delivered siblings. No delivered primary and no review path is `failed`.
+
+The web consumes these engine states directly. A source-preserving Resume uses
+the “Delivered resume match” label and an explicit fallback explanation;
+partial kits preserve downloads/content for delivered siblings; input-review
+and failed artifacts show recovery guidance. Low-confidence target metadata is
+presented for confirmation instead of being asserted as a candidate or company
+fact.
+
+Every v7 result carries top-level `state`, JD-owned `target_role`,
+`target_company`, and `target_confidence`, plus a `delivery_reports` entry for
+all six artifact kinds (including explicit `not_requested`). A
+`DeliveryReport` carries its state, structured findings, optional honest
+fallback reason, and calibrated detector codes. These fields describe delivery
+without replacing the artifact validation or claim/evidence trace.
+
+**API lifecycle and migration.** `process_kit` maps the engine roll-up directly
+to the persisted API status instead of treating every non-exception as
+completed:
+
+```
+pending → processing → completed | partially_completed |
+                       needs_input_review | failed
+```
+
+The two new terminal strings are additive on the existing `/api/v1` response.
+There is no version-header negotiation, so clients must tolerate added enum
+values and stop polling for both. Migration `0007_delivery_statuses` widens the
+portable `kits.status` string from 20 to 32 characters on PostgreSQL and SQLite
+without rewriting historical values. Completed and partially completed kits
+remain eligible for change actions and exports; an export additionally requires
+that the selected document's delivery report is delivered.
+
+**Backward-compatible reads.** The serialization boundary recognizes v1
+through v7 and the known unversioned Phase 1 shape. V1–v6 records keep their
+stored schema and payload; on read they receive target defaults and an inferred
+delivery projection based on artifact presence and historical validation flags.
+This prevents an old rejected primary artifact from inheriting v7's default
+`completed` result display. Phase 1 records retain the explicit
+`phase-1/legacy` marker, while an unknown schema becomes `unknown` with no
+invented artifact. No compatibility read rewrites the stored JSON row or the
+separate historical lifecycle status; consumers should use the inferred
+`result.state`/delivery reports when displaying an older Kit.
+
+**Feature flag.** `ENGINE_DELIVERY_FIRST=1` is the default. Setting it to `0`,
+`false`, `no`, or `off` and restarting the API and worker selects the retained
+PR-21 score-only optimizer for a one-release rollback. That path skips the
+per-run identity-calibration profile and delivery-first quality proposals. It
+does not revert detector fixes, truth grounding, the additive v7 schema/state
+machine, or the database migration. The separate `ENGINE_TAILORING_V2` flag
+disables the tailoring/scoring path entirely. See
+[ADR-0023](adr/0023-delivery-first-validation-and-application-kit-v7.md).
+
 ### Request/data flow (deterministic pipeline)
 
 ```
@@ -826,17 +962,22 @@ resume (PDF/text) + job description
         ▼  requirements       → JD-only RequirementTerm[] (v2; legacy flag path retained)
         ▼  resolver           → EvidenceLink[] + legacy-compatible evidence matrix
         ▼  planner            → source-preserving ResumePlan + PlacementAction[]
-        ▼  optimizer          → monotone score/gate/bisect loop (v2)
-        ▼  validation gates   → grounding, fidelity, stuffing, style, LaTeX, format, completeness
+        ▼  calibrate          → exact identity-only ResumeGateContext
+        ▼  optimizer          → delivery floor + monotone score/gate/bisect loop
+        ▼  validation gates   → same calibrated context + grounding/style/format/completeness
         ▼  scorer             → ats_v2 MatchReport + OptimizationTrace
-        ▼  severity           → fatal (block) vs warning (surface)
-      PipelineResult / ApplicationKit v6
+        ▼  delivery roll-up   → document states + honest kit state
+      PipelineResult / ApplicationKit v7
 ```
 
-The LLM (a `provider`) participates only in parsing quality and prose writing.
-With `provider=None` the entire pipeline runs deterministically. Provider output
-is re-validated against the candidate's evidence; unsupported metrics or newly
-introduced tools cause the grounded original to be kept.
+The LLM (a `provider`) participates only in parsing quality and prose proposals.
+Delivery-first Resume headline/summary/bullet proposals are structured and
+validated per item against the candidate's evidence. A headline proposal can
+only select/reorder exact credited terms; every delivered summary crosses truth
+grounding. With `provider=None` the entire pipeline runs deterministically.
+Unsupported metrics, newly introduced tools, malformed output, timeouts, or
+provider unavailability keep the grounded deterministic item rather than
+discarding safe siblings or the complete Resume.
 
 ## 2. Package / application boundaries
 
@@ -895,8 +1036,9 @@ Migrated into `ats_engine`, preserving behavior, with strong typing and tests:
 - **Providers**: `LLMProvider` interface + `OllamaProvider` over stdlib HTTP.
 - **Generation**: grounded plan construction, resume/cover-letter/answer
   generation, LaTeX rendering, and the end-to-end pipeline.
-- **Tests**: the legacy regression behaviors were preserved with **synthetic,
-  non-personal** fixtures (62 engine tests).
+- **Tests**: legacy regression behavior is preserved with **synthetic,
+  non-personal** fixtures plus sanitized, structurally equivalent real-shape
+  regressions; private production documents are never committed.
 
 ## 5. Intentionally rejected / deferred legacy components
 
@@ -937,15 +1079,16 @@ Recorded as ADRs under [`docs/adr/`](adr/):
 - [ADR-0020](adr/0020-change-action-revision-and-irreversibility-policy.md) — Change-action revision, optimistic concurrency, and grounding-removal irreversibility.
 - [ADR-0021](adr/0021-results-first-application-kit-and-docx-export.md) — Results-first Kit presentation and local DOCX export.
 - [ADR-0022](adr/0022-tailoring-engine-v2-evidence-grounded-iterative-optimization.md) — Evidence-grounded Tailoring Engine v2, raw-source fidelity, and monotone optimization.
+- [ADR-0023](adr/0023-delivery-first-validation-and-application-kit-v7.md) — Exact identity calibration, a validated delivery floor, honest document/kit states, and ApplicationKit v7.
 
 ## 7. Future / planned work (not yet implemented)
 
 - **Engine**: production multi-provider routing/optimization and future product
   intelligence beyond the completed Phase 2 artifacts.
-- **API**: authentication, credits, Stripe billing; PDF-upload ingestion;
-  richer kit querying/filtering and result pagination. (Kit endpoints,
-  async SQLAlchemy + Alembic + PostgreSQL persistence, Redis, and the async
-  worker are **done** — Phase 1.)
+- **API**: authentication, credits, Stripe billing, richer kit querying/filtering,
+  and result pagination. (Resume upload/extraction, Kit endpoints, async
+  SQLAlchemy + Alembic + PostgreSQL persistence, Redis, and the async worker are
+  **done**.)
 - **Web**: authenticated product flows (upload → kit → result) once the API
   exposes them behind auth.
 - **Infra**: production deployment manifests; managed Postgres/Redis; worker

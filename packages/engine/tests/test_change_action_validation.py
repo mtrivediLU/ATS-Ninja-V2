@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+import json
+import re
 
 from ats_engine.kit.change_actions import ChangeAction, apply_change_actions
 from ats_engine.kit.contract import ChangeStatus, ChangeType
@@ -11,6 +13,38 @@ from conftest import SYNTHETIC_JD, SYNTHETIC_RESUME
 initial generation, and refuse (atomically, without mutation) any batch that
 would leave an unusable or incomplete artifact.
 """
+
+
+class _ReviewableBulletProvider:
+    """Return one valid structured rewrite and preserve every other source item."""
+
+    @property
+    def identity(self) -> str:
+        return "change-action-reviewable-bullet-v1"
+
+    def complete(self, prompt: str) -> str:
+        match = re.search(
+            r"Structured source inputs:\s*(\[.*?\])\n\nRules:",
+            prompt,
+            flags=re.DOTALL,
+        )
+        if match is None:
+            return ""
+        items = json.loads(match.group(1))
+        for item in items:
+            source = str(item["source_evidence"])
+            if source.startswith("Process Automation:"):
+                item["text"] = (
+                    "Automated safety inspection forms using Power Automate, reducing engineer "
+                    "reporting time from 5 hours to minutes. Process Automation."
+                )
+            else:
+                item["text"] = source
+            item.pop("source_evidence", None)
+            item.pop("allowed_terminology", None)
+            item.pop("protected_facts", None)
+            item.pop("constraints", None)
+        return json.dumps(items)
 
 
 def _kit_with_cover():  # type: ignore[no-untyped-def]
@@ -88,11 +122,19 @@ def test_valid_smaller_cover_change_is_accepted() -> None:
 
 
 def test_resume_completeness_holds_after_actions() -> None:
+    provider = _ReviewableBulletProvider()
     kit = generate_application_kit(
-        resume_text=SYNTHETIC_RESUME, job_description=SYNTHETIC_JD, use_llm=False, include_resume=True
+        resume_text=SYNTHETIC_RESUME,
+        job_description=SYNTHETIC_JD,
+        use_llm=True,
+        extraction_provider=provider,
+        prose_provider=provider,
+        include_resume=True,
     )
-    # Reject a bullet: the candidate original is restored, so no fact is lost.
+    # Reject an actually rewritten bullet: the candidate original is restored,
+    # so no fact is lost and the action remains a meaningful reversible delta.
     bullet = next(r for r in kit.resume.change_ledger if r.change_type is ChangeType.BULLET and r.reversible)
+    assert bullet.tailored_text != bullet.original_text
     result = apply_change_actions(
         kit=kit,
         resume_text=SYNTHETIC_RESUME,

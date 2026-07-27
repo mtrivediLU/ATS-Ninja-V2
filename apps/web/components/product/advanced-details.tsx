@@ -14,7 +14,8 @@ import { MatchInsights } from "@/components/product/match-insights";
 import { OutreachWorkspace } from "@/components/product/outreach-workspace";
 import { Button, Card } from "@/components/ui/primitives";
 import { artifactPresentationState } from "@/lib/artifact-presentation";
-import type { ApplicationKit, KitRead } from "@/lib/api-types";
+import type { ApplicationKit, DocumentState, KitRead } from "@/lib/api-types";
+import type { ArtifactPresentationState } from "@/lib/status";
 
 // All seven large content subsections behind the advanced entry. Only one is
 // ever open at a time, regardless of which group (match insights / trust /
@@ -74,24 +75,44 @@ export function AdvancedDetails({
   }, [open]);
 
   const answerState = result.answers
-    ? artifactPresentationState(result.answers.validation, result.answers.text)
+    ? artifactPresentationState(
+        result.answers.validation,
+        result.answers.text,
+        false,
+        result.delivery_reports?.answers?.state,
+      )
     : kit.include_application_answers
-      ? "unavailable"
+      ? missingArtifactState(result.delivery_reports?.answers?.state)
       : "not-requested";
   const fitState = result.job_fit
-    ? artifactPresentationState(result.job_fit.validation, result.job_fit.summary)
+    ? artifactPresentationState(
+        result.job_fit.validation,
+        result.job_fit.summary,
+        false,
+        result.delivery_reports?.job_fit?.state,
+      )
     : kit.include_job_fit
-      ? "unavailable"
+      ? missingArtifactState(result.delivery_reports?.job_fit?.state)
       : "not-requested";
   const interviewState = result.interview_prep
-    ? artifactPresentationState(result.interview_prep.validation, result.interview_prep.strategy_summary)
+    ? artifactPresentationState(
+        result.interview_prep.validation,
+        result.interview_prep.strategy_summary,
+        false,
+        result.delivery_reports?.interview_prep?.state,
+      )
     : kit.include_interview_prep
-      ? "unavailable"
+      ? missingArtifactState(result.delivery_reports?.interview_prep?.state)
       : "not-requested";
   const outreachState = result.linkedin_outreach
-    ? artifactPresentationState(result.linkedin_outreach.validation, result.linkedin_outreach.strategy_summary)
+    ? artifactPresentationState(
+        result.linkedin_outreach.validation,
+        result.linkedin_outreach.strategy_summary,
+        false,
+        result.delivery_reports?.linkedin_outreach?.state,
+      )
     : kit.include_linkedin_outreach
-      ? "unavailable"
+      ? missingArtifactState(result.delivery_reports?.linkedin_outreach?.state)
       : "not-requested";
 
   const hasChanges = Boolean(result.resume?.change_ledger?.length || result.cover_letter?.change_ledger?.length);
@@ -167,7 +188,7 @@ export function AdvancedDetails({
             kitId={kit.id}
             route="answers"
           >
-            {result.answers && <AnswersWorkspace artifact={result.answers} company={target.company} role={target.role} />}
+            {result.answers && <AnswersWorkspace artifact={result.answers} company={target.company} role={target.role} deliveryState={result.delivery_reports?.answers?.state} />}
           </ArtifactSummarySection>
           <ArtifactSummarySection
             artifact="job-fit"
@@ -186,7 +207,7 @@ export function AdvancedDetails({
             kitId={kit.id}
             route="job-fit"
           >
-            {result.job_fit && <JobFitWorkspace artifact={result.job_fit} company={target.company} role={target.role} />}
+            {result.job_fit && <JobFitWorkspace artifact={result.job_fit} company={target.company} role={target.role} deliveryState={result.delivery_reports?.job_fit?.state} />}
           </ArtifactSummarySection>
           <ArtifactSummarySection
             artifact="interview-prep"
@@ -205,7 +226,7 @@ export function AdvancedDetails({
             kitId={kit.id}
             route="interview-prep"
           >
-            {result.interview_prep && <InterviewWorkspace artifact={result.interview_prep} company={target.company} role={target.role} />}
+            {result.interview_prep && <InterviewWorkspace artifact={result.interview_prep} company={target.company} role={target.role} deliveryState={result.delivery_reports?.interview_prep?.state} />}
           </ArtifactSummarySection>
           <ArtifactSummarySection
             artifact="linkedin-outreach"
@@ -224,12 +245,19 @@ export function AdvancedDetails({
             kitId={kit.id}
             route="linkedin-outreach"
           >
-            {result.linkedin_outreach && <OutreachWorkspace artifact={result.linkedin_outreach} company={target.company} role={target.role} />}
+            {result.linkedin_outreach && <OutreachWorkspace artifact={result.linkedin_outreach} company={target.company} role={target.role} deliveryState={result.delivery_reports?.linkedin_outreach?.state} />}
           </ArtifactSummarySection>
         </div>
       )}
     </section>
   );
+}
+
+function missingArtifactState(deliveryState?: DocumentState): ArtifactPresentationState {
+  if (deliveryState === "needs_input_review") return "needs-input-review";
+  if (deliveryState === "failed") return "failed";
+  if (deliveryState === "not_requested") return "not-requested";
+  return "unavailable";
 }
 
 /**

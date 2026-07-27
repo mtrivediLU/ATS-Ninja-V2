@@ -162,4 +162,14 @@
 \end{itemize}
 {% endif %}
 
+{% for section in remaining_sections %}
+\section{ {{ section.heading }} }
+\vspace{2pt}
+\resumeItemListStart
+{% for line in section.lines %}
+    \resumeItem{ {{ line }} }
+{% endfor %}
+\resumeItemListEnd
+{% endfor %}
+
 \end{document}

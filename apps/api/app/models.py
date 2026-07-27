@@ -25,7 +25,10 @@ class Kit(Base):
     __tablename__ = "kits"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
-    status: Mapped[str] = mapped_column(String(20), default=KitStatus.PENDING, nullable=False, index=True)
+    # Sized for the additive delivery states (``partially_completed`` and
+    # ``needs_input_review``). The value remains a portable string rather than
+    # a PostgreSQL-only enum so SQLite tests and PostgreSQL use one model.
+    status: Mapped[str] = mapped_column(String(32), default=KitStatus.PENDING, nullable=False, index=True)
 
     # Inputs (candidate evidence + targeting). No separate candidate identity is stored.
     resume_text: Mapped[str] = mapped_column(Text, nullable=False)

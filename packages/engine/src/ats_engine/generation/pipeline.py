@@ -12,7 +12,12 @@ from ats_engine.generation.cover_letter import (
     generate_cover_letter_latex,
     generate_cover_letter_text,
 )
-from ats_engine.generation.optimizer import optimize
+from ats_engine.generation.optimizer import (
+    ResumeGateContext,
+    build_resume_gate_context,
+    optimize,
+    validate_resume_plan_findings,
+)
 from ats_engine.generation.planning import (
     build_answer_plan,
     build_cover_letter_plan,
@@ -32,14 +37,13 @@ from ats_engine.providers.base import LLMProvider, run_concurrently
 from ats_engine.providers.ollama import ollama_provider_pair
 from ats_engine.validation.claims import validate_claims
 from ats_engine.validation.completeness import validate_completeness
-from ats_engine.validation.fidelity import validate_resume_fidelity
+from ats_engine.validation.findings import ValidationFinding, ValidationSeverity
 from ats_engine.validation.latex import validate_latex
 from ats_engine.validation.naturalness import production_naturalness_warnings
 from ats_engine.validation.output_format import (
     validate_cover_letter_word_count,
     validate_output_format,
 )
-from ats_engine.validation.stuffing import validate_resume_stuffing
 from ats_engine.validation.style import validate_style
 
 """End-to-end generation pipeline.
@@ -139,14 +143,23 @@ def run_pipeline(
         # delivered resume.
         if resolved_settings.tailoring_v2:
             generated_summary = resume_plan.summary
+            gate_context = (
+                build_resume_gate_context(profile, resume_plan)
+                if resolved_settings.delivery_first
+                else ResumeGateContext()
+            )
             resume_plan, optimization_trace = optimize(
                 profile,
                 jd_profile,
                 resume_plan.requirements,
                 resume_plan.evidence_links,
                 resume_plan,
+                gate_context=gate_context,
+                accept_generated_prose=prose is not None,
+                delivery_first=resolved_settings.delivery_first,
             )
             result.metadata["optimization_trace"] = optimization_trace
+            result.metadata["resume_gate_context"] = gate_context
             if prose is not None and generated_summary.strip() and generated_summary != resume_plan.summary:
                 # The optimizer intentionally starts from source content. Keep
                 # discarded model prose for the orchestrator's claim trace so
@@ -272,29 +285,22 @@ def validate_pipeline_result(result: PipelineResult, profile: Profile | None = N
             for decision in result.resume_plan.plan_decisions:
                 if decision.kind == "bullet" and decision.original_text != decision.tailored_text:
                     errors.extend(f"resume: {error}" for error in validate_style(decision.tailored_text))
-            # These raw-source gates protect every delivered resume.  An empty
-            # V2 requirement set means "no tailoring terms", not "no source
-            # facts to preserve"; the stuffing validator still checks its
-            # source-relative repetition budgets with an empty term list.
-            errors.extend(
-                f"resume: {error}"
-                for error in validate_resume_fidelity(
-                    result.parsed_input.resume_text,
-                    result.resume_text,
-                    profile=profile,
-                )
+            context = result.metadata.get("resume_gate_context")
+            gate_context = (
+                context
+                if isinstance(context, ResumeGateContext)
+                else build_resume_gate_context(profile, result.resume_plan)
             )
-            errors.extend(
-                f"resume: {error}"
-                for error in validate_resume_stuffing(
-                    summary=result.resume_plan.summary,
-                    bullets=[bullet for experience in result.resume_plan.experience for bullet in experience.bullets],
-                    skill_groups=result.resume_plan.skill_groups,
-                    requirements=result.resume_plan.requirements,
-                    source_skill_groups=profile.source_skill_groups,
-                    source_resume_text=result.parsed_input.resume_text,
-                )
+            findings = validate_resume_plan_findings(
+                result.resume_plan,
+                profile,
+                result.resume_plan.requirements,
+                result.resume_plan.placement_actions,
+                gate_context,
+                rendered_text=result.resume_text,
             )
+            result.metadata["resume_validation_findings"] = findings
+            errors.extend(_finding_message(finding) for finding in findings)
         errors.extend([f"resume: {error}" for error in validate_claims(result.resume_latex, profile)])
         errors.extend(
             [
@@ -360,6 +366,13 @@ def _resume_bullet_units(resume_text: str) -> list[str]:
 def _cover_paragraph_units(cover_text: str) -> list[str]:
     """Structured paragraph units for the stuffing checks, split on blank lines."""
     return [block.strip() for block in re.split(r"\n\s*\n", cover_text or "") if block.strip()]
+
+
+def _finding_message(finding: ValidationFinding) -> str:
+    """Legacy-readable message whose prefix keeps calibrated warnings honest."""
+    if finding.severity is ValidationSeverity.FATAL:
+        return f"resume: {finding.detail}"
+    return f"resume validation [{finding.severity.value}:{finding.code}]: {finding.detail}"
 
 
 def mode_from_text(requested_text: str, job_description: str = "", questions: list[str] | None = None) -> Mode:

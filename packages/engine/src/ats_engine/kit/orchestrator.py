@@ -12,7 +12,7 @@ from ats_engine.generation.cover_letter import (
     generate_cover_letter_latex,
     generate_cover_letter_text,
 )
-from ats_engine.generation.document_normalization import normalize_document_text
+from ats_engine.generation.document_normalization import normalize_generated_prose
 from ats_engine.generation.pipeline import resolve_artifact_selection, run_pipeline, validate_pipeline_result
 from ats_engine.generation.resume import (
     format_resume_output,
@@ -35,9 +35,12 @@ from ats_engine.kit.contract import (
     ClaimStatus,
     CoverLetterArtifact,
     CoverLetterDocument,
+    DeliveryReport,
+    DocumentState,
     GenerationMetadata,
     InterviewPrepArtifact,
     JobFitArtifact,
+    KitState,
     LinkedInOutreachArtifact,
     MatchReport,
     OptimizationTrace,
@@ -59,6 +62,7 @@ from ats_engine.models import AnswerPlan, CoverLetterPlan, Mode, PipelineResult,
 from ats_engine.parsing.resume import build_profile
 from ats_engine.providers.base import LLMProvider
 from ats_engine.scoring.match_report import build_match_report, build_weighted_keywords
+from ats_engine.validation.findings import ValidationFinding
 from ats_engine.validation.severity import is_fatal_validation_error, partition_validation_errors
 
 logger = logging.getLogger(__name__)
@@ -259,6 +263,16 @@ def generate_application_kit(
     # added. No candidate content or sensitive detail is ever logged.
     _stage = time.perf_counter()
     kit_warnings: list[str] = []
+    trace_raw = result.metadata.get("optimization_trace")
+    trace = trace_raw if isinstance(trace_raw, OptimizationTrace) else OptimizationTrace()
+    if trace.delivery_state is DocumentState.NEEDS_INPUT_REVIEW and resume_artifact is not None:
+        # A floor that failed structural fidelity or score parity is not a
+        # deliverable resume. Retain its typed validation/report diagnostics,
+        # but never expose or score the disputed projection as if generation
+        # had succeeded.
+        resume_artifact.text = ""
+        resume_artifact.latex = ""
+        resume_artifact.document = None
     match_report = _safe_match_report(
         profile=profile,
         result=result,
@@ -285,6 +299,29 @@ def generate_application_kit(
     )
     timings["scoring_ms"] = _elapsed_ms(_stage)
 
+    resume_findings_raw = result.metadata.get("resume_validation_findings")
+    resume_findings = (
+        [finding for finding in resume_findings_raw if isinstance(finding, ValidationFinding)]
+        if isinstance(resume_findings_raw, (list, tuple))
+        else []
+    )
+    delivery_reports = _delivery_reports(
+        selection_resume=selection.resume,
+        selection_cover=selection.cover_letter,
+        selection_answers=selection.application_answers,
+        include_job_fit=include_job_fit,
+        include_interview_prep=include_interview_prep,
+        include_linkedin_outreach=include_linkedin_outreach,
+        resume=resume_artifact,
+        cover=cover_artifact,
+        answers=answers_artifact,
+        job_fit=job_fit_artifact,
+        interview_prep=interview_prep_artifact,
+        linkedin_outreach=linkedin_outreach_artifact,
+        resume_findings=resume_findings,
+        trace=trace,
+    )
+    kit_state = _roll_up_kit_state(delivery_reports)
     validation = _kit_validation(
         result.validation_errors,
         [
@@ -314,6 +351,11 @@ def generate_application_kit(
         resolved_mode=selection.code,
         generation=generation,
         validation=validation,
+        target_role=(result.jd_profile.title if result.jd_profile.title != "Target Role" else ""),
+        target_company=(result.jd_profile.company if result.jd_profile.company != "Target Company" else ""),
+        target_confidence=result.jd_profile.parse_confidence,
+        state=kit_state,
+        delivery_reports=delivery_reports,
         resume=resume_artifact,
         cover_letter=cover_artifact,
         answers=answers_artifact,
@@ -360,21 +402,17 @@ def _ground_resume(
     counts = [0, 0]
     fatal = [False]
 
-    # The v2 optimizer only assembles its summary from evidence links and
-    # deterministic placement actions.  The generic claim extractor is less
-    # expressive than that provenance model (notably for the deliberately
-    # narrow, certificate-backed implication wording), so re-processing this
-    # source-backed prose can incorrectly remove supported content.  Generated
-    # summaries retain the normal truth gate.
-    if not plan.placement_actions:
-        plan.summary = _merge(
-            ground_text(plan.summary, artifact=ArtifactKind.RESUME, context=context, id_prefix="resume-summary"),
-            claims,
-            counts,
-            fatal,
-        )
-    else:
-        claims.extend(_supported_claim_trace(plan.summary, ArtifactKind.RESUME, context, "resume-summary"))
+    # Every delivered summary crosses the authoritative truth gate, including
+    # summaries assembled from resolver-backed placement actions.  Placement
+    # provenance is useful evidence, but it must never become a bypass through
+    # which an otherwise-valid structured provider response can add an
+    # unsupported responsibility, management claim, or level of expertise.
+    plan.summary = _merge(
+        ground_text(plan.summary, artifact=ArtifactKind.RESUME, context=context, id_prefix="resume-summary"),
+        claims,
+        counts,
+        fatal,
+    )
 
     if discarded_summary.strip():
         # Model prose replaced by the optimizer never reaches the artifact, but
@@ -526,6 +564,149 @@ def _bucket_errors(errors: list[str]) -> dict[str, list[str]]:
     return buckets
 
 
+_DeliverableArtifact = (
+    ResumeArtifact
+    | CoverLetterArtifact
+    | AnswerArtifact
+    | JobFitArtifact
+    | InterviewPrepArtifact
+    | LinkedInOutreachArtifact
+)
+
+
+def _document_delivery_report(
+    *,
+    requested: bool,
+    artifact: _DeliverableArtifact | None,
+    findings: list[ValidationFinding] | None = None,
+    preferred_state: DocumentState = DocumentState.GENERATED,
+    fallback_reason: str = "",
+    calibration_suppressed: list[str] | None = None,
+) -> DeliveryReport:
+    if not requested:
+        return DeliveryReport(state=DocumentState.NOT_REQUESTED)
+    if preferred_state is DocumentState.NEEDS_INPUT_REVIEW:
+        return DeliveryReport(
+            state=DocumentState.NEEDS_INPUT_REVIEW,
+            findings=list(findings or []),
+            fallback_reason=fallback_reason or "The input requires review before this artifact can be delivered.",
+            calibration_suppressed=list(calibration_suppressed or []),
+        )
+    if artifact is None:
+        return DeliveryReport(
+            state=DocumentState.FAILED,
+            findings=list(findings or []),
+            fallback_reason=fallback_reason or "The requested artifact could not be generated.",
+            calibration_suppressed=list(calibration_suppressed or []),
+        )
+    if artifact.validation.fatal:
+        return DeliveryReport(
+            state=DocumentState.FAILED,
+            findings=list(findings or []),
+            fallback_reason=fallback_reason or "A truth-critical validation gate blocked this artifact.",
+            calibration_suppressed=list(calibration_suppressed or []),
+        )
+    repaired = artifact.validation.status is ArtifactStatus.REPAIRED
+    state = (
+        DocumentState.GENERATED_WITH_FALLBACK
+        if preferred_state is DocumentState.GENERATED_WITH_FALLBACK or repaired
+        else DocumentState.GENERATED
+    )
+    reason = fallback_reason
+    if repaired and not reason:
+        reason = "Unsupported generated claims were removed before delivery."
+    return DeliveryReport(
+        state=state,
+        findings=list(findings or []),
+        fallback_reason=reason or None,
+        calibration_suppressed=list(calibration_suppressed or []),
+    )
+
+
+def _delivery_reports(
+    *,
+    selection_resume: bool,
+    selection_cover: bool,
+    selection_answers: bool,
+    include_job_fit: bool,
+    include_interview_prep: bool,
+    include_linkedin_outreach: bool,
+    resume: ResumeArtifact | None,
+    cover: CoverLetterArtifact | None,
+    answers: AnswerArtifact | None,
+    job_fit: JobFitArtifact | None,
+    interview_prep: InterviewPrepArtifact | None,
+    linkedin_outreach: LinkedInOutreachArtifact | None,
+    resume_findings: list[ValidationFinding],
+    trace: OptimizationTrace,
+) -> dict[ArtifactKind, DeliveryReport]:
+    return {
+        ArtifactKind.RESUME: _document_delivery_report(
+            requested=selection_resume,
+            artifact=resume,
+            findings=resume_findings,
+            preferred_state=trace.delivery_state,
+            fallback_reason=trace.fallback_reason,
+            calibration_suppressed=trace.calibration_suppressed,
+        ),
+        ArtifactKind.COVER_LETTER: _document_delivery_report(
+            requested=selection_cover,
+            artifact=cover,
+        ),
+        ArtifactKind.ANSWERS: _document_delivery_report(
+            requested=selection_answers,
+            artifact=answers,
+        ),
+        ArtifactKind.JOB_FIT: _document_delivery_report(
+            requested=include_job_fit,
+            artifact=job_fit,
+        ),
+        ArtifactKind.INTERVIEW_PREP: _document_delivery_report(
+            requested=include_interview_prep,
+            artifact=interview_prep,
+        ),
+        ArtifactKind.LINKEDIN_OUTREACH: _document_delivery_report(
+            requested=include_linkedin_outreach,
+            artifact=linkedin_outreach,
+        ),
+    }
+
+
+def _roll_up_kit_state(reports: dict[ArtifactKind, DeliveryReport]) -> KitState:
+    delivered = {DocumentState.GENERATED, DocumentState.GENERATED_WITH_FALLBACK}
+    primary = [
+        reports[kind]
+        for kind in (ArtifactKind.RESUME, ArtifactKind.COVER_LETTER)
+        if reports[kind].state is not DocumentState.NOT_REQUESTED
+    ]
+    secondary = [
+        report
+        for kind, report in reports.items()
+        if kind not in {ArtifactKind.RESUME, ArtifactKind.COVER_LETTER}
+        and report.state is not DocumentState.NOT_REQUESTED
+    ]
+    requested = [*primary, *secondary]
+    if not requested:
+        return KitState.COMPLETED
+    if primary:
+        if any(report.state is DocumentState.NEEDS_INPUT_REVIEW for report in primary):
+            return KitState.NEEDS_INPUT_REVIEW
+        if all(report.state in delivered for report in primary):
+            if any(report.state not in delivered for report in secondary):
+                return KitState.PARTIALLY_COMPLETED
+            return KitState.COMPLETED
+        if any(report.state in delivered for report in primary):
+            return KitState.PARTIALLY_COMPLETED
+        return KitState.FAILED
+    if any(report.state is DocumentState.NEEDS_INPUT_REVIEW for report in requested):
+        return KitState.NEEDS_INPUT_REVIEW
+    if all(report.state in delivered for report in requested):
+        return KitState.COMPLETED
+    if any(report.state in delivered for report in requested):
+        return KitState.PARTIALLY_COMPLETED
+    return KitState.FAILED
+
+
 def _artifact_validation(
     errors: list[str],
     grounding: _ArtifactGrounding | None,
@@ -592,56 +773,68 @@ def _build_cover_artifact(
 def _contact_lines(plan: ResumePlan | CoverLetterPlan) -> list[str]:
     contact = plan.contacts
     return [
-        normalize_document_text(value)
+        normalize_generated_prose(value)
         for value in (contact.email, contact.phone, contact.location, contact.linkedin, contact.website)
-        if normalize_document_text(value)
+        if normalize_generated_prose(value)
     ]
 
 
 def _resume_document(plan: ResumePlan) -> ResumeDocument:
     """Project the already-grounded plan into presentation fields without inference."""
     return ResumeDocument(
-        candidate_name=normalize_document_text(plan.contacts.name),
-        professional_headline=normalize_document_text(plan.headline),
+        candidate_name=normalize_generated_prose(plan.contacts.name),
+        professional_headline=normalize_generated_prose(plan.headline),
         contact_lines=_contact_lines(plan),
-        summary=normalize_document_text(plan.summary),
+        summary=normalize_generated_prose(plan.summary),
         skill_groups=[
             ResumeSkillGroup(
-                normalize_document_text(label),
-                [normalize_document_text(item) for item in items if normalize_document_text(item)],
+                normalize_generated_prose(label),
+                [normalize_generated_prose(item) for item in items if normalize_generated_prose(item)],
             )
             for label, items in plan.skill_groups
-            if normalize_document_text(label) or items
+            if normalize_generated_prose(label) or items
         ],
         experience=[
             ResumeExperienceEntry(
-                employer=normalize_document_text(item.company),
-                title=normalize_document_text(item.title),
-                location=normalize_document_text(item.location),
-                date_range=normalize_document_text(item.dates),
-                bullets=[normalize_document_text(bullet) for bullet in item.bullets if normalize_document_text(bullet)],
+                employer=normalize_generated_prose(item.company),
+                title=normalize_generated_prose(item.title),
+                location=normalize_generated_prose(item.location),
+                date_range=normalize_generated_prose(item.dates),
+                bullets=[
+                    normalize_generated_prose(bullet) for bullet in item.bullets if normalize_generated_prose(bullet)
+                ],
             )
             for item in plan.experience
         ],
         education=[
             ResumeEducationEntry(
-                institution=normalize_document_text(item.institution),
-                degree=normalize_document_text(item.degree),
-                location=normalize_document_text(item.location),
-                date_range=normalize_document_text(item.dates),
-                details=[normalize_document_text(detail) for detail in item.bullets if normalize_document_text(detail)],
+                institution=normalize_generated_prose(item.institution),
+                degree=normalize_generated_prose(item.degree),
+                location=normalize_generated_prose(item.location),
+                date_range=normalize_generated_prose(item.dates),
+                details=[
+                    normalize_generated_prose(detail) for detail in item.bullets if normalize_generated_prose(detail)
+                ],
             )
             for item in plan.education
         ],
         certifications=[
             ResumeCertificationEntry(
-                normalize_document_text(item.name),
-                normalize_document_text(item.date),
-                normalize_document_text(item.link),
-                normalize_document_text(item.credential_id),
+                normalize_generated_prose(item.name),
+                normalize_generated_prose(item.date),
+                normalize_generated_prose(item.link),
+                normalize_generated_prose(item.credential_id),
             )
             for item in plan.certifications
-            if normalize_document_text(item.name)
+            if normalize_generated_prose(item.name)
+        ],
+        remaining_sections=[
+            (
+                normalize_generated_prose(heading),
+                [normalize_generated_prose(line) for line in lines if normalize_generated_prose(line)],
+            )
+            for heading, lines in plan.remaining_sections
+            if any(normalize_generated_prose(line) for line in lines)
         ],
     )
 
@@ -650,19 +843,19 @@ def _cover_document(plan: CoverLetterPlan) -> CoverLetterDocument:
     company = plan.jd_profile.company if plan.jd_profile.company != "Target Company" else ""
     role = plan.jd_profile.title if plan.jd_profile.title != "Target Role" else ""
     return CoverLetterDocument(
-        sender_name=normalize_document_text(plan.contacts.name),
+        sender_name=normalize_generated_prose(plan.contacts.name),
         sender_contact_lines=_contact_lines(plan),
         date=date.today().strftime("%B %d, %Y").replace(" 0", " "),
-        recipient_company=normalize_document_text(company),
-        target_role=normalize_document_text(role),
+        recipient_company=normalize_generated_prose(company),
+        target_role=normalize_generated_prose(role),
         greeting="Dear Hiring Manager,",
         body_paragraphs=[
-            normalize_document_text(paragraph)
+            normalize_generated_prose(paragraph)
             for paragraph in plan.body_paragraphs
-            if normalize_document_text(paragraph)
+            if normalize_generated_prose(paragraph)
         ],
         closing="Sincerely,",
-        signature_name=normalize_document_text(plan.contacts.name),
+        signature_name=normalize_generated_prose(plan.contacts.name),
     )
 
 

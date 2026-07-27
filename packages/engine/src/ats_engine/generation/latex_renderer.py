@@ -38,6 +38,22 @@ SECTION_ALIASES = {
     "certification": "certifications",
     "licenses": "certifications",
 }
+ADDITIONAL_SECTION_ALIASES = {
+    "publications": "Publications",
+    "selected publications": "Publications",
+    "research publications": "Publications",
+    "projects": "Projects",
+    "selected projects": "Projects",
+    "technical projects": "Projects",
+    "awards": "Awards",
+    "honours": "Awards",
+    "honors": "Awards",
+    "awards and honours": "Awards",
+    "awards and honors": "Awards",
+    "volunteering": "Volunteer Experience",
+    "volunteer experience": "Volunteer Experience",
+    "community involvement": "Volunteer Experience",
+}
 
 HEADER_FIELD_ALIASES = {
     "professional headline": "headline",
@@ -139,6 +155,7 @@ def build_resume_context(resume_text: str, user_info: dict[str, str] | None) -> 
         "experience": sections["experience"],
         "education": sections["education"],
         "certifications": sections["certifications"],
+        "remaining_sections": sections["remaining_sections"],
     }
 
 
@@ -166,6 +183,7 @@ def parse_resume_sections(resume_text: str) -> dict[str, Any]:
         "experience": [],
         "education": [],
         "certifications": [],
+        "remaining_sections": [],
     }
     if not resume_text or not resume_text.strip():
         return sections
@@ -174,6 +192,7 @@ def parse_resume_sections(resume_text: str) -> dict[str, Any]:
     summary_lines: list[str] = []
     current_experience: dict[str, Any] | None = None
     current_education: dict[str, Any] | None = None
+    current_remaining: dict[str, Any] | None = None
 
     def flush_experience() -> None:
         nonlocal current_experience
@@ -189,17 +208,32 @@ def parse_resume_sections(resume_text: str) -> dict[str, Any]:
             sections["education"].append(current_education)
         current_education = None
 
+    def flush_remaining() -> None:
+        nonlocal current_remaining
+        if current_remaining and current_remaining.get("lines"):
+            current_remaining["lines"] = _dedupe(current_remaining["lines"])
+            sections["remaining_sections"].append(current_remaining)
+        current_remaining = None
+
     def switch_section(section: str) -> None:
         nonlocal current_section
         if current_section == "experience":
             flush_experience()
         if current_section == "education":
             flush_education()
+        if current_section == "remaining":
+            flush_remaining()
         current_section = section
 
     for raw_line in resume_text.splitlines():
         line = _strip_markdown(raw_line)
         if not line:
+            continue
+
+        additional_heading = _detect_additional_section(line)
+        if additional_heading:
+            switch_section("remaining")
+            current_remaining = {"heading": additional_heading, "lines": []}
             continue
 
         detected_section, remainder = _detect_section(line)
@@ -250,11 +284,19 @@ def parse_resume_sections(resume_text: str) -> dict[str, Any]:
             certification = _parse_certification_line(line)
             if certification:
                 sections["certifications"].append(certification)
+            continue
+
+        if current_section == "remaining" and current_remaining is not None:
+            content = _clean_content_line(line)
+            if content:
+                current_remaining["lines"].append(content)
 
     if current_section == "experience":
         flush_experience()
     if current_section == "education":
         flush_education()
+    if current_section == "remaining":
+        flush_remaining()
 
     sections["summary"] = _collapse_sentences(summary_lines)
     sections["skills"] = _dedupe_skill_groups(sections["skills"])
@@ -479,6 +521,18 @@ def _detect_section(line: str) -> tuple[str | None, str]:
     return None, line
 
 
+def _detect_additional_section(line: str) -> str:
+    """Return a safe display label for a recognized non-core resume heading."""
+    normalized = _normalize_heading(line)
+    if normalized in ADDITIONAL_SECTION_ALIASES:
+        return ADDITIONAL_SECTION_ALIASES[normalized]
+    if ":" in line:
+        possible_heading, remainder = line.split(":", 1)
+        if not remainder.strip():
+            return ADDITIONAL_SECTION_ALIASES.get(_normalize_heading(possible_heading), "")
+    return ""
+
+
 def _latex_resume_context(context: dict[str, Any]) -> dict[str, Any]:
     return {
         "name": latex_escape(context.get("name", "")),
@@ -531,6 +585,14 @@ def _latex_resume_context(context: dict[str, Any]) -> dict[str, Any]:
                 "credential_id": latex_escape(item.get("credential_id", "")),
             }
             for item in context.get("certifications", [])
+        ],
+        "remaining_sections": [
+            {
+                "heading": latex_escape(section.get("heading", "")),
+                "lines": [latex_escape(line) for line in section.get("lines", [])],
+            }
+            for section in context.get("remaining_sections", [])
+            if section.get("lines")
         ],
     }
 

@@ -1,0 +1,76 @@
+Alex Morgan
+alex.morgan@example.test | 555-010-0200 | Toronto, ON (Remote)
+linkedin.com/in/alex-morgan-example
+
+PROFESSIONAL SUMMARY
+Business Intelligence Developer and Senior Software Engineer experienced in reliable data products, data warehousing, analytics, and cloud services.
+
+PROFESSIONAL EXPERIENCE
+Northstar Health Analytics | Toronto, ON (Remote)
+Senior Software Engineer
+January 2022 - Present
+- Architected and built a centralized PostgreSQL and dbt data warehouse for clinical operations reporting.
+- Built Power BI dashboards with DAX and Power Query, reducing manual reporting overhead by 40%.
+- Streamlined Mission-Critical reporting quality checks while maintaining 100% uptime with a team of four engineers.
+
+Cedar Ridge Systems | Toronto, ON
+Software Engineer
+January 2020 - December 2021
+- Designed ETL/ELT Pipelines ingesting data from Salesforce, HubSpot, ZoomInfo, and Lead Forensics.
+- Built Tableau and Power BI dashboards for operational stakeholders using governed business requirements.
+- Maintained Git workflows, audit logging, and access controls for production releases.
+
+Lakeview Municipal Services | Lakeview, ON
+Application Developer
+January 2018 - December 2019
+- Developed geocoding services and ESRI ArcGIS visuals for municipal survey data.
+- Automated a recurring reporting workflow from five hours to minutes while preserving data integrity.
+- Documented version control, incident response, and technical support procedures.
+
+Meridian Software Labs | Toronto, ON
+Software Engineer
+January 2016 - December 2017
+- Developed data ingestion services in Python and Google Cloud SQL.
+- Configured Cloud SQL Auth Proxy for secure communication between services.
+- Delivered 13 customer-facing platform launches and maintained production integrations.
+
+Northern Data Research Institute | Lakeview, ON
+Data Analyst
+January 2014 - December 2015
+- Created ETL/ELT pipelines and SQL reporting for mineral exploration datasets.
+- Developed a Random Forest classification model with a 99.5% F1 score.
+- Presented documented analytical results to technical and non-technical research partners.
+
+Atlas Enterprise Consulting | Toronto, ON
+Systems Analyst
+January 2012 - December 2013
+- Maintained Mission-Critical enterprise services and release documentation.
+- Delivered user interface design and information architecture updates for an internal portal.
+- Supported knowledge transfer, troubleshooting, and secure production deployments.
+
+TECHNICAL SKILLS
+Business Intelligence: Power BI, Power BI Service, Tableau, DAX, Power Query, Data Modeling, Data Governance
+Data Engineering: PostgreSQL, SQL Server, dbt, ETL/ELT, Data Warehousing, Data Pipelines
+Cloud and Platforms: Google Cloud, AWS, Azure, Salesforce, HubSpot, ZoomInfo, Lead Forensics, SharePoint
+Geospatial: ESRI ArcGIS, QGIS, Geocoding
+Automation and Delivery: Power Automate, Git, CI/CD, Audit Logging, Access Controls
+Languages: Python, Java, JavaScript, SQL, C, C++, PHP, HTML5, CSS3.
+
+EDUCATION
+Lakeshore Institute of Technology | Lakeview, ON
+Master of Science, Computational Sciences
+2010 - 2012
+- SYNCONF 2023 Halifax - Presented "Pattern Recognition for Synthetic Resource Models" at Atlantic Innovation Centre, Atlantic Technical University (Oral presentation).
+
+Westfield School of Engineering | Toronto, ON
+Bachelor of Engineering, Computer Science
+2006 - 2010
+
+PUBLICATIONS
+- Co-authored "Pattern Recognition for Synthetic Resource Models," Journal of Fictional Applied Analytics, 2023.
+
+CERTIFICATIONS
+Microsoft Certified: Power BI Data Analyst Associate (PL-300) | Credential ID: TEST-PL300-001
+Microsoft Certified: Power Platform Developer Associate (PL-400) | Credential ID: TEST-PL400-002
+Microsoft Certified: Azure Fundamentals (AZ-900) | Credential ID: TEST-AZ900-003
+Salesforce Certified Platform Developer I | Credential ID: TEST-SFDEV-004

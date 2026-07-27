@@ -58,6 +58,8 @@ services:
       ATS_API_DATABASE_URL: postgresql+asyncpg://ats:ats@db:5432/ats_ninja
       ATS_API_REDIS_URL: redis://redis:6379
       ATS_API_ENGINE_USE_LLM: ${ATS_API_ENGINE_USE_LLM:-true}
+      ENGINE_DELIVERY_FIRST: ${ENGINE_DELIVERY_FIRST:-1}
+      ENGINE_TAILORING_V2: ${ENGINE_TAILORING_V2:-1}
       # Ollama is optional; the engine degrades to a deterministic path.
       OLLAMA_BASE_URL: http://host.docker.internal:11434
     ports:
@@ -87,6 +89,8 @@ services:
       ATS_API_DATABASE_URL: postgresql+asyncpg://ats:ats@db:5432/ats_ninja
       ATS_API_REDIS_URL: redis://redis:6379
       ATS_API_ENGINE_USE_LLM: ${ATS_API_ENGINE_USE_LLM:-true}
+      ENGINE_DELIVERY_FIRST: ${ENGINE_DELIVERY_FIRST:-1}
+      ENGINE_TAILORING_V2: ${ENGINE_TAILORING_V2:-1}
       OLLAMA_BASE_URL: http://host.docker.internal:11434
     depends_on:
       db:

@@ -4,12 +4,20 @@ import uuid
 
 import httpx
 import pytest
+from ats_engine import (
+    ArtifactKind,
+    DeliveryReport,
+    DocumentState,
+    KitState,
+    generate_application_kit,
+)
+from ats_engine.validation import ValidationFinding, ValidationSeverity
 from conftest import SAMPLE_JD, SAMPLE_RESUME
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings
 from app.schemas import KitCreate, KitStatus
-from app.services import create_kit, get_kit, mark_kit_failed, process_kit
+from app.services import _status_for_kit_state, create_kit, get_kit, mark_kit_failed, process_kit
 
 
 async def test_submit_kit_runs_lifecycle_to_completion(client: httpx.AsyncClient) -> None:
@@ -33,7 +41,7 @@ async def test_submit_kit_runs_lifecycle_to_completion(client: httpx.AsyncClient
     assert kit["status"] == "completed"
     result = kit["result"]
     # The versioned ApplicationKit contract with typed artifacts.
-    assert result["schema_version"] == "application-kit/v6"
+    assert result["schema_version"] == "application-kit/v7"
     assert result["job_fit"] is not None
     assert result["job_fit"]["requirements"]
     assert result["job_fit"]["consistency"]["passed"] is True
@@ -60,7 +68,7 @@ async def test_get_unknown_kit_returns_404(client: httpx.AsyncClient) -> None:
     assert response.status_code == 404
 
 
-async def test_suspect_resume_structure_becomes_content_safe_failed_job(client: httpx.AsyncClient) -> None:
+async def test_suspect_resume_structure_becomes_content_safe_input_review_job(client: httpx.AsyncClient) -> None:
     suspect_fragment = "Cloud SQL Auth Proxy, configuring secure communication between services."
     response = await client.post(
         "/api/v1/kits",
@@ -81,7 +89,7 @@ async def test_suspect_resume_structure_becomes_content_safe_failed_job(client: 
     fetched = await client.get(f"/api/v1/kits/{response.json()['id']}")
     assert fetched.status_code == 200
     kit = fetched.json()
-    assert kit["status"] == "failed"
+    assert kit["status"] == "needs_input_review"
     assert kit["result"] is None
     assert kit["error"].startswith("EXTRACTION_SUSPECT:")
     assert suspect_fragment not in kit["error"]
@@ -173,7 +181,57 @@ async def test_older_v5_kit_missing_job_priorities_defaults_to_empty_list(
         "accepted_actions": [],
         "rejected_actions": [],
         "unreachable_terms": [],
+        "delivery_state": "generated_with_fallback",
+        "fallback_reason": "",
+        "calibration_suppressed": [],
     }
+
+
+async def test_legacy_v6_fatal_artifact_is_served_with_honest_inferred_delivery_state(
+    client: httpx.AsyncClient,
+    sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    """A pre-v7 withheld artifact must not acquire v7's ``completed`` default."""
+    from app.models import Kit
+
+    legacy_v6_result = {
+        "schema_version": "application-kit/v6",
+        "validation": {
+            "passed": False,
+            "fatal": True,
+            "error_count": 1,
+            "errors": ["legacy fatal validation"],
+        },
+        # Retain stale text deliberately: inferred delivery state, not text
+        # presence alone, must prevent a rejected artifact from looking delivered.
+        "resume": {
+            "text": "stale rejected resume text",
+            "validation": {
+                "status": "rejected",
+                "fatal": True,
+                "errors": ["legacy fatal validation"],
+            },
+        },
+    }
+    async with sessionmaker() as session:
+        kit = Kit(
+            status=KitStatus.COMPLETED,
+            resume_text="synthetic",
+            job_description="synthetic",
+            result=legacy_v6_result,
+        )
+        session.add(kit)
+        await session.commit()
+        await session.refresh(kit)
+        kit_id = kit.id
+
+    response = await client.get(f"/api/v1/kits/{kit_id}")
+    assert response.status_code == 200
+    result = response.json()["result"]
+    assert result["schema_version"] == "application-kit/v6"
+    assert result["state"] == "failed"
+    assert result["delivery_reports"]["resume"]["state"] == "failed"
+    assert result["delivery_reports"]["cover_letter"]["state"] == "not_requested"
 
 
 async def test_submit_kit_rejects_empty_inputs(client: httpx.AsyncClient) -> None:
@@ -191,6 +249,15 @@ async def test_openapi_exposes_product_intelligence_requests_and_typed_responses
     assert create_properties["include_linkedin_outreach"]["default"] is True
     assert "outreach_context" in create_properties
     assert {"OptimizationTraceResponse", "OptimizationRejectionResponse"} <= schemas.keys()
+    assert {"DeliveryReportResponse", "ValidationFindingResponse"} <= schemas.keys()
+    application_kit_properties = schemas["ApplicationKitResponse"]["properties"]
+    assert {
+        "state",
+        "delivery_reports",
+        "target_role",
+        "target_company",
+        "target_confidence",
+    } <= application_kit_properties.keys()
     match_report_properties = schemas["MatchReportResponse"]["properties"]
     assert {"score_basis", "optimization_trace"} <= match_report_properties.keys()
     trace_properties = schemas["OptimizationTraceResponse"]["properties"]
@@ -200,6 +267,9 @@ async def test_openapi_exposes_product_intelligence_requests_and_typed_responses
         "accepted_actions",
         "rejected_actions",
         "unreachable_terms",
+        "delivery_state",
+        "fallback_reason",
+        "calibration_suppressed",
     } <= trace_properties.keys()
     certification_properties = schemas["ResumeCertificationEntryResponse"]["properties"]
     assert "credential_id" in certification_properties
@@ -301,7 +371,7 @@ async def test_submit_kit_can_persistently_disable_job_fit(client: httpx.AsyncCl
     fetched = await client.get(f"/api/v1/kits/{response.json()['id']}")
     body = fetched.json()
     assert body["include_job_fit"] is False
-    assert body["result"]["schema_version"] == "application-kit/v6"
+    assert body["result"]["schema_version"] == "application-kit/v7"
     assert body["result"]["job_fit"] is None
     assert body["include_interview_prep"] is True
     assert body["result"]["interview_prep"] is not None
@@ -422,6 +492,22 @@ async def test_list_kits_paginates(client: httpx.AsyncClient) -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    ("engine_state", "api_status"),
+    [
+        (KitState.COMPLETED, KitStatus.COMPLETED),
+        (KitState.PARTIALLY_COMPLETED, KitStatus.PARTIALLY_COMPLETED),
+        (KitState.NEEDS_INPUT_REVIEW, KitStatus.NEEDS_INPUT_REVIEW),
+        (KitState.FAILED, KitStatus.FAILED),
+    ],
+)
+def test_engine_delivery_state_maps_to_api_lifecycle(
+    engine_state: KitState,
+    api_status: KitStatus,
+) -> None:
+    assert _status_for_kit_state(engine_state) is api_status
+
+
 async def test_process_kit_completes_and_persists_result(
     sessionmaker: async_sessionmaker[AsyncSession],
     settings: Settings,
@@ -442,12 +528,80 @@ async def test_process_kit_completes_and_persists_result(
         assert done is not None
         assert done.status == KitStatus.COMPLETED
         assert done.result is not None
-        assert done.result["schema_version"] == "application-kit/v6"
+        assert done.result["schema_version"] == "application-kit/v7"
         assert done.result["job_fit"] is not None
         assert done.result["interview_prep"] is not None
         assert done.result["linkedin_outreach"] is not None
         assert done.result["resume"]["text"]
+        assert done.result["cover_letter"]["text"]
+        delivered_states = {"generated", "generated_with_fallback"}
+        assert done.result["delivery_reports"]["resume"]["state"] in delivered_states
+        assert done.result["delivery_reports"]["cover_letter"]["state"] in delivered_states
         assert done.result["validation"]["passed"] is True
+
+
+async def test_process_kit_persists_partial_delivery_and_logs_codes_only(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    secret_fact = "candidate-private-fact-that-must-not-reach-logs"
+    generated = generate_application_kit(
+        resume_text=SAMPLE_RESUME,
+        job_description=SAMPLE_JD,
+        include_resume=True,
+        include_cover_letter=True,
+        use_llm=False,
+    )
+    generated.state = KitState.PARTIALLY_COMPLETED
+    generated.delivery_reports[ArtifactKind.RESUME] = DeliveryReport(
+        state=DocumentState.GENERATED_WITH_FALLBACK,
+        findings=[
+            ValidationFinding(
+                code="FID_TEST_DEGRADE",
+                severity=ValidationSeverity.DEGRADE,
+                fact=secret_fact,
+                source_span=secret_fact,
+                detail=secret_fact,
+            )
+        ],
+        fallback_reason="source-preserving fallback",
+    )
+    generated.delivery_reports[ArtifactKind.COVER_LETTER] = DeliveryReport(state=DocumentState.FAILED)
+
+    def return_partial(**_kwargs: object) -> object:
+        return generated
+
+    monkeypatch.setattr("app.services.generate_application_kit", return_partial)
+    async with sessionmaker() as session:
+        kit = await create_kit(
+            session,
+            KitCreate(
+                resume_text=SAMPLE_RESUME,
+                job_description=SAMPLE_JD,
+                include_resume=True,
+                include_cover_letter=True,
+            ),
+        )
+        kit_id = kit.id
+
+    with caplog.at_level("INFO", logger="app.services"):
+        async with sessionmaker() as session:
+            await process_kit(session, kit_id, settings)
+
+    async with sessionmaker() as session:
+        partial = await get_kit(session, kit_id)
+        assert partial is not None
+        assert partial.status == KitStatus.PARTIALLY_COMPLETED
+        assert partial.result is not None
+        assert partial.result["state"] == "partially_completed"
+        assert partial.result["delivery_reports"]["resume"]["state"] == "generated_with_fallback"
+
+    assert "FID_TEST_DEGRADE" in caplog.text
+    assert secret_fact not in caplog.text
+    assert SAMPLE_RESUME not in caplog.text
+    assert SAMPLE_JD not in caplog.text
 
 
 async def test_process_kit_marks_failed_on_engine_error(
@@ -484,6 +638,7 @@ async def test_process_kit_failure_does_not_leak_sensitive_exception_content(
     sessionmaker: async_sessionmaker[AsyncSession],
     settings: Settings,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A badly-constructed exception carrying candidate/secret content must not
     reach the persisted, client-facing error (audit remediation 4C)."""
@@ -498,8 +653,9 @@ async def test_process_kit_failure_does_not_leak_sensitive_exception_content(
         kit = await create_kit(session, KitCreate(resume_text="x", job_description="y"))
         kit_id = kit.id
 
-    async with sessionmaker() as session:
-        await process_kit(session, kit_id, settings)
+    with caplog.at_level("ERROR", logger="app.services"):
+        async with sessionmaker() as session:
+            await process_kit(session, kit_id, settings)
 
     async with sessionmaker() as session:
         failed = await get_kit(session, kit_id)
@@ -509,6 +665,10 @@ async def test_process_kit_failure_does_not_leak_sensitive_exception_content(
         assert "/home/test-candidate/private/resume.pdf" not in failed.error
         assert "sk-provider-key" not in failed.error
         assert "ValueError" in failed.error  # safe type name only
+    assert secret not in caplog.text
+    assert "123-45-6789" not in caplog.text
+    assert "/home/test-candidate/private/resume.pdf" not in caplog.text
+    assert "sk-provider-key" not in caplog.text
 
 
 async def test_process_kit_missing_id_is_noop(
@@ -548,6 +708,35 @@ async def test_process_kit_skips_already_terminal_kit(
         assert again.result == original_result
 
 
+async def test_process_kit_skips_partially_completed_kit(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """At-least-once delivery must not overwrite a partially delivered result."""
+    from app.models import Kit
+
+    async with sessionmaker() as session:
+        kit = await create_kit(session, KitCreate(resume_text="x", job_description="y"))
+        kit.status = KitStatus.PARTIALLY_COMPLETED
+        kit.result = {"schema_version": "application-kit/v7", "state": "partially_completed"}
+        await session.commit()
+        kit_id = kit.id
+
+    def unexpected(**_kwargs: object) -> None:
+        raise AssertionError("terminal kit was reprocessed")
+
+    monkeypatch.setattr("app.services.generate_application_kit", unexpected)
+    async with sessionmaker() as session:
+        await process_kit(session, kit_id, settings)
+
+    async with sessionmaker() as session:
+        partial = await session.get(Kit, kit_id)
+        assert partial is not None
+        assert partial.status == KitStatus.PARTIALLY_COMPLETED
+        assert partial.result == {"schema_version": "application-kit/v7", "state": "partially_completed"}
+
+
 async def test_mark_kit_failed_sets_terminal_failure(
     sessionmaker: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -563,6 +752,31 @@ async def test_mark_kit_failed_sets_terminal_failure(
         assert failed is not None
         assert failed.status == KitStatus.FAILED
         assert failed.error == "infrastructure boom"
+
+
+@pytest.mark.parametrize(
+    "terminal_status",
+    [KitStatus.PARTIALLY_COMPLETED, KitStatus.NEEDS_INPUT_REVIEW],
+)
+async def test_mark_kit_failed_is_noop_on_new_terminal_states(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    terminal_status: KitStatus,
+) -> None:
+    async with sessionmaker() as session:
+        kit = await create_kit(session, KitCreate(resume_text="x", job_description="y"))
+        kit.status = terminal_status
+        kit.error = "keep existing state"
+        await session.commit()
+        kit_id = kit.id
+
+    async with sessionmaker() as session:
+        await mark_kit_failed(session, kit_id, "should be ignored")
+
+    async with sessionmaker() as session:
+        terminal = await get_kit(session, kit_id)
+        assert terminal is not None
+        assert terminal.status == terminal_status
+        assert terminal.error == "keep existing state"
 
 
 async def test_mark_kit_failed_is_noop_on_completed_kit(
@@ -588,7 +802,7 @@ async def test_mark_kit_failed_is_noop_on_completed_kit(
 
 
 # --------------------------------------------------------------------------- #
-# ApplicationKit v6: match report, optimization trace, change actions, lineage
+# ApplicationKit v7: delivery state, match report, change actions, and lineage
 # --------------------------------------------------------------------------- #
 async def _create_completed_kit(client: httpx.AsyncClient) -> dict:
     response = await client.post(
@@ -608,10 +822,16 @@ async def _create_completed_kit(client: httpx.AsyncClient) -> dict:
     return body
 
 
-async def test_new_kit_is_v6_with_match_report_and_revision(client: httpx.AsyncClient) -> None:
+async def test_new_kit_is_v7_with_delivery_reports_match_report_and_revision(client: httpx.AsyncClient) -> None:
     body = await _create_completed_kit(client)
     result = body["result"]
-    assert result["schema_version"] == "application-kit/v6"
+    assert result["schema_version"] == "application-kit/v7"
+    assert result["state"] == "completed"
+    delivered_states = {"generated", "generated_with_fallback"}
+    assert result["delivery_reports"]["resume"]["state"] in delivered_states
+    assert result["delivery_reports"]["cover_letter"]["state"] in delivered_states
+    assert result["resume"]["text"]
+    assert result["cover_letter"]["text"]
     assert result["match_report"] is not None
     report = result["match_report"]
     assert 0 <= report["original_ats_match"]["score"] <= 100
@@ -641,6 +861,30 @@ async def test_change_action_round_trip_increments_revision(client: httpx.AsyncC
     # Persisted: a fresh GET reflects the new revision.
     refetched = await client.get(f"/api/v1/kits/{kit_id}")
     assert refetched.json()["revision"] == 1
+
+
+async def test_change_action_remains_available_for_partially_completed_delivered_kit(
+    client: httpx.AsyncClient,
+    sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    from app.models import Kit
+
+    body = await _create_completed_kit(client)
+    kit_id = body["id"]
+    reversible = next(record for record in body["result"]["resume"]["change_ledger"] if record["reversible"])
+    async with sessionmaker() as session:
+        kit = await session.get(Kit, uuid.UUID(kit_id))
+        assert kit is not None
+        kit.status = KitStatus.PARTIALLY_COMPLETED
+        await session.commit()
+
+    response = await client.post(
+        f"/api/v1/kits/{kit_id}/change-actions",
+        json={"expected_revision": 0, "actions": [{"change_id": reversible["id"], "action": "accept"}]},
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "partially_completed"
+    assert response.json()["revision"] == 1
 
 
 async def test_change_action_revision_conflict_returns_409(client: httpx.AsyncClient) -> None:

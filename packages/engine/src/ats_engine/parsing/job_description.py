@@ -6,9 +6,16 @@ from collections.abc import Iterable
 from dataclasses import replace
 
 from ats_engine.models import JDProfile, Profile, RequirementTerm
-from ats_engine.parsing.jd_requirements import extract_requirements
+from ats_engine.parsing.jd_requirements import (
+    JDHygiene,
+    extract_requirements,
+    filter_hygienic_jd_values,
+    is_person_name,
+    sanitize_jd_for_parsing,
+)
 from ats_engine.parsing.line_refs import number_lines, render_numbered_lines, resolve_line_numbers
 from ats_engine.parsing.resume import empty_profile
+from ats_engine.parsing.vocab import normalize_term
 from ats_engine.providers.base import LLMProvider, generate_json
 
 # The JD has already been split into numbered lines. Pointing at line numbers
@@ -231,21 +238,26 @@ def parse_jd(
     # historical candidate-seeded heuristic behind the explicit flag for
     # persisted/legacy callers that need it, never as the default path.
     heuristic_profile = empty_profile() if tailoring_v2 else profile
-    heuristic = _parse_jd_heuristic(job_description, heuristic_profile)
+    hygiene = sanitize_jd_for_parsing(job_description)
+    heuristic = _parse_jd_heuristic(job_description, heuristic_profile, hygiene=hygiene)
     requirements = extract_requirements(job_description) if tailoring_v2 else []
     if requirements:
         heuristic = _apply_v2_requirements(heuristic, requirements)
     if provider is None:
         return heuristic
 
-    lines = number_lines(job_description or "")
+    # Give the provider the same contact-free, post-qualification-cleaned
+    # source view used by the deterministic parser. The provider's numbered
+    # references therefore cannot point at an application, HR, salary, or EEO
+    # line that the merger would later discard.
+    lines = number_lines("\n".join(hygiene.scoring_lines))
     prompt = JD_EXTRACTION_PROMPT.format(numbered_lines=render_numbered_lines(lines)[:8000])
     llm_data = generate_json(provider, prompt)
     if not isinstance(llm_data, dict):
         return heuristic
 
     llm_data = _resolve_line_list_fields(llm_data, lines)
-    return _merge_jd_profile(heuristic, llm_data)
+    return _merge_jd_profile(heuristic, llm_data, hygiene)
 
 
 def _apply_v2_requirements(heuristic: JDProfile, requirements: list[RequirementTerm]) -> JDProfile:
@@ -268,6 +280,15 @@ def _apply_v2_requirements(heuristic: JDProfile, requirements: list[RequirementT
         responsibilities=responsibilities or heuristic.responsibilities,
         technical_keywords=keywords[:30] or heuristic.technical_keywords,
         requirements=requirements,
+        parse_confidence=max(
+            heuristic.parse_confidence,
+            _parse_confidence(
+                title=heuristic.title,
+                company=heuristic.company,
+                required=required or heuristic.required_qualifications,
+                responsibilities=responsibilities or heuristic.responsibilities,
+            ),
+        ),
     )
 
 
@@ -283,6 +304,26 @@ def _dedupe_requirement_lines(values: Iterable[str]) -> list[str]:
     return result
 
 
+def _parse_confidence(
+    *,
+    title: str,
+    company: str,
+    required: list[str],
+    responsibilities: list[str],
+) -> float:
+    """Return a bounded deterministic parse-completeness annotation."""
+    score = 0.1
+    if title and title != "Target Role":
+        score += 0.25
+    if company and company != "Target Company":
+        score += 0.2
+    if required:
+        score += 0.25
+    if responsibilities:
+        score += 0.2
+    return round(min(score, 1.0), 2)
+
+
 def _resolve_line_list_fields(data: dict[str, object], lines: list[str]) -> dict[str, object]:
     """Turn each ``*_lines`` line-number field into resolved text under its plain field name.
 
@@ -296,13 +337,16 @@ def _resolve_line_list_fields(data: dict[str, object], lines: list[str]) -> dict
     return data
 
 
-def _parse_jd_heuristic(job_description: str, profile: Profile) -> JDProfile:
-    text = job_description or ""
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    title = _extract_title(text, lines)
-    company = _extract_company(text, lines, title)
+def _parse_jd_heuristic(job_description: str, profile: Profile, *, hygiene: JDHygiene | None = None) -> JDProfile:
+    hygiene = hygiene or sanitize_jd_for_parsing(job_description)
+    target_lines = list(hygiene.target_lines)
+    scoring_lines = list(hygiene.scoring_lines)
+    target_text = "\n".join(target_lines)
+    clean_text = "\n".join(scoring_lines)
+    title = _extract_title(target_text, target_lines)
+    company = _extract_company(target_text, target_lines, title, hygiene)
     required = _extract_section_items(
-        lines,
+        scoring_lines,
         [
             "required",
             "requirements",
@@ -325,37 +369,40 @@ def _parse_jd_heuristic(job_description: str, profile: Profile) -> JDProfile:
         stop_headings=["preferred", "nice to have", "nice-to-have", "bonus"],
     )
     preferred = _extract_section_items(
-        lines,
+        scoring_lines,
         # A hyphenated "Nice-to-have" heading does not contain the substring
         # "nice to have" (space, not hyphen), so it silently matched nothing.
         ["preferred", "nice to have", "nice-to-have", "bonus"],
     )
     responsibilities = _extract_section_items(
-        lines, ["responsibilities", "what you will do", "duties", "role", "your day to day", "day to day"]
+        scoring_lines, ["responsibilities", "what you will do", "duties", "role", "your day to day", "day to day"]
     )
     education_experience = _extract_section_items(
-        lines,
+        scoring_lines,
         ["education and experience", "your education and experience", "combined education and work experience"],
     )
-    security_language = _extract_section_items(lines, ["language requirement", "security", "official languages"])
+    security_language = _extract_section_items(
+        scoring_lines, ["language requirement", "security", "official languages"]
+    )
     employment_conditions = _extract_section_items(
-        lines, ["what you need to know", "hybrid work model", "work arrangement"]
+        scoring_lines, ["what you need to know", "hybrid work model", "work arrangement"]
     )
     compensation_benefits = _extract_section_items(
-        lines, ["what you can expect", "salary", "compensation and benefits", "benefits"]
+        scoring_lines, ["what you can expect", "salary", "compensation and benefits", "benefits"]
     )
-    boilerplate = _extract_boilerplate_lines(lines)
+    boilerplate = _dedupe_requirement_lines([*hygiene.context_lines, *_extract_boilerplate_lines(target_lines)])
 
-    clean_text = _strip_boilerplate_lines(lines, boilerplate)
     # The employer's own name (and the target title's words) must never
     # surface as a "technical keyword" gap — a fragment like "Bank" repeated
     # throughout the posting is the company's name, not a missing skill.
-    org_words = {word.lower() for word in re.findall(r"[A-Za-z]+", f"{title} {company}")}
-    keywords = _extract_keywords(text, clean_text, profile, exclude_tokens=org_words)
-    work_mode = _extract_work_mode(text)
-    location = _extract_location(text, lines)
-    domain = _extract_domain(text)
-    ats = _extract_ats_platform(text)
+    org_words = {
+        word.lower() for word in re.findall(r"[A-Za-z]+", " ".join((title, company, *hygiene.organization_names)))
+    }
+    keywords = _extract_keywords(clean_text, clean_text, profile, exclude_tokens=org_words)
+    work_mode = _extract_work_mode(clean_text)
+    location = _extract_location(target_text, target_lines)
+    domain = _extract_domain(clean_text)
+    ats = _extract_ats_platform(clean_text)
 
     if not required:
         required = _sentences_with_keywords(clean_text, keywords[:6])
@@ -388,6 +435,12 @@ def _parse_jd_heuristic(job_description: str, profile: Profile) -> JDProfile:
         employment_conditions=employment_conditions[:8],
         compensation_benefits=compensation_benefits[:8],
         organizational_boilerplate=boilerplate[:20],
+        parse_confidence=_parse_confidence(
+            title=title,
+            company=company,
+            required=required,
+            responsibilities=responsibilities,
+        ),
     )
 
 
@@ -401,22 +454,21 @@ def _prioritize_required_keywords(keywords: list[str], required_lines: list[str]
     return in_required + rest
 
 
-def _merge_jd_profile(heuristic: JDProfile, llm_data: dict[str, object]) -> JDProfile:
+def _merge_jd_profile(heuristic: JDProfile, llm_data: dict[str, object], hygiene: JDHygiene) -> JDProfile:
     def text_field(key: str, fallback: str) -> str:
         value = str(llm_data.get(key, "") or "").strip()
-        return value or fallback
+        values = filter_hygienic_jd_values([value], hygiene, require_scoring_source=False)
+        return values[0] if values else fallback
 
-    def list_field(key: str, fallback: list[str]) -> list[str]:
+    def list_field(key: str, *, company: str = "") -> list[str]:
         value = llm_data.get(key)
         if isinstance(value, list):
-            cleaned = [str(item).strip() for item in value if str(item).strip()]
-            if cleaned:
-                return cleaned[:18]
-        return fallback
+            return filter_hygienic_jd_values(value, hygiene, company=company)[:18]
+        return []
 
     def merged_list(key: str, authoritative: list[str], *, limit: int) -> list[str]:
         """Keep deterministic section membership as a provider-proof floor."""
-        values = list(authoritative) + list_field(key, [])
+        values = list(authoritative) + list_field(key, company=heuristic.company)
         merged: list[str] = []
         seen: set[str] = set()
         for value in values:
@@ -446,9 +498,16 @@ def _merge_jd_profile(heuristic: JDProfile, llm_data: dict[str, object]) -> JDPr
         for value in merged_list("preferred_qualifications", heuristic.preferred_qualifications, limit=16)
         if requirement_key(value) not in required_normalized
     ][:8]
+    # Target parsing is deterministic by policy. A provider may fill a truly
+    # absent value, but cannot overwrite a source-backed title/company with a
+    # less-specific role phrase, person name, or application contact.
+    llm_title = _safe_llm_title(llm_data.get("title", ""), hygiene)
+    llm_company = _safe_llm_company(llm_data.get("company", ""), heuristic.title, hygiene)
+    title = heuristic.title if heuristic.title != "Target Role" else (llm_title or heuristic.title)
+    company = heuristic.company if heuristic.company != "Target Company" else (llm_company or heuristic.company)
     return JDProfile(
-        title=text_field("title", heuristic.title),
-        company=text_field("company", heuristic.company),
+        title=title,
+        company=company,
         work_mode=work_mode,
         location=text_field("location", heuristic.location),
         required_qualifications=required,
@@ -457,89 +516,290 @@ def _merge_jd_profile(heuristic: JDProfile, llm_data: dict[str, object]) -> JDPr
         technical_keywords=merged_list("technical_keywords", heuristic.technical_keywords, limit=30),
         domain=text_field("domain", heuristic.domain),
         ats_platform=ats_platform,
+        education_experience_requirements=heuristic.education_experience_requirements,
+        security_language_requirements=heuristic.security_language_requirements,
+        employment_conditions=heuristic.employment_conditions,
+        compensation_benefits=heuristic.compensation_benefits,
+        organizational_boilerplate=heuristic.organizational_boilerplate,
         requirements=heuristic.requirements,
+        parse_confidence=heuristic.parse_confidence,
     )
+
+
+def _safe_llm_title(value: object, hygiene: JDHygiene) -> str:
+    candidate = _clean_title(str(value or ""))
+    if not _is_valid_title_candidate(candidate) or not _target_source_contains(candidate, hygiene):
+        return ""
+    return candidate
+
+
+def _safe_llm_company(value: object, title: str, hygiene: JDHygiene) -> str:
+    candidate = _trim_company(str(value or ""))
+    if not _is_valid_company_candidate(candidate, title) or not _target_source_contains(candidate, hygiene):
+        return ""
+    return candidate
+
+
+def _target_source_contains(value: str, hygiene: JDHygiene) -> bool:
+    needle = normalize_term(value)
+    haystack = normalize_term("\n".join(hygiene.target_lines))
+    return bool(needle and (needle == haystack or f" {needle} " in f" {haystack} "))
+
+
+_TITLE_ROLE_WORDS = frozenset(
+    {
+        "administrator",
+        "analyst",
+        "architect",
+        "consultant",
+        "coordinator",
+        "developer",
+        "director",
+        "engineer",
+        "lead",
+        "manager",
+        "officer",
+        "scientist",
+        "specialist",
+        "supervisor",
+    }
+)
+_TITLE_LOWERCASE_VERBS = (
+    "analyze",
+    "analyse",
+    "build",
+    "collaborate",
+    "create",
+    "deliver",
+    "design",
+    "develop",
+    "drive",
+    "ensure",
+    "lead",
+    "maintain",
+    "manage",
+    "oversee",
+    "report",
+    "support",
+    "work",
+)
+_CONTACT_ROLE_TITLES = frozenset(
+    {
+        "hiring manager",
+        "human resources",
+        "recruiter",
+        "talent acquisition",
+    }
+)
 
 
 def _extract_title(text: str, lines: list[str]) -> str:
     patterns = [
-        r"(?:job title|position|role)\s*[:\-]\s*([^\n|]+)",
-        r"hiring\s+(?:a|an)\s+([A-Z][A-Za-z0-9 /&+#.-]{3,70})",
+        (r"(?:job title|position|role)\s*[:\-]\s*([^\n|]+)", True),
+        (r"hiring\s+(?:a|an)\s+([A-Z][A-Za-z0-9 /&+#.,-]{3,70})", False),
     ]
-    for pattern in patterns:
-        match = re.search(pattern, text, flags=re.IGNORECASE)
-        if match:
-            return _clean_title(match.group(1))
+    for pattern, explicit_label in patterns:
+        for match in re.finditer(pattern, text, flags=re.IGNORECASE):
+            candidate = _clean_title(match.group(1))
+            if _is_valid_title_candidate(candidate, explicit_label=explicit_label):
+                return candidate
 
-    # A long "Label:  Value" metadata block (requisition number, position
-    # type/length, location, closing date) or a D&I preamble routinely pushes
-    # the actual title heading past the first handful of lines in enterprise
-    # postings, so the scan window is generous; "Label: Value" metadata lines
-    # are skipped outright since a title line is never phrased that way.
-    for line in lines[:40]:
+    # A long metadata block can push the true title well down a posting. Rank
+    # all standalone role-shaped headings rather than returning the first one:
+    # publication/blog headings such as "Economic Development - Part-Time IT
+    # Specialist" otherwise outrank the actual "IT Specialist - Economic
+    # Development" role heading immediately below them.
+    standalone: list[tuple[tuple[int, int, int], int, str]] = []
+    for index, line in enumerate(lines[:40]):
         if ":" in line:
             continue
-        lowered = line.lower()
-        if any(
-            word in lowered
-            for word in ["engineer", "developer", "analyst", "scientist", "architect", "specialist", "manager"]
-        ):
-            if len(line) <= 90 and not line.endswith("."):
-                return _clean_title(line)
+        candidate = _clean_title(line)
+        if _is_valid_title_candidate(candidate) and not line.endswith("."):
+            standalone.append((_title_candidate_rank(candidate), index, candidate))
+    if standalone:
+        return min(standalone)[2]
     # Government and enterprise postings often use a standalone
     # ``Role – Department`` heading immediately before the first section.
     for index, line in enumerate(lines[:40]):
         if not re.search(r"\s[-–—]\s", line) or ":" in line or len(line) > 100:
             continue
         following = " ".join(lines[index + 1 : index + 4]).casefold()
-        if any(marker in following for marker in ("responsibil", "qualification", "requirements", "what you will")):
-            return _clean_title(line)
+        candidate = _clean_title(line)
+        if _is_valid_title_candidate(candidate) and any(
+            marker in following for marker in ("responsibil", "qualification", "requirements", "what you will")
+        ):
+            return candidate
     return ""
 
 
-def _extract_company(text: str, lines: list[str], title: str = "") -> str:
-    patterns = [
-        r"(?:company|organization|employer)\s*[:\-]\s*([^\n|]+)",
-        r"\bthe\s+([A-Z][A-Za-z0-9 &.,'-]{2,60}?)\s+(?:is|are|has|serves|works|supports)\b",
-        r"\bat\s+([A-Z][A-Za-z0-9 &.,-]{2,60})\s+(?:is|we are|seeks|seeking|hiring)",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, text, flags=re.IGNORECASE)
-        if match:
+def _title_candidate_rank(candidate: str) -> tuple[int, int, int]:
+    """Prefer headings whose role identity leads the phrase."""
+    words = normalize_term(candidate).split()
+    role_index = min(
+        (index for index, word in enumerate(words) if word in _TITLE_ROLE_WORDS),
+        default=len(words),
+    )
+    part_time_penalty = int("part time" in normalize_term(candidate))
+    return role_index, part_time_penalty, len(words)
+
+
+def _extract_company(text: str, lines: list[str], title: str, hygiene: JDHygiene) -> str:
+    # 1. Explicit source label always wins.
+    for line in lines:
+        match = re.match(r"^(?:company|organization|organisation|employer)\s*[:\-]\s*(.+)$", line, re.I)
+        if match is not None:
             candidate = _trim_company(match.group(1))
-            # Boilerplate frequently says "The Company is committed ..."
-            # before it introduces the actual employer.  "Company" is a
-            # common noun, not an organization name; continue scanning so a
-            # later explicit or repeated proper name can win.
-            if not _is_generic_company_candidate(candidate):
+            if _is_valid_company_candidate(candidate, title, explicit_label=True):
                 return candidate
 
-    for line in lines[:6]:
-        if line.lower().startswith("about "):
-            return _trim_company(line[6:])
+    # 2. An About heading is a strong, direct organization signal.  "About the
+    # role" is intentionally not a company name; look at the nearby source
+    # sentence for its "The Org ..." form instead.
+    about_candidate = _company_from_about_heading(lines, title)
+    if about_candidate:
+        return about_candidate
 
+    # 3. An application domain is weaker but deterministic and useful for a
+    # minimal posting that provides no company label.  Preserve source casing
+    # when the same domain label appears elsewhere in the posting.
+    domain_candidate = _company_from_application_domain(hygiene, lines, title)
+    if domain_candidate:
+        return domain_candidate
+
+    # 4. "The Org is seeking ..." is a target-company statement, not a
+    # candidate-history claim. Keep the bounded capture exact and reject role
+    # phrases such as "The hiring manager is seeking".
+    for match in re.finditer(
+        r"\bthe\s+([A-Z][A-Za-z0-9 &'.,-]{1,70}?)\s+is\s+seeking\b",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        candidate = _trim_company(match.group(1))
+        if _is_valid_company_candidate(candidate, title):
+            return candidate
+
+    # 5. Last resort: a repeated proper name in source text.
     title_words = {word.lower() for word in re.findall(r"[A-Za-z]+", title)}
     repeated = _extract_repeated_proper_noun(text, title_words)
     if repeated:
-        return _trim_company(repeated)
-
-    for line in lines[1:8]:
-        cleaned = line.strip()
-        lowered = cleaned.lower()
-        if not cleaned or len(cleaned) > 80 or ":" in cleaned:
-            continue
-        if lowered.startswith(("job ", "location", "$")) or "out of 5" in lowered:
-            continue
-        if re.fullmatch(r"\d+(?:\.\d+)?", cleaned):
-            continue
-        if any(
-            word in lowered
-            for word in ["engineer", "developer", "analyst", "scientist", "architect", "specialist", "manager"]
-        ):
-            continue
-        if re.search(r"[A-Za-z]", cleaned):
-            return _trim_company(cleaned)
+        candidate = _trim_company(repeated)
+        if _is_valid_company_candidate(candidate, title):
+            return candidate
     return ""
+
+
+def _company_from_about_heading(lines: list[str], title: str) -> str:
+    for index, line in enumerate(lines):
+        match = re.match(r"^about\s+(.+)$", line, re.I)
+        if match is None:
+            continue
+        label = match.group(1).strip()
+        if label.casefold() not in {"us", "the role", "the company"}:
+            candidate = _trim_company(label)
+            if _is_valid_company_candidate(candidate, title):
+                return candidate
+        for nearby in lines[index + 1 : index + 5]:
+            sentence = re.search(
+                r"\bthe\s+([A-Z][A-Za-z0-9 &'.,-]{1,70}?)\s+(?:is|are|has|serves|builds|supports)\b",
+                nearby,
+            )
+            if sentence is None:
+                continue
+            candidate = _trim_company(sentence.group(1))
+            if _is_valid_company_candidate(candidate, title):
+                return candidate
+    return ""
+
+
+def _company_from_application_domain(hygiene: JDHygiene, lines: list[str], title: str) -> str:
+    generic = {"apply", "app", "careers", "jobs", "mail", "recruiting", "talent", "www"}
+    all_text = " ".join(lines)
+    for domain in hygiene.application_domains:
+        labels = [label for label in domain.split(".") if label and label not in generic]
+        if not labels:
+            continue
+        root = labels[0]
+        # A short application domain commonly uses the source-backed
+        # organization's initials (coo.org -> Chiefs of Ontario). Resolve that
+        # alias before returning the bare domain token so the source priority
+        # remains domain-first without degrading the display name to "COO".
+        for organization in hygiene.organization_names:
+            acronym = "".join(word[0] for word in re.findall(r"[A-Za-z0-9]+", organization) if word)
+            if normalize_term(acronym) == normalize_term(root):
+                candidate = _trim_company(organization)
+                if _is_valid_company_candidate(candidate, title):
+                    return candidate
+        for token in re.findall(r"[A-Za-z][A-Za-z0-9-]*", all_text):
+            if normalize_term(token) == normalize_term(root):
+                candidate = _trim_company(token)
+                if _is_valid_company_candidate(candidate, title):
+                    return candidate
+        candidate = _trim_company(root.title())
+        if _is_valid_company_candidate(candidate, title):
+            return candidate
+    return ""
+
+
+def _is_valid_title_candidate(value: str, *, explicit_label: bool = False) -> bool:
+    cleaned = _clean_title(value)
+    words = re.findall(r"[A-Za-z]+", cleaned.casefold())
+    if not cleaned or len(cleaned) > 80 or _looks_like_contact_value(cleaned):
+        return False
+    if normalize_term(cleaned) in _CONTACT_ROLE_TITLES and not explicit_label:
+        return False
+    if not words or not (set(words) & _TITLE_ROLE_WORDS):
+        return False
+    if is_person_name(cleaned) or _title_has_unfinished_capture(cleaned):
+        return False
+    return True
+
+
+def _is_valid_company_candidate(value: str, title: str, *, explicit_label: bool = False) -> bool:
+    cleaned = _trim_company(value)
+    if not cleaned or _looks_like_contact_value(cleaned) or _is_generic_company_candidate(cleaned):
+        return False
+    if (is_person_name(cleaned) and not explicit_label) or _title_has_unfinished_capture(cleaned):
+        return False
+    if normalize_term(cleaned) == normalize_term(title):
+        return False
+    company_key = normalize_term(cleaned)
+    title_key = normalize_term(title)
+    if title_key and company_key.startswith(f"{title_key} "):
+        return False
+    words = normalize_term(cleaned).split()
+    if _company_is_role_sentence(words):
+        return False
+    return not (
+        words
+        and words[-1]
+        in {
+            "and",
+            "at",
+            "careers",
+            "department",
+            "for",
+            "from",
+            "manager",
+            "of",
+            "portal",
+            "recruiter",
+            "specialist",
+            "team",
+            "to",
+            "with",
+        }
+    )
+
+
+def _company_is_role_sentence(words: list[str]) -> bool:
+    """Reject a role noun followed by a lowercase verb phrase."""
+    for index, word in enumerate(words[:-1]):
+        if word not in _TITLE_ROLE_WORDS:
+            continue
+        following = words[index + 1]
+        if any(following.startswith(verb) for verb in _TITLE_LOWERCASE_VERBS):
+            return True
+    return False
 
 
 def _is_generic_company_candidate(value: str) -> bool:
@@ -833,10 +1093,47 @@ def _sentences_with_keywords(text: str, keywords: list[str]) -> list[str]:
 
 
 def _clean_title(value: str) -> str:
-    cleaned = re.sub(r"\s+", " ", value).strip(" -|")
+    cleaned = re.sub(r"\s+", " ", value or "").split("|", 1)[0].strip(" -|:;")
+    verbs = "|".join(_TITLE_LOWERCASE_VERBS)
+    # Do not let a label capture a body clause: ``Role: IT Specialist to
+    # support ...`` is a role plus a lowercase action, not a very long title.
+    cleaned = re.split(rf"\s+(?:to\s+)?(?:{verbs})(?:s|ed|ing)?\b", cleaned, maxsplit=1)[0]
+    cleaned = re.split(r"\s+(?:will|who|that)\s+", cleaned, maxsplit=1)[0]
+    cleaned = re.sub(r"\s*(?:,|;|/)?\s*\b(?:and|or)\s*$", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" -|,:;")
     return cleaned[:80]
 
 
 def _trim_company(value: str) -> str:
-    cleaned = re.sub(r"\s+", " ", value).strip(" -|.")
+    cleaned = re.sub(r"\s+", " ", value or "").split("|", 1)[0].strip(" -|.,:;")
+    cleaned = re.split(
+        r"\s+(?:is|are|has|serves|builds|supports|seeking|hiring|to\s+(?:apply|support|lead))\b",
+        cleaned,
+        maxsplit=1,
+    )[0]
+    cleaned = re.sub(r"\s*(?:,|;|/)?\s*\b(?:and|or)\s*$", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" -|.,:;")
     return cleaned[:70]
+
+
+def _looks_like_contact_value(value: str) -> bool:
+    return bool(
+        "@" in value
+        or re.search(r"https?://|www\.", value, flags=re.IGNORECASE)
+        or re.search(
+            r"(?<!\w)(?:\+?\d{1,3}[\s.-])?(?:\(?\d{2,4}\)?[\s.-]?)\d{3,4}[\s.-]\d{3,4}(?!\w)",
+            value,
+        )
+    )
+
+
+def _title_has_unfinished_capture(value: str) -> bool:
+    lowered = value.casefold().strip()
+    if lowered.endswith((" and", " or", " to")):
+        return True
+    return bool(
+        re.search(
+            r"\b(?:to\s+)?(?:support|lead|manage|build|develop|maintain|work|report|ensure)\b",
+            value,
+        )
+    )

@@ -51,7 +51,11 @@ async def pg_sessionmaker(pg_engine: AsyncEngine) -> async_sessionmaker[AsyncSes
     return create_sessionmaker(pg_engine)
 
 
-async def _seed_completed_kit(sessionmaker: async_sessionmaker[AsyncSession]) -> uuid.UUID:
+async def _seed_delivered_kit(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    *,
+    status: KitStatus,
+) -> uuid.UUID:
     kit_result = generate_application_kit(
         resume_text=SAMPLE_RESUME,
         job_description=SAMPLE_JD,
@@ -61,7 +65,7 @@ async def _seed_completed_kit(sessionmaker: async_sessionmaker[AsyncSession]) ->
     )
     async with sessionmaker() as session:
         kit = Kit(
-            status=KitStatus.COMPLETED,
+            status=status,
             resume_text=SAMPLE_RESUME,
             job_description=SAMPLE_JD,
             requested_mode="",
@@ -88,8 +92,12 @@ async def _apply(sessionmaker: async_sessionmaker[AsyncSession], kit_id: uuid.UU
         return outcome.status
 
 
-async def test_concurrent_change_actions_are_atomic(pg_sessionmaker: async_sessionmaker[AsyncSession]) -> None:
-    kit_id = await _seed_completed_kit(pg_sessionmaker)
+@pytest.mark.parametrize("kit_status", [KitStatus.COMPLETED, KitStatus.PARTIALLY_COMPLETED])
+async def test_concurrent_change_actions_are_atomic(
+    pg_sessionmaker: async_sessionmaker[AsyncSession],
+    kit_status: KitStatus,
+) -> None:
+    kit_id = await _seed_delivered_kit(pg_sessionmaker, status=kit_status)
 
     # Two independent sessions both read revision 0 and try to advance it.
     results = await asyncio.gather(

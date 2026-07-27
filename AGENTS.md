@@ -22,7 +22,7 @@ and a job description it generates a complete **application kit**:
 Today the engine produces the tailored **resume, cover letter, application
 answers, job-fit analysis, interview preparation, and LinkedIn outreach drafts**
 and assembles them into a versioned, truth-grounded **ApplicationKit**
-(`application-kit/v4`, see `ats_engine.kit`). Outreach is draft-only: LinkedIn
+(`application-kit/v7`, see `ats_engine.kit`). Outreach is draft-only: LinkedIn
 access, contact discovery, browser automation, and sending are not implemented.
 
 ## 2. The core principle: deterministic-first, truth-grounded generation
@@ -41,12 +41,13 @@ This is the product's differentiator and the most important rule in this repo.
   the source did not contain.
 - **Detection is not enough — unsupported claims must be *removed*.** As of Phase
   2A the grounded orchestrator (`ats_engine.kit`) runs a truth gate over **every**
-  generated artifact (resume summary/bullets, cover letter, *and* answers): each
-  candidate-specific claim is extracted, classified against the candidate's
-  evidence, and — if unsupported — deterministically excised (or the artifact
-  withheld and the kit marked `fatal`). No fabricated employer, title, metric,
-  dollar value, team size, unsupported skill/expertise, certification, degree,
-  tenure, or management claim may reach the final `ApplicationKit`. Repair is
+generated artifact (resume summary/bullets, cover letter, *and* answers): each
+candidate-specific claim is extracted, classified against the candidate's
+evidence, and — if unsupported — deterministically excised (or the artifact
+withheld, its document delivery marked `failed`, and the Kit rolled up
+honestly). No fabricated employer, title, metric,
+dollar value, team size, unsupported skill/expertise, certification, degree,
+tenure, or management claim may reach the final `ApplicationKit`. Repair is
   removal (never "soften a fabricated fact into acceptance") and is bounded to a
   single deterministic pass. See ADR-0009/0011.
 - **Candidate evidence is the single source of truth.** Every candidate-specific
@@ -57,6 +58,11 @@ This is the product's differentiator and the most important rule in this repo.
 - **Never silently swallow a validation failure.** Surface it; classify it
   (see `ats_engine.validation.severity`); block delivery when it is truth-critical
   or structural.
+- **Document and Kit states are distinct.** Documents use only `generated`,
+  `generated_with_fallback`, `needs_input_review`, `failed`, or
+  `not_requested`; `partially_completed` is a Kit state, never a document state.
+  A requested resume and cover letter are delivery-critical, and a Kit is
+  `completed` only when every requested primary document was delivered.
 - **STAR stories are single-context evidence products.** Never blend employers,
   roles, or education into one event. Never infer a project, action, result,
   metric, client, team size, or leadership from a skill. Mark a STAR candidate

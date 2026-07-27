@@ -1,5 +1,43 @@
-export type KitStatus = "pending" | "processing" | "completed" | "failed";
+export type KitStatus =
+  | "pending"
+  | "processing"
+  | "completed"
+  | "partially_completed"
+  | "needs_input_review"
+  | "failed";
 export type ClaimStatus = "supported" | "repaired" | "rejected";
+export type ValidationSeverity = "fatal" | "degrade" | "warn";
+export type DocumentState =
+  | "generated"
+  | "generated_with_fallback"
+  | "needs_input_review"
+  | "failed"
+  | "not_requested";
+export type KitState = "completed" | "partially_completed" | "needs_input_review" | "failed";
+export type ArtifactKind =
+  | "resume"
+  | "cover_letter"
+  | "answers"
+  | "job_fit"
+  | "interview_prep"
+  | "linkedin_outreach";
+
+export interface ValidationFinding {
+  code: string;
+  severity: ValidationSeverity;
+  fact: string;
+  source_span: string;
+  detail: string;
+  detector_version?: string;
+  original_code?: string;
+}
+
+export interface DeliveryReport {
+  state: DocumentState;
+  findings: ValidationFinding[];
+  fallback_reason: string | null;
+  calibration_suppressed: string[];
+}
 
 export type OutreachAudience =
   | "recruiter"
@@ -93,6 +131,7 @@ export interface ArtifactValidation {
 
 export type ChangeType =
   | "summary"
+  | "headline"
   | "targeting_clause"
   | "bullet"
   | "skill"
@@ -430,6 +469,9 @@ export interface OptimizationTrace {
   accepted_actions: string[];
   rejected_actions: OptimizationRejection[];
   unreachable_terms: string[];
+  delivery_state?: DocumentState;
+  fallback_reason?: string | null;
+  calibration_suppressed?: string[];
 }
 
 export interface MatchReport {
@@ -465,6 +507,12 @@ export interface ApplicationKit {
   orchestration_version: string;
   requested_mode: string;
   resolved_mode: string;
+  /** Added in v7; absent on an unnormalized legacy response. */
+  state?: KitState;
+  /** Explicit JD parse output; absent or null on older kits without this metadata. */
+  target_role?: string | null;
+  target_company?: string | null;
+  target_confidence?: number | null;
   generation: GenerationMetadata;
   validation: ValidationSummary;
   resume: ResumeArtifact | null;
@@ -477,6 +525,8 @@ export interface ApplicationKit {
   stage_timings: StageTimings;
   revision: number;
   warnings: string[];
+  /** Added in v7; absent or empty for legacy records. */
+  delivery_reports?: Partial<Record<ArtifactKind, DeliveryReport>>;
 }
 
 export interface ChangeActionItemInput {

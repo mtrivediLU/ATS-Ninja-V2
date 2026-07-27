@@ -2,7 +2,7 @@
 
 import { ArrowRight, Check, Scissors, ShieldAlert, TriangleAlert } from "lucide-react";
 import { Banner, Button, Card, StatusLabel } from "@/components/ui/primitives";
-import type { ArtifactValidation, Claim } from "@/lib/api-types";
+import type { ArtifactValidation, Claim, DocumentState } from "@/lib/api-types";
 import { artifactPresentationState, trustCounts } from "@/lib/artifact-presentation";
 import { artifactStatePresentation } from "@/lib/status";
 
@@ -13,6 +13,7 @@ type TrustSummaryProps = {
   text: string;
   onOpenContent: () => void;
   manuallyEdited?: boolean;
+  deliveryState?: DocumentState;
   readinessLabel?: string;
   explanation?: string;
 };
@@ -24,11 +25,12 @@ export function TrustSummary({
   text,
   onOpenContent,
   manuallyEdited = false,
+  deliveryState,
   readinessLabel,
   explanation,
 }: TrustSummaryProps) {
   const counts = trustCounts(claims, validation);
-  const state = artifactPresentationState(validation, text, manuallyEdited);
+  const state = artifactPresentationState(validation, text, manuallyEdited, deliveryState);
   const traceable = counts.total > 0;
   const covered = counts.supported + counts.adjusted;
   const coverage = traceable ? Math.round((covered / counts.total) * 100) : null;
@@ -75,6 +77,7 @@ function readinessCopy(state: ReturnType<typeof artifactPresentationState>, coun
   if (state === "withheld") return "Withheld — review the reason";
   if (state === "empty") return "No generated content";
   if (state === "edited") return "Edited locally — not revalidated";
+  if (state === "generated-with-fallback") return "Delivered with fallback";
   if (counts.withheld > 0) return `${counts.withheld} claim${counts.withheld === 1 ? "" : "s"} withheld`;
   if (counts.removed > 0 || counts.adjusted > 0 || counts.warnings > 0) return "Ready with notes";
   return "Generated";
@@ -82,6 +85,7 @@ function readinessCopy(state: ReturnType<typeof artifactPresentationState>, coun
 
 function summaryCopy(state: ReturnType<typeof artifactPresentationState>, counts: ReturnType<typeof trustCounts>, traceable: boolean): string {
   if (state === "withheld") return "The engine withheld this artifact rather than allow a truth-critical or structural failure through. Review the available explanation before changing the source material or creating a new Kit.";
+  if (state === "generated-with-fallback") return "The engine delivered the last safe, evidence-backed version after a proposed change could not be accepted. The persisted delivery report remains authoritative even when legacy validation diagnostics are retained.";
   if (!traceable) return "This artifact contains no candidate-claim trace records. Its delivery state reflects the persisted validation result, not a browser-generated assessment.";
   if (counts.removed > 0 || counts.adjusted > 0 || counts.withheld > 0) return "The engine kept the trace visible: unsupported content was removed or withheld, and any adjusted wording is called out so it is not mistaken for an unqualified claim.";
   return "The claim records returned with this artifact are supported by bounded candidate evidence. Generated content is still distinct from any later manual edit.";

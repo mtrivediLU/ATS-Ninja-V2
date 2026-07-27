@@ -148,3 +148,55 @@ def test_task_body_does_not_retry_permanent_failure(monkeypatch: pytest.MonkeyPa
 
     fail.assert_called_once()
     assert fail.call_args.args[0] == kit_id
+
+
+@pytest.mark.parametrize(
+    ("exc", "retries"),
+    [
+        (OperationalError("private resume text", None, Exception("secret database detail")), 3),
+        (ValueError("private resume text and provider secret"), 0),
+    ],
+)
+def test_worker_failure_logs_never_include_exception_content(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    exc: BaseException,
+    retries: int,
+) -> None:
+    monkeypatch.setattr(tasks, "_process", MagicMock(side_effect=exc))
+    monkeypatch.setattr(tasks, "_fail", MagicMock())
+
+    with caplog.at_level("WARNING", logger="app.tasks"):
+        tasks._generate_kit_body(_fake_task(retries=retries, max_retries=3), str(uuid.uuid4()))
+
+    assert type(exc).__name__ in caplog.text
+    assert "private resume text" not in caplog.text
+    assert "provider secret" not in caplog.text
+    assert "secret database detail" not in caplog.text
+
+
+def test_worker_retry_does_not_carry_raw_transient_exception_content(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    raw_exception = OperationalError(
+        "UPDATE kits SET result='private resume text'",
+        {"result": "private job description"},
+        Exception("secret database detail"),
+    )
+    monkeypatch.setattr(tasks, "_process", MagicMock(side_effect=raw_exception))
+    monkeypatch.setattr(tasks, "_fail", MagicMock())
+
+    with caplog.at_level("WARNING", logger="app.tasks"), pytest.raises(Retry) as caught:
+        tasks._generate_kit_body(_fake_task(retries=0, max_retries=3), str(uuid.uuid4()))
+
+    retry = caught.value
+    rendered_retry = "\n".join((str(retry), repr(retry), str(retry.exc), repr(retry.exc)))
+    assert "OperationalError" in rendered_retry
+    assert "private resume text" not in rendered_retry
+    assert "private job description" not in rendered_retry
+    assert "secret database detail" not in rendered_retry
+    assert retry.__context__ is None
+    assert "private resume text" not in caplog.text
+    assert "private job description" not in caplog.text
+    assert "secret database detail" not in caplog.text

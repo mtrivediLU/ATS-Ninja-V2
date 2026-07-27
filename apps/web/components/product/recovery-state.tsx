@@ -2,12 +2,26 @@ import type { ReactNode } from "react";
 import { AlertCircle, CheckCircle2, Clock3, CloudOff, LoaderCircle } from "lucide-react";
 import { Button, Card } from "@/components/ui/primitives";
 
-export type RecoveryStateKey = "pending" | "processing" | "slow" | "unavailable" | "malformed" | "failed" | "restored";
+export type RecoveryStateKey =
+  | "pending"
+  | "processing"
+  | "slow"
+  | "needs-input-review"
+  | "unavailable"
+  | "malformed"
+  | "failed"
+  | "restored";
 
 const presentation = {
   pending: { icon: Clock3, title: "Queued for generation", body: "Your Kit is queued. It will continue when processing capacity is available; you can return to history safely.", tone: "info" },
   processing: { icon: LoaderCircle, title: "Generating your Kit", body: "Deterministic work runs first. Generated prose is validated before it becomes part of the ApplicationKit.", tone: "info" },
   slow: { icon: Clock3, title: "Still processing", body: "This is taking longer than usual. The Kit continues in the background; no estimate or percentage is available.", tone: "warning" },
+  "needs-input-review": {
+    icon: AlertCircle,
+    title: "Review your input before trying again",
+    body: "The uploaded résumé or job description could not be interpreted confidently enough to deliver the requested primary documents. Review the extracted text and target details, then create a new Kit.",
+    tone: "warning",
+  },
   unavailable: { icon: CloudOff, title: "Local service unavailable", body: "The latest Kit state could not be retrieved. Check that the local API is running, then retry retrieval.", tone: "danger" },
   malformed: { icon: AlertCircle, title: "Couldn't read the Kit result", body: "The response was not in an expected shape. This is safe to retry; no generated content is shown as a substitute.", tone: "danger" },
   failed: { icon: AlertCircle, title: "Kit generation failed", body: "The failure was surfaced instead of being hidden. Create another Kit or return to history; internal processing details are not displayed here.", tone: "danger" },

@@ -1,4 +1,22 @@
-import type { ApplicationKit, Claim, KitRead } from "@/lib/api-types";
+import type { ApplicationKit, Claim, KitRead, KitStatus } from "@/lib/api-types";
+
+/** Result state wins over stale transport status once a result exists. */
+export function effectiveKitStatus(kit: Pick<KitRead, "status" | "result">): KitStatus {
+  const state = kit.result?.state;
+  if (state === "completed" || state === "partially_completed" || state === "needs_input_review" || state === "failed") {
+    return state;
+  }
+  return kit.status;
+}
+
+/** Count only reports that authorize a document as delivered (with legacy fallback). */
+export function deliveredArtifactCount(result: ApplicationKit | null): number {
+  if (!result) return 0;
+  const reports = Object.values(result.delivery_reports ?? {});
+  if (reports.length) return reports.filter((report) => report.state === "generated" || report.state === "generated_with_fallback").length;
+  return [result.resume?.text, result.cover_letter?.text, result.answers?.text, result.job_fit?.summary, result.interview_prep?.strategy_summary]
+    .filter((value) => Boolean(value?.trim())).length + (result.linkedin_outreach?.drafts.some((draft) => draft.text.trim()) ? 1 : 0);
+}
 
 export const artifactKeys = [
   "resume",
@@ -16,24 +34,34 @@ export function allClaims(result: ApplicationKit | null): Claim[] {
   return artifactKeys.flatMap((key) => result[key]?.claims ?? []);
 }
 
-export function kitTarget(kit: KitRead | null): { company: string; role: string } {
-  // Target company/role is only carried as an explicit field on the LinkedIn
-  // outreach draft and the cover letter document — both are optional,
-  // independently-requested artifacts. Reading only one of them meant the
-  // header showed "unavailable" whenever that one artifact wasn't requested,
-  // even though the other (or the JD parse behind it) had the same
-  // already-extracted value. Check every artifact that carries it before
-  // falling back to "unavailable" — never guess from arbitrary prose.
+export function kitTarget(kit: KitRead | null): { company: string; role: string; confidence: number | null } {
+  // v7 carries the deterministic JD parse explicitly, including confidence.
+  // Older kits only carry company/role on independently-requested outreach or
+  // cover-letter artifacts, so retain those bounded compatibility fallbacks.
+  // Never guess target details from arbitrary generated prose.
   const outreach = kit?.result?.linkedin_outreach;
   const draft = outreach?.drafts[0];
   const companyRef = outreach?.target_context.find((ref) => ref.field === "company");
   const roleRef = outreach?.target_context.find((ref) => ref.field === "role");
   const coverDocument = kit?.result?.cover_letter?.document;
+  const explicitCompany = kit?.result?.target_company?.trim();
+  const explicitRole = kit?.result?.target_role?.trim();
+  const confidence = kit?.result?.target_confidence;
   return {
     company:
-      draft?.target_company || companyRef?.excerpt || coverDocument?.recipient_company || "Target company unavailable",
-    role: draft?.target_role || roleRef?.excerpt || coverDocument?.target_role || "Application kit",
+      explicitCompany ||
+      draft?.target_company ||
+      companyRef?.excerpt ||
+      coverDocument?.recipient_company ||
+      "Target company unavailable",
+    role: explicitRole || draft?.target_role || roleRef?.excerpt || coverDocument?.target_role || "Application kit",
+    confidence: typeof confidence === "number" && Number.isFinite(confidence) ? confidence : null,
   };
+}
+
+/** Whether a terminal result still contains at least one deliverable artifact. */
+export function hasDeliveredArtifact(result: ApplicationKit | null): boolean {
+  return deliveredArtifactCount(result) > 0;
 }
 
 /**

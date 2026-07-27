@@ -18,14 +18,14 @@ to a local Ollama server over stdlib HTTP.
 | `ats_engine.parsing` | PDF text, contacts, source-preserving resume `Profile`, JD `JDProfile`, phrase-first requirements |
 | `ats_engine.evidence` | Source-grounded requirement resolver, gap ladder + adjacency clustering |
 | `ats_engine.scoring` | Authoritative v2 ATS scoring, legacy wrappers + coverage analysis |
-| `ats_engine.validation` | Claim/fidelity/stuffing/style/format/LaTeX/completeness gates + severity |
+| `ats_engine.validation` | Structured claim/fidelity/stuffing/style/format/LaTeX/completeness gates, exact calibration + severity |
 | `ats_engine.caching` | Content-hash cache (disk-backed, degrades to no-op) |
 | `ats_engine.providers` | `LLMProvider` interface + Ollama adapter |
 | `ats_engine.generation` | Source-preserving plans, placement planner, optimizer, document generation + pipeline |
 | `ats_engine.job_fit` | Deterministic requirement coverage, fit bands, narrative consistency |
 | `ats_engine.interview_prep` | Grounded questions, STAR integrity, gap guidance, provider consistency |
 | `ats_engine.linkedin_outreach` | Grounded drafts, evidence boundaries, relationship and length validation |
-| `ats_engine.kit` | ApplicationKit v6, typed artifacts, grounding, optimization trace, serialization compatibility |
+| `ats_engine.kit` | ApplicationKit v7, typed artifacts, delivery reports/state roll-up, grounding, optimization trace, v1-v6 compatibility |
 
 ## Core principles
 
@@ -39,13 +39,14 @@ to a local Ollama server over stdlib HTTP.
    source resume; the claim validator blocks invented employers, metrics, emails,
    and altered titles.
 
-## Tailoring Engine v2
+## Tailoring Engine v2 and delivery-first validation
 
 The default tailoring path is a deterministic, provenance-carrying sequence:
 
 ```
 source extraction → JD requirements → evidence resolver → placement planner
-→ monotone optimizer → fidelity/stuffing/grounding validators → ats_v2 scorer
+→ identity calibration → delivery-first optimizer → shared final validators
+→ ats_v2 scorer → document/kit delivery states
 ```
 
 - `RequirementTerm` is extracted from the JD alone, phrase-first and
@@ -59,19 +60,48 @@ source extraction → JD requirements → evidence resolver → placement planne
   headline, or a source-appropriate bullet without turning an unsupported gap
   into a claim. Source skill headings and candidate-authored bullet facts are
   preserved.
-- The optimizer accepts an action batch only when it strictly improves the one
-  authoritative `ats_v2` score and passes raw-source fidelity, anti-stuffing,
-  grounding, and structural gates. It otherwise bisects/rejects the batch and
-  falls back to source content rather than weakening a fact.
-- The final v2 tailored score is asserted to be no lower than the original
-  score. `MatchReport.optimization_trace` records score steps, accepted and
-  rejected actions, and truly unreachable terms.
+- The source-preserving plan is first validated as a delivery floor. A single
+  run-local gate context is reused through action/batch bisection, rollback, and
+  final validation. A quality-only headline/summary/bullet proposal may be
+  accepted at score parity; a score-targeting action cannot regress the one
+  authoritative `ats_v2` score.
+- Validation findings are structured and tiered (`fatal`, `degrade`, `warn`).
+  Identity calibration can downgrade only the exact
+  `(detector_version, code, normalized_fact, source_span)` that fired against
+  an unchanged source projection. It cannot hide a genuine deletion with a
+  different fact or span.
+- Resume quality-stage headline/summary/bullet proposals are structured and
+  validated per item. A headline proposal may only select/reorder exact
+  resolver-credited terms around the immutable candidate role, and every
+  delivered summary crosses truth grounding. Malformed output, a timeout, an
+  unavailable provider, or one unsupported proposal falls back only for that
+  item; deterministic generation remains complete. Generated resume and cover
+  letter prose contains no em dash.
+- The final delivered score is asserted to be no lower than the original and
+  remains present for a source-preserving fallback. `MatchReport.optimization_trace`
+  records score steps, accepted/rejected actions, delivery state, honest
+  fallback reason, calibrated detector codes, and truly unreachable terms.
 
 The path works with `provider=None` / `use_llm=False`. To temporarily retain
 the compatibility path while investigating an older caller, set
 `ENGINE_TAILORING_V2=0`; this does not bypass grounding or validation. See
 [ADR-0022](../../docs/adr/0022-tailoring-engine-v2-evidence-grounded-iterative-optimization.md)
 for the full decision and invariants.
+
+ApplicationKit v7 separates per-document delivery from the complete-kit
+roll-up. Documents use `generated`, `generated_with_fallback`,
+`needs_input_review`, `failed`, or `not_requested`; only kits use
+`partially_completed`. A requested resume and cover letter are primary
+documents, and `completed` means all requested primary and secondary artifacts
+were delivered. Every artifact kind has a `DeliveryReport`, including explicit
+`not_requested` entries.
+
+`ENGINE_DELIVERY_FIRST=1` is the default. Setting it to `0`, `false`, `no`, or
+`off` and restarting callers selects the retained PR-21 score-only optimizer:
+it skips run-local identity calibration and delivery-first quality proposals.
+It does **not** revert detector fixes, grounding, or additive ApplicationKit
+v7/state semantics. See
+[ADR-0023](../../docs/adr/0023-delivery-first-validation-and-application-kit-v7.md).
 
 ## Install
 
@@ -101,6 +131,8 @@ result = generate_application_kit(
     use_llm=False,  # fully deterministic path
 )
 print(result.resume.text)
+print(result.state)
+print(result.delivery_reports)
 print(result.match_report.score_basis)
 print(result.match_report.optimization_trace.score_path)
 print(result.job_fit.fit_band)
@@ -110,7 +142,11 @@ print(result.interview_prep.star_stories)
 print(result.linkedin_outreach.drafts)
 ```
 
-ApplicationKit v6 retains grounded JobFit, interview preparation, and LinkedIn
-outreach drafts, and adds the v2 score basis and optimization trace. These
-artifacts remain independently selectable. Outreach context is typed and
-provenance-bound; the engine does not send messages or access LinkedIn.
+ApplicationKit v7 retains grounded JobFit, interview preparation, LinkedIn
+outreach drafts, the authoritative v2 score basis, and the optimization trace,
+then adds honest delivery reports, target metadata, and kit state. Persisted
+v1-v6 and known Phase 1 results remain readable through the serialization
+boundary without rewriting their stored schema; unknown schemas are surfaced
+as unknown instead of being guessed. Artifacts remain independently
+selectable. Outreach context is typed and provenance-bound; the engine does not
+send messages or access LinkedIn.

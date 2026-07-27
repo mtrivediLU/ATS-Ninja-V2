@@ -10,15 +10,15 @@ import { useArtifactView } from "@/components/product/use-artifact-view";
 import { useLocalTextEditor, useUnsavedChangeProtection } from "@/components/product/use-local-text-editor";
 import { Dialog } from "@/components/ui/dialog";
 import { Banner, Button, Card, Field, Textarea } from "@/components/ui/primitives";
-import type { LinkedInOutreachArtifact, OutreachContextRef, OutreachDraft } from "@/lib/api-types";
+import type { DocumentState, LinkedInOutreachArtifact, OutreachContextRef, OutreachDraft } from "@/lib/api-types";
 import { copyText, safeFilename } from "@/lib/product";
 
-export function OutreachWorkspace({ artifact, company, role }: { artifact: LinkedInOutreachArtifact; company: string; role: string }) {
+export function OutreachWorkspace({ artifact, company, role, deliveryState }: { artifact: LinkedInOutreachArtifact; company: string; role: string; deliveryState?: DocumentState }) {
   const [view, setView] = useArtifactView();
   const exportText = outreachText(artifact);
   return <div>
-    <ArtifactToolbar title="LinkedIn outreach" validation={artifact.validation} claims={artifact.claims} text={exportText} filename={safeFilename(company, role, "linkedin-outreach")} view={view} onViewChange={setView} />
-    {view === "trust" ? <TrustSummary title="LinkedIn outreach" claims={artifact.claims} validation={artifact.validation} text={exportText} readinessLabel={artifact.drafts.length ? "Drafts ready — not sent" : "No drafts returned"} explanation="These are local, draft-only messages. ATS-Ninja has no LinkedIn connection and cannot send, discover recipients, or invent a relationship." onOpenContent={() => setView("content")} /> : <>
+    <ArtifactToolbar title="LinkedIn outreach" validation={artifact.validation} claims={artifact.claims} text={exportText} filename={safeFilename(company, role, "linkedin-outreach")} view={view} onViewChange={setView} deliveryState={deliveryState} />
+    {view === "trust" ? <TrustSummary title="LinkedIn outreach" claims={artifact.claims} validation={artifact.validation} text={exportText} deliveryState={deliveryState} readinessLabel={artifact.drafts.length ? "Drafts ready — not sent" : "No drafts returned"} explanation="These are local, draft-only messages. ATS-Ninja has no LinkedIn connection and cannot send, discover recipients, or invent a relationship." onOpenContent={() => setView("content")} /> : <>
       <Banner tone="info" className="mt-5" title="Drafts only.">ATS-Ninja never sends messages, accesses LinkedIn, fetches public limits, or implies a relationship that was not supplied.</Banner>
       {artifact.strategy_summary && <Card className="mt-4 shadow-none"><h2 className="font-semibold">Outreach strategy</h2><p className="mt-2 text-sm text-ink-secondary">{artifact.strategy_summary}</p></Card>}
       {!artifact.relationship_validation.passed && <Banner tone="warning" className="mt-4" title="Relationship validation notes.">One or more drafts were repaired or withheld to avoid implying unsupported context. Review each draft’s validation notes before using it.</Banner>}
