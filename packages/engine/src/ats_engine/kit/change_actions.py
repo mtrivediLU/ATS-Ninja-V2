@@ -39,7 +39,7 @@ from ats_engine.parsing.vocab import normalize_term
 from ats_engine.scoring.ats_v2 import AtsScoreV2, score_resume_v2
 from ats_engine.scoring.match_report import build_kit_summary, build_weighted_keywords, score_resume
 from ats_engine.validation.completeness import resume_completeness_errors
-from ats_engine.validation.fidelity import BulletPair, validate_raw_source_findings
+from ats_engine.validation.fidelity import BulletPair, bullet_fidelity_findings, validate_raw_source_findings
 from ats_engine.validation.latex import validate_latex
 from ats_engine.validation.naturalness import (
     detect_jd_echo,
@@ -411,15 +411,17 @@ def _rebuild_resume(
         changed_summary.original_text if changed_summary and changed_summary.id in changed_record_ids else ""
     )
     fidelity_candidate = _effective_record(changed_summary) if fidelity_source else ""
-    errors.extend(
-        f"fidelity: {finding.detail}"
-        for finding in validate_raw_source_findings(
-            fidelity_source,
-            fidelity_candidate,
-            bullet_pairs=tuple(changed_pairs),
+    fidelity_findings = list(validate_raw_source_findings("", "", bullet_pairs=tuple(changed_pairs)))
+    if fidelity_source:
+        fidelity_findings.extend(
+            bullet_fidelity_findings(
+                fidelity_source,
+                fidelity_candidate,
+                source_text=fidelity_source,
+                source_span="resume:summary",
+            )
         )
-        if is_fatal_validation_error(finding)
-    )
+    errors.extend(f"fidelity: {finding.detail}" for finding in fidelity_findings if is_fatal_validation_error(finding))
     units = [document.summary, *(bullet for entry in document.experience for bullet in entry.bullets)]
     warnings = _naturalness_warnings(text, units=units, keyword_terms=keyword_terms, job_description=job_description)
     fatal = rejected > 0 or any(is_fatal_validation_error(error) for error in errors)
