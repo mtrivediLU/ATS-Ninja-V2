@@ -26,6 +26,7 @@ from ats_engine import (
     ClaimType,
     DocumentState,
     KitState,
+    application_kit_from_dict,
     application_kit_to_dict,
     generate_application_kit,
 )
@@ -48,6 +49,7 @@ from ats_engine.generation.planning import (
     build_resume_plan,
 )
 from ats_engine.generation.resume import generate_resume_text
+from ats_engine.kit.change_actions import ChangeAction, apply_change_actions
 from ats_engine.kit.contract import ApplicationKit
 from ats_engine.models import (
     ContactInfo,
@@ -435,6 +437,86 @@ def test_latex_docx_and_html_exports_retain_protected_facts_and_ats_safe_structu
         assert latex_escape(fact) in latex
         assert fact in docx_text
         assert fact in html
+
+
+@pytest.mark.parametrize("case", tuple(CASE_TARGETS))
+def test_real_cases_reject_restore_summary_is_stable_across_export_and_persistence(case: str) -> None:
+    """Service-level regression coverage for the two production failure shapes,
+    end to end: reject/restore of the composed summary must never withhold the
+    résumé (the exact bug this branch's fix addresses), exports must keep
+    working on the restored kit, protected facts and credential IDs must
+    survive, and a persist/reload cycle must not destabilize the round trip.
+    """
+    kit = _generate_case(case)
+    assert kit.resume is not None and kit.resume.document is not None
+    assert kit.cover_letter is not None and kit.cover_letter.text
+    delivered_summary = kit.resume.document.summary
+    delivered_score = kit.match_report.tailored_ats_match.score
+    assert delivered_summary
+
+    resume_text = _read_resume()
+    jd_text = _read_jd(case)
+
+    rejected = apply_change_actions(
+        kit=kit,
+        resume_text=resume_text,
+        job_description=jd_text,
+        actions=[ChangeAction("resume::summary", "reject")],
+        expected_revision=0,
+    )
+    assert rejected.ok, rejected.errors
+    assert rejected.kit.resume is not None and rejected.kit.resume.document is not None
+    assert rejected.kit.resume.document.summary != delivered_summary
+
+    restored = apply_change_actions(
+        kit=rejected.kit,
+        resume_text=resume_text,
+        job_description=jd_text,
+        actions=[ChangeAction("resume::summary", "restore")],
+        expected_revision=1,
+    )
+    # The exact regression this branch fixes: a validator false positive on the
+    # composed summary (evidence-backed capability + certification wording +
+    # the JD targeting clause) must never refuse the restore and accidentally
+    # withhold the résumé.
+    assert restored.ok, restored.errors
+    assert restored.kit.resume is not None and restored.kit.resume.document is not None
+    assert restored.kit.resume.text
+    assert not restored.kit.resume.validation.fatal
+    assert restored.kit.resume.document.summary == delivered_summary
+    assert restored.kit.match_report is not None
+    assert restored.kit.match_report.tailored_ats_match.score == delivered_score
+    for credential_id in CREDENTIAL_IDS:
+        assert credential_id in restored.kit.resume.text
+
+    # Exports keep working on the restored kit (never a blanked artifact).
+    docx_bytes = render_resume_docx(restored.kit.resume.document, "classic")
+    assert docx_bytes[:2] == b"PK"
+    pdf_bytes = _render_resume_as_pdf(restored.kit.resume.text)
+    assert pdf_bytes[:5] == b"%PDF-"
+
+    # Persist -> reload -> repeat the cycle: the immutable ledger baseline the
+    # restore depends on must itself survive the real API/DB persistence path.
+    persisted = json.loads(json.dumps(application_kit_to_dict(restored.kit)))
+    reloaded = application_kit_from_dict(persisted)
+    reloaded_rejected = apply_change_actions(
+        kit=reloaded,
+        resume_text=resume_text,
+        job_description=jd_text,
+        actions=[ChangeAction("resume::summary", "reject")],
+        expected_revision=reloaded.revision,
+    )
+    assert reloaded_rejected.ok, reloaded_rejected.errors
+    reloaded_restored = apply_change_actions(
+        kit=reloaded_rejected.kit,
+        resume_text=resume_text,
+        job_description=jd_text,
+        actions=[ChangeAction("resume::summary", "restore")],
+        expected_revision=reloaded_rejected.kit.revision,
+    )
+    assert reloaded_restored.ok, reloaded_restored.errors
+    assert reloaded_restored.kit.resume is not None and reloaded_restored.kit.resume.document is not None
+    assert reloaded_restored.kit.resume.document.summary == delivered_summary
 
 
 @pytest.fixture(scope="module")

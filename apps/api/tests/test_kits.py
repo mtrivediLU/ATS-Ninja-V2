@@ -995,3 +995,51 @@ async def test_stale_expected_revision_second_request_conflicts(client: httpx.As
     assert first.json()["revision"] == 1
     second = await client.post(f"/api/v1/kits/{kit_id}/change-actions", json=action)
     assert second.status_code == 409
+
+
+async def test_change_action_summary_reject_restore_round_trip_and_stale_revision_409(
+    client: httpx.AsyncClient,
+) -> None:
+    """Regression coverage over the API/HTTP boundary for the composed-summary
+    reject/restore fix in `_rebuild_resume`: the round trip must succeed and
+    reproduce the exact delivered summary, and a stale-revision request in the
+    middle of the sequence must still 409 rather than silently applying."""
+    body = await _create_completed_kit(client)
+    kit_id = body["id"]
+    ledger = body["result"]["resume"]["change_ledger"]
+    summary_record = next(r for r in ledger if r["id"] == "resume::summary")
+    delivered_summary = body["result"]["resume"]["document"]["summary"]
+    assert delivered_summary
+
+    rejected = await client.post(
+        f"/api/v1/kits/{kit_id}/change-actions",
+        json={"expected_revision": 0, "actions": [{"change_id": summary_record["id"], "action": "reject"}]},
+    )
+    assert rejected.status_code == 200
+    rejected_body = rejected.json()
+    assert rejected_body["revision"] == 1
+    assert rejected_body["result"]["resume"]["document"]["summary"] != delivered_summary
+
+    # A second request still expecting revision 0 (stale) must conflict, not
+    # silently reapply on top of the already-advanced revision.
+    stale = await client.post(
+        f"/api/v1/kits/{kit_id}/change-actions",
+        json={"expected_revision": 0, "actions": [{"change_id": summary_record["id"], "action": "accept"}]},
+    )
+    assert stale.status_code == 409
+    unaffected = await client.get(f"/api/v1/kits/{kit_id}")
+    assert unaffected.json()["revision"] == 1
+
+    restored = await client.post(
+        f"/api/v1/kits/{kit_id}/change-actions",
+        json={"expected_revision": 1, "actions": [{"change_id": summary_record["id"], "action": "restore"}]},
+    )
+    assert restored.status_code == 200
+    restored_body = restored.json()
+    assert restored_body["revision"] == 2
+    assert restored_body["result"]["resume"]["document"]["summary"] == delivered_summary
+    # Persisted: a fresh GET reflects the exact restored summary, not a stale copy.
+    refetched = await client.get(f"/api/v1/kits/{kit_id}")
+    refetched_body = refetched.json()
+    assert refetched_body["revision"] == 2
+    assert refetched_body["result"]["resume"]["document"]["summary"] == delivered_summary

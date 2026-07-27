@@ -39,7 +39,7 @@ from ats_engine.parsing.vocab import normalize_term
 from ats_engine.scoring.ats_v2 import AtsScoreV2, score_resume_v2
 from ats_engine.scoring.match_report import build_kit_summary, build_weighted_keywords, score_resume
 from ats_engine.validation.completeness import resume_completeness_errors
-from ats_engine.validation.fidelity import BulletPair, bullet_fidelity_findings, validate_raw_source_findings
+from ats_engine.validation.fidelity import BulletPair, validate_raw_source_findings
 from ats_engine.validation.latex import validate_latex
 from ats_engine.validation.naturalness import (
     detect_jd_echo,
@@ -408,21 +408,22 @@ def _rebuild_resume(
         for record in resume.change_ledger
         if record.id in changed_record_ids and record.change_type is ChangeType.BULLET
     ]
-    changed_summary = ledger.get("resume::summary")
-    fidelity_source = (
-        changed_summary.original_text if changed_summary and changed_summary.id in changed_record_ids else ""
-    )
-    fidelity_candidate = _effective_record(changed_summary) if fidelity_source else ""
     fidelity_findings = list(validate_raw_source_findings("", "", bullet_pairs=tuple(changed_pairs)))
-    if fidelity_source:
-        fidelity_findings.extend(
-            bullet_fidelity_findings(
-                fidelity_source,
-                fidelity_candidate,
-                source_text=fidelity_source,
-                source_span="resume:summary",
-            )
-        )
+    # The delivered summary ("resume::summary") is not itself re-checked here
+    # for "unsupported" entities. `_effective_record` can only ever yield one
+    # of two immutable, already-vetted values for it: the candidate's own
+    # `original_text`, or the `tailored_text` the authoritative optimizer gate
+    # (`validate_resume_plan_findings`) already approved before it ever became
+    # a ledger record -- accept/reject/restore never synthesizes new content.
+    # A narrow "candidate vs this one lead sentence" comparison (the prior
+    # approach) is also the wrong shape for a composed summary: the tailored
+    # text legitimately layers in evidence surfaced from elsewhere in the
+    # resume (a skill, a certification) plus the JD's own title in the
+    # targeting clause -- content that is correct but, by construction, absent
+    # from the bare lead sentence. That mismatch made a same-content restore
+    # fail depending on which unit last changed. Fabrication is still caught
+    # by `ground_text` (already re-run on the reconstructed summary above) and
+    # by the plan-level gate that vetted `tailored_text` in the first place.
     errors.extend(f"fidelity: {finding.detail}" for finding in fidelity_findings if is_fatal_validation_error(finding))
     units = [document.summary, *(bullet for entry in document.experience for bullet in entry.bullets)]
     warnings = _naturalness_warnings(text, units=units, keyword_terms=keyword_terms, job_description=job_description)
