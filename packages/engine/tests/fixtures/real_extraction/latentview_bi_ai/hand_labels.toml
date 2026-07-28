@@ -104,7 +104,15 @@ canonical = "generative ai"
 surface = "Generative AI"
 kind = "domain"
 section = "required"
-jd_occurrences = 2
+# 3, not 2: the extractor's own candidate for this canonical is discovered via
+# the vocabulary alias "GenAI" (posting: "GenAI Ecosystem", "GenAI-driven
+# automation", "GenAI capabilities"), which appears 3 times -- the literal
+# phrase "Generative AI" alone appears only twice. Corrected from an earlier
+# measurement of the phrase-only count, found when PRAMANA's production
+# counting (which measures whichever literal surface a candidate was actually
+# extracted through, exactly what target(r) must reflect) was verified against
+# this file and caught the mismatch.
+jd_occurrences = 3
 
 [[requirements]]
 canonical = "data analytics"

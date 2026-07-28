@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pytest
 
+from ats_engine.models import RequirementTerm
 from ats_engine.parsing.vocab import normalize_term
 from ats_engine.pramana.requirements import extract_requirements
 
@@ -41,6 +42,11 @@ def _labels(case: str) -> dict:
 def _extracted(case: str) -> set[str]:
     text = (FIXTURES / case / "job_description.txt").read_text()
     return {_norm(requirement.canonical) for requirement in extract_requirements(text)}
+
+
+def _by_canonical(case: str) -> dict[str, RequirementTerm]:
+    text = (FIXTURES / case / "job_description.txt").read_text()
+    return {_norm(requirement.canonical): requirement for requirement in extract_requirements(text)}
 
 
 @pytest.mark.parametrize("case", CASES)
@@ -152,3 +158,50 @@ def test_extraction_never_seeds_from_a_candidate_profile(case: str) -> None:
     text = (FIXTURES / case / "job_description.txt").read_text()
     for requirement in extract_requirements(text):
         assert requirement.jd_evidence_line, "every requirement must cite the JD line it came from"
+
+
+# --------------------------------------------------------- jd_occurrences ----
+# PRAMANA's target(r) = clamp(jd_occurrences, 1, 3) needs a real count of how
+# many times the JD states each requirement. hand_labels.toml's own
+# jd_occurrences values were hand-measured (word-boundary, case-insensitive)
+# and cross-checked against Jobscan's published per-skill JD column before any
+# extractor change -- the same ground truth recall/precision already use.
+
+
+@pytest.mark.parametrize("case", CASES)
+def test_jd_occurrences_matches_the_hand_measured_ground_truth(case: str) -> None:
+    extracted = _by_canonical(case)
+    mismatches = []
+    for item in _labels(case)["requirements"]:
+        canonical = _norm(item["canonical"])
+        requirement = extracted.get(canonical)
+        if requirement is None:
+            continue  # recall/precision tests own missing-requirement failures
+        if requirement.jd_occurrences != item["jd_occurrences"]:
+            mismatches.append((canonical, requirement.jd_occurrences, item["jd_occurrences"]))
+    assert not mismatches, f"{case}: (term, got, expected) = {mismatches}"
+
+
+def test_a_term_the_jd_repeats_nine_times_has_a_saturating_target() -> None:
+    """LatentView's JD says "AI" nine times -- jd_occurrences must reflect that,
+    not silently cap at extraction time. Capping to a 1..3 target is PRAMANA's
+    job (target = clamp(jd_occurrences, 1, 3)), not the demand model's."""
+    generative_ai = _by_canonical("latentview_bi_ai")["generative ai"]
+    assert generative_ai.jd_occurrences >= 2
+
+
+def test_jd_occurrences_defaults_to_one_for_a_synthetic_requirement() -> None:
+    """A RequirementTerm built outside real JD extraction (tests, the legacy-
+    keyword conversion) has no JD text to count against."""
+    requirement = RequirementTerm(
+        canonical="terraform",
+        surface="Terraform",
+        aliases=(),
+        kind="tool",
+        section="required",
+        weight=3.0,
+        ngram=1,
+        category="cloud",
+        jd_evidence_line="",
+    )
+    assert requirement.jd_occurrences == 1
