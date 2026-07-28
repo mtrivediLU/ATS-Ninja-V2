@@ -21,13 +21,13 @@ from pathlib import Path
 
 import pytest
 
-from ats_engine.kata.preservation import (
+from ats_engine.parsing.resume import build_profile
+from ats_engine.pramana.requirements import extract_requirements
+from ats_engine.rachana.preservation import (
     count_occurrences,
     preserves_jd_terms,
     term_regressions,
 )
-from ats_engine.kensho.requirements import extract_requirements
-from ats_engine.parsing.resume import build_profile
 
 FIXTURES = Path(__file__).parent / "fixtures" / "real_extraction"
 

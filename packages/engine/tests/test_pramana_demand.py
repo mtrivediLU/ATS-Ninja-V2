@@ -1,4 +1,4 @@
-"""KENSHO Demand Model: recall, precision, and label hygiene on real postings.
+"""PRAMANA Demand Model: recall, precision, and label hygiene on real postings.
 
 A requirement that never enters the demand model cannot be prioritised,
 resolved, placed, or scored -- so every downstream number is capped by this
@@ -19,8 +19,8 @@ from pathlib import Path
 
 import pytest
 
-from ats_engine.kensho.requirements import extract_requirements
 from ats_engine.parsing.vocab import normalize_term
+from ats_engine.pramana.requirements import extract_requirements
 
 FIXTURES = Path(__file__).parent / "fixtures" / "real_extraction"
 CASES = ("crowdplat_web_scraper", "latentview_bi_ai")

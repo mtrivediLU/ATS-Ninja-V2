@@ -1,4 +1,4 @@
-"""KENSHO entity extraction: who is hiring, and for what.
+"""PRAMANA entity extraction: who is hiring, and for what.
 
 Both facts were wrong on real postings before this change. CrowdPlat's
 employer came out as `APIs and JSON` -- a fragment of a requirements bullet --
@@ -111,7 +111,7 @@ def test_company_extraction_prefers_an_explicit_label_over_a_guess() -> None:
 
 
 def _hygiene(text: str):
-    from ats_engine.kensho.requirements import sanitize_jd_for_parsing
+    from ats_engine.pramana.requirements import sanitize_jd_for_parsing
 
     return sanitize_jd_for_parsing(text)
 

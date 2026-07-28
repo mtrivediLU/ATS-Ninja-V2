@@ -5,7 +5,11 @@ from collections import Counter
 from collections.abc import Iterable
 from dataclasses import replace
 
-from ats_engine.kensho.requirements import (
+from ats_engine.models import JDProfile, Profile, RequirementTerm
+from ats_engine.parsing.line_refs import number_lines, render_numbered_lines, resolve_line_numbers
+from ats_engine.parsing.resume import empty_profile
+from ats_engine.parsing.vocab import normalize_term, vocabulary_entry
+from ats_engine.pramana.requirements import (
     INLINE_TITLE_PATTERNS,
     JDHygiene,
     extract_requirements,
@@ -13,10 +17,6 @@ from ats_engine.kensho.requirements import (
     is_person_name,
     sanitize_jd_for_parsing,
 )
-from ats_engine.models import JDProfile, Profile, RequirementTerm
-from ats_engine.parsing.line_refs import number_lines, render_numbered_lines, resolve_line_numbers
-from ats_engine.parsing.resume import empty_profile
-from ats_engine.parsing.vocab import normalize_term, vocabulary_entry
 from ats_engine.providers.base import LLMProvider, generate_json
 
 # The JD has already been split into numbered lines. Pointing at line numbers

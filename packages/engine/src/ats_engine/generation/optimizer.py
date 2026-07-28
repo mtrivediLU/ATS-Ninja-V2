@@ -10,7 +10,6 @@ from dataclasses import dataclass, field
 from ats_engine.generation.integration_planner import plan_placements
 from ats_engine.generation.planning import rewrite_summary
 from ats_engine.generation.resume import generate_resume_text
-from ats_engine.kata.preservation import PreservationGuard, build_guard
 from ats_engine.kit.contract import ArtifactKind, DocumentState, OptimizationRejection, OptimizationTrace
 from ats_engine.kit.grounding import build_evidence_context, ground_text
 from ats_engine.models import (
@@ -23,6 +22,7 @@ from ats_engine.models import (
     ResumePlan,
 )
 from ats_engine.parsing.vocab import normalize_term
+from ats_engine.rachana.preservation import PreservationGuard, build_guard
 from ats_engine.scoring.ats_v2 import AtsScoreV2, score_resume_v2
 from ats_engine.validation.calibration import (
     CalibrationProfile,

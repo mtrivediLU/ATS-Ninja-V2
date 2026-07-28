@@ -1,7 +1,7 @@
 """Certification integrity and the Immutable Fact Set.
 
 These are the facts an employer can verify with one phone call: employers,
-titles, dates, degrees, certifications, and credential IDs. The KENSHO/KATA
+titles, dates, degrees, certifications, and credential IDs. The PRAMANA/RACHANA
 work order makes them non-negotiable -- a missing element is fatal and a *new*
 element is fatal, because a new element is fabrication. There is deliberately
 no calibration, suppression, or severity tier here.
@@ -29,8 +29,8 @@ from pathlib import Path
 
 import pytest
 
-from ats_engine.kata.facts import ImmutableFactSet, build_fact_set, fact_set_violations
 from ats_engine.parsing.resume import build_profile
+from ats_engine.rachana.facts import ImmutableFactSet, build_fact_set, fact_set_violations
 
 FIXTURES = Path(__file__).parent / "fixtures" / "real_extraction"
 

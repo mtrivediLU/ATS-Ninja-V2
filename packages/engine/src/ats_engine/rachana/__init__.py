@@ -1,4 +1,4 @@
-"""KATA -- Keyword-Anchored Truthful Alignment.
+"""RACHANA -- Resume Alignment through Constrained, Honest and Natural Adaptation.
 
 The transformation half of the engine: given a base resume and a job
 description, produce a tailored resume that is measurably stronger and
@@ -8,13 +8,13 @@ This package currently exposes the Immutable Fact Set, which is the floor
 every later stage is checked against.
 """
 
-from ats_engine.kata.facts import (
+from ats_engine.rachana.facts import (
     FactViolation,
     ImmutableFactSet,
     build_fact_set,
     fact_set_violations,
 )
-from ats_engine.kata.preservation import (
+from ats_engine.rachana.preservation import (
     TermRegression,
     count_occurrences,
     preserves_jd_terms,
