@@ -1,0 +1,43 @@
+Job Role:
+
+We are seeking a forward-thinking Analytical BI & AI to lead our modern reporting initiatives. In this role, you will bridge traditional business intelligence with cutting-edge Generative AI technologies. You will oversee our core BI infrastructure while actively implementing AI-driven capabilities—such as natural language data querying, automated report generation, and AI assistants—to democratize data access across the organization.
+
+The ideal candidate is a data storytelling expert and an early adopter of AI productivity tools. You will lead a team of analysts, optimize enterprise dashboards, and leverage modern GenAI capabilities to shift our business from static reporting to real-time decision intelligence.
+
+Operate primarily on Pacific Standard Time (PST) to collaborate with onshore business leaders, while effectively structuring your schedule to align with, manage, and unblock an offshore delivery team working in Indian Standard Time (IST).
+
+
+
+Required Technical Skills:
+
+BI Frameworks: 4+ years of advanced experience with Looker or relevant tools
+
+Advanced SQL: Expert ability to write clean queries, join data tables, and structure data optimally for reporting.
+
+GenAI Ecosystem: Hands-on experience using Generative AI tools and LLMs (ChatGPT, Claude, Microsoft Copilot) specifically for coding assistance, data cleaning, or narrative generation.
+
+AI Tooling Platforms: Familiarity with modern low-code or no-code AI workflow orchestrators
+
+
+
+Preferred Qualifications:
+
+Education: Bachelor's degree in Business Analytics, Information Systems, Business Administration, or a related field.
+
+Experience: 5–8 years in a data analytics or business intelligence role, with 1+ years leading projects or managing direct reports.
+
+Exceptional communication skills, with a proven ability to teach technical concepts to non-technical business units.
+
+
+
+Key Performance Indicators (KPIs)
+
+Reporting Efficiency: Reduction in manual report-building hours achieved through GenAI-driven automation.
+
+Data Accuracy: Zero business disruptions caused by unverified AI narratives or poor underlying dashboard logic.
+
+Sprint Delivery: Consistent, on-time completion of analytical pipelines according to the team's agile roadmap.
+
+
+
+At LatentView Analytics, we value a diverse, inclusive workforce and provide equal employment opportunities for all applicants and employees. All qualified applicants for employment will be considered without regard to an individual's race, color, sex, gender identity, gender expression, religion, age, national origin or ancestry, citizenship, physical or mental disability, medical condition, family care status, marital status, domestic partner status, sexual orientation, genetic information, military or veteran status, or any other basis protected by federal, state or local laws.
