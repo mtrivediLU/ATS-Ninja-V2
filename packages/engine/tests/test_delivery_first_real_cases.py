@@ -1,8 +1,17 @@
 """Delivery-first v7 acceptance and regression coverage.
 
-All fixtures are synthetic and privacy-safe. They preserve the structural
-features of the two production failure shapes without containing a real
-candidate's identity, contact details, or credential identifiers.
+All fixtures under ``fixtures/synthetic_shapes/`` are HAND-WRITTEN and
+synthetic -- they preserve the structural features of two production failure
+shapes without containing a real candidate's identity, contact details, or
+credential identifiers. They are deliberately named "synthetic_shapes", not
+"real_cases": three earlier rounds of parser fixes each validated against a
+hand-written approximation like this one and none of them reproduced the real
+PDF's actual line shapes (single-line vs. multi-line headers, hyphen wraps,
+glued words, glyph artifacts), so the underlying parser bug survived all
+three. The genuine real-extraction regression -- captured byte-for-byte from
+an actual PDF, contact-redacted only -- lives in
+``fixtures/real_extraction/`` and is exercised by
+``test_real_extraction_parse_fidelity.py``, not here.
 """
 
 from __future__ import annotations
@@ -81,7 +90,7 @@ from ats_engine.validation.severity import (
 )
 from ats_engine.validation.stuffing import validate_resume_stuffing_findings
 
-FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "real_cases"
+FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "synthetic_shapes"
 RESUME_PATH = FIXTURE_ROOT / "resume" / "resume.txt"
 CASE_TARGETS = {
     "coo_it_specialist": ("IT Specialist – Economic Development", "Chiefs of Ontario"),
@@ -243,7 +252,7 @@ def test_real_case_target_and_requirement_snapshots_exclude_posting_noise(case: 
 
 
 @pytest.mark.parametrize("case", tuple(CASE_TARGETS))
-def test_real_cases_deliver_both_documents_with_monotone_ats_v2_scores(case: str) -> None:
+def test_synthetic_shapes_deliver_both_documents_with_monotone_ats_v2_scores(case: str) -> None:
     kit = _cached_case(case)
     expected_title, expected_company = CASE_TARGETS[case]
 
@@ -272,7 +281,7 @@ def test_real_cases_deliver_both_documents_with_monotone_ats_v2_scores(case: str
 
 
 @pytest.mark.parametrize("case", tuple(CASE_TARGETS))
-def test_real_cases_preserve_every_protected_resume_fact(case: str) -> None:
+def test_synthetic_shapes_preserve_every_protected_resume_fact(case: str) -> None:
     source = _read_resume()
     profile = build_profile(source)
     kit = _cached_case(case)
@@ -440,7 +449,7 @@ def test_latex_docx_and_html_exports_retain_protected_facts_and_ats_safe_structu
 
 
 @pytest.mark.parametrize("case", tuple(CASE_TARGETS))
-def test_real_cases_reject_restore_summary_is_stable_across_export_and_persistence(case: str) -> None:
+def test_synthetic_shapes_reject_restore_summary_is_stable_across_export_and_persistence(case: str) -> None:
     """Service-level regression coverage for the two production failure shapes,
     end to end: reject/restore of the composed summary must never withhold the
     résumé (the exact bug this branch's fix addresses), exports must keep

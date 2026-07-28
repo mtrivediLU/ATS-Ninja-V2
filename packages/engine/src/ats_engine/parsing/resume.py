@@ -9,8 +9,12 @@ from ats_engine.parsing.line_refs import number_lines, render_numbered_lines, re
 from ats_engine.providers.base import LLMProvider, generate_json
 
 # Cache namespace for parsed profiles. Bump when parsing behavior changes so
-# stale cached profiles are not served after a logic update.
-PROFILE_CACHE_VERSION = "profile-v7-provider-source-floor"
+# stale cached profiles are not served after a logic update. Any change to the
+# heuristic parser below (header classification, continuation joining,
+# location/company splitting, etc.) MUST bump this constant -- otherwise a
+# resume already cached under the old logic keeps being served unchanged
+# after the fix ships.
+PROFILE_CACHE_VERSION = "profile-v8-header-window"
 
 
 class ExtractionSuspectError(RuntimeError):
@@ -871,6 +875,49 @@ _LOCATION_TAIL = re.compile(
     r"(?P<location>[A-Z][A-Za-z.'-]*(?:\s+[A-Z][A-Za-z.'-]*){0,2},\s*"
     r"(?:[A-Z]{2}|[A-Z][A-Za-z]+)(?:,\s*(?:[A-Z]{2}|[A-Z][A-Za-z]+))?)\s*$"
 )
+
+# Header-line classification (see `_classify_header_line`): distinguishes a
+# location line from a title line from a company/institution line among the
+# few non-bullet lines that precede an entry's date line. Resume-local --
+# deliberately not shared with `parsing/job_description.py`'s JD-side title
+# vocabulary, which serves a different domain with different tolerances
+# (that list lacks "associate"/"intern" and includes "officer"/"supervisor",
+# which are not resume-title-shaped enough here).
+_TITLE_ROLE_WORDS = frozenset(
+    {
+        "administrator",
+        "analyst",
+        "architect",
+        "associate",
+        "consultant",
+        "coordinator",
+        "developer",
+        "director",
+        "engineer",
+        "intern",
+        "lead",
+        "manager",
+        "scientist",
+        "specialist",
+        # `_heuristic_entries` reuses this same classifier for education
+        # entries (institution/location/degree/dates -- the same 4-line
+        # shape as company/location/title/dates), so degree-type words are
+        # included too: without them, a degree line like "Master of
+        # Computational Science" fails the title check, falls into the same
+        # catch-all bucket as the institution name, and creates a false
+        # "two possible companies" ambiguity that (via the legacy fallback)
+        # can promote the location line into the institution field instead.
+        "bachelor",
+        "bachelors",
+        "master",
+        "masters",
+        "doctorate",
+        "phd",
+        "diploma",
+    }
+)
+_LOCATION_MODIFIER_TAG = re.compile(r"\s*\((Remote|Hybrid|On-site|Onsite)\)\s*$", flags=re.IGNORECASE)
+_BARE_REMOTE_LOCATION = re.compile(r"^(Remote|Hybrid|On-site|Onsite)$", flags=re.IGNORECASE)
 _YEAR = re.compile(r"\b(19|20)\d{2}\b")
 _URL = re.compile(r"(https?://[^\s|]+|www\.[^\s|]+)", flags=re.IGNORECASE)
 _EMAIL = re.compile(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}")
@@ -978,6 +1025,104 @@ def _detect_heading(line: str) -> str | None:
     return None
 
 
+def _extract_modifier_tag(line: str) -> tuple[str, str]:
+    """Split a trailing "(Remote)"/"(Hybrid)"/"(On-site)" tag off a line."""
+    match = _LOCATION_MODIFIER_TAG.search(line)
+    if not match:
+        return line, ""
+    return line[: match.start()].rstrip(), f" ({match.group(1)})"
+
+
+def _has_role_word(text: str) -> bool:
+    words = re.findall(r"[A-Za-z]+", text)
+    return bool(words) and any(word.casefold().rstrip("s") in _TITLE_ROLE_WORDS for word in words)
+
+
+def _classify_header_line(line: str) -> tuple[str, str, str]:
+    """Classify one pre-date header line as location / title / company.
+
+    Returns ``(kind, value, embedded_location)``: ``value`` is the line with
+    its own modifier tag/location tail removed; ``embedded_location`` is a
+    location split out of a combined line (``"Title, City, ST"``,
+    ``"Company | City, ST"``, ``"Company, City, ST"``) via the existing
+    rightmost-tail `_split_location_tail`, else ``""``.
+
+    Order matters: title is checked BEFORE the bare-location shape. A line
+    like "Software Engineer, Toronto, ON" would otherwise satisfy the bare
+    two-segment location shape just as readily as a real "Toronto, ON" --
+    the only thing that disambiguates them is that the first segment
+    contains a role noun, so that check must run first.
+    """
+    stripped = line.strip()
+    core, tag = _extract_modifier_tag(stripped)
+    location, remainder = _split_location_tail(core)
+    title_source = remainder if location else core
+
+    # The word-count cap is measured on the title with any trailing
+    # parenthetical removed (a thesis title like "Master of Computational
+    # Science (Thesis: ML for Geological Discovery)" would otherwise fail
+    # the cap on parenthetical word count alone, even though the actual
+    # degree/role phrase is short); the parenthetical stays in the returned
+    # `title_source` value, it is only excluded from this length check.
+    title_core = re.sub(r"\s*\([^)]*\)\s*$", "", title_source).strip()
+    if len(title_core.split()) <= 6 and _has_role_word(title_core):
+        return "title", title_source, (f"{location}{tag}" if location else "")
+
+    if not location and (
+        _BARE_REMOTE_LOCATION.match(core) is not None
+        or (len(core.split()) <= 4 and _LOCATION_TAIL.fullmatch(core) is not None)
+    ):
+        return "location", f"{core}{tag}", ""
+
+    if location:
+        return "company", remainder, f"{location}{tag}"
+    return "company", f"{core}{tag}", ""
+
+
+def _looks_like_all_caps_heading(line: str) -> bool:
+    """True for a short, unrecognized all-caps sub-heading fragment.
+
+    Recognised section headings (EXPERIENCE/EDUCATION/SKILLS/...) are already
+    stripped before `_heuristic_entries` ever sees a line (`_detect_heading`);
+    this guards only against a rogue heading-shaped fragment that isn't in
+    that fixed keyword set, so it never gets glued onto a bullet as if it
+    were prose.
+    """
+    stripped = line.strip().rstrip(":")
+    if not (4 <= len(stripped) <= 40):
+        return False
+    if " " not in stripped and len(stripped) < 6:
+        return False  # a short bare acronym like "SQL" is not a heading
+    return stripped.isupper()
+
+
+_HEADER_LABEL_CONNECTORS = frozenset({"of", "and", "the", "for", "in", "at", "on"})
+
+
+def _looks_like_header_label(line: str) -> bool:
+    """True when a line reads as a plausible company/institution/location
+    label rather than ordinary continuation prose.
+
+    Deliberately narrower than `_classify_header_line`'s "company" bucket,
+    which is a catch-all for anything not location/title-shaped -- including
+    ordinary lowercase bullet-continuation prose like "100% uptime for
+    critical production services." A genuine header label in practice is
+    short and dominated by capitalized words (allowing common lowercase
+    connectors: of/and/the/for/in/at/on); a wrapped bullet continuation is
+    ordinary sentence-case prose. This is the guard actually used to decide
+    whether a line might be the *next* entry's header (and so must not be
+    swallowed into the *previous* entry's last bullet), separate from the
+    3-line header-window classification itself.
+    """
+    words = re.findall(r"[A-Za-z][A-Za-z'.-]*", line)
+    if not words or len(words) > 8:
+        return False
+    significant = [word for word in words if word.casefold() not in _HEADER_LABEL_CONNECTORS]
+    if not significant:
+        return False
+    return all(word[0].isupper() for word in significant)
+
+
 def _heuristic_entries(lines: list[str], *, kind: str) -> list[dict[str, Any]]:
     """Group section lines into entries.
 
@@ -1001,7 +1146,12 @@ def _heuristic_entries(lines: list[str], *, kind: str) -> list[dict[str, Any]]:
         if entry and (entry[primary] or entry[secondary] or entry["bullets"]):
             entries.append(entry)
 
-    def apply_header(entry: dict[str, Any], header_lines: list[str]) -> None:
+    def _apply_legacy_header(entry: dict[str, Any], header_lines: list[str]) -> None:
+        """Original positional 2-line header logic (company = first line,
+        title = second line). Used as the fallback whenever the classifier
+        below can't confidently identify exactly one company line in the
+        window -- ambiguity always defers to this well-understood behavior
+        rather than guessing."""
         if not header_lines:
             return
         head = header_lines[0]
@@ -1014,9 +1164,65 @@ def _heuristic_entries(lines: list[str], *, kind: str) -> list[dict[str, Any]]:
         if location:
             entry["location"] = entry["location"] or (location + suffix)
             head = head_without_location
-        entry[primary] = head
+        if not entry[primary]:
+            entry[primary] = head
         if len(header_lines) > 1 and not entry[secondary]:
             entry[secondary] = header_lines[1]
+
+    def apply_header(entry: dict[str, Any], header_lines: list[str]) -> None:
+        window = header_lines[-3:]
+        if not window:
+            return
+
+        classified = [_classify_header_line(line) for line in window]
+        company_hits = [item for item in classified if item[0] == "company"]
+
+        # A bare location with no comma (a lone country name like "India",
+        # not matched by `_classify_header_line`'s comma-anchored location
+        # shape) reads as "company" by that classifier's catch-all bucket,
+        # creating a false two-company ambiguity in an otherwise-unambiguous
+        # Company/Location/Title window. When the window is exactly that
+        # shape -- two consecutive "company" hits immediately followed by a
+        # confident "title" hit -- position (not pattern-matching) resolves
+        # it: the first line is the company, the second is the location.
+        if (
+            len(company_hits) == 2
+            and len(window) == 3
+            and classified[0][0] == "company"
+            and classified[1][0] == "company"
+            and classified[2][0] == "title"
+        ):
+            if not entry[primary]:
+                entry[primary] = classified[0][1]
+            if not entry["location"]:
+                entry["location"] = classified[1][1]
+            if not entry[secondary]:
+                entry[secondary] = classified[2][1]
+            return
+
+        # Ambiguity gate: trust the classifier only when exactly one line in
+        # the window resolves to "company" -- zero (nothing left to assign)
+        # or two-or-more (can't tell which is the real employer) both fall
+        # back unchanged to the original positional last-two-lines rule.
+        if len(company_hits) != 1:
+            _apply_legacy_header(entry, window[-2:])
+            return
+
+        company_value = company_hits[0][1]
+        if not entry[primary]:
+            entry[primary] = company_value
+
+        location_candidates = [
+            value if kind == "location" else embedded
+            for kind, value, embedded in classified
+            if kind == "location" or embedded
+        ]
+        if location_candidates and not entry["location"]:
+            entry["location"] = location_candidates[-1]
+
+        title_hits = [item for item in classified if item[0] == "title"]
+        if title_hits and not entry[secondary]:
+            entry[secondary] = title_hits[-1][1]
 
     for line in lines:
         if not line:
@@ -1035,10 +1241,12 @@ def _heuristic_entries(lines: list[str], *, kind: str) -> list[dict[str, Any]]:
             if remainder:
                 current[secondary] = remainder
             # A valid resume header is a company/institution line plus an
-            # optional title/degree immediately before its dates.  Restrict
-            # the parser to that local context so a PDF wrap orphan cannot be
-            # promoted into an employer for the next role.
-            apply_header(current, header_buffer[-2:])
+            # optional title/degree immediately before its dates. Restrict
+            # the parser to that local context (now a 3-line window, wide
+            # enough for the dominant Company/Location/Title/Dates shape)
+            # so a PDF wrap orphan cannot be promoted into an employer for
+            # the next role.
+            apply_header(current, header_buffer)
             header_buffer = []
             continue
 
@@ -1057,6 +1265,13 @@ def _heuristic_entries(lines: list[str], *, kind: str) -> list[dict[str, Any]]:
                 line[0].islower()
                 or _ORPHAN_BULLET_CONTINUATION.search(line) is not None
                 or current["bullets"][-1].rstrip().endswith("-")
+                or (
+                    not header_buffer
+                    and not current["bullets"][-1].rstrip().endswith((".", "!", "?", ":"))
+                    and _DATE_RANGE.search(line) is None
+                    and not _looks_like_all_caps_heading(line)
+                    and not _looks_like_header_label(line)
+                )
             )
         ):
             separator = "" if current["bullets"][-1].rstrip().endswith("-") else " "
