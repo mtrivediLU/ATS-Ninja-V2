@@ -17,12 +17,9 @@ from pathlib import Path
 
 import pytest
 
-from ats_engine.parsing.job_description import (
-    _extract_company,
-    _is_valid_company_candidate,
-    parse_jd,
-)
+from ats_engine.parsing.job_description import parse_jd
 from ats_engine.parsing.resume import build_profile
+from ats_engine.pramana.entities import _extract_company, _is_valid_company_candidate
 
 FIXTURES = Path(__file__).parent / "fixtures" / "real_extraction"
 
