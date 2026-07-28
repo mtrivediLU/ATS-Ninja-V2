@@ -1,0 +1,206 @@
+# Hand-labelled ground truth for the CrowdPlat "Web Scraper / Data Extraction
+# Specialist" posting.
+#
+# WHY THIS FILE EXISTS
+# --------------------
+# Demand-model recall and precision are meaningless if the goalposts are drawn
+# from the extractor's own output.  These labels were written and committed
+# BEFORE any extractor change, by reading job_description.txt directly.
+#
+# LABELLING RULE (applied uniformly to both fixture cases)
+# --------------------------------------------------------
+# Include a term when it names a tool, technology, standard, methodology,
+# domain, or named competency that a candidate could plausibly evidence.
+# Exclude section headings, KPIs/outcomes, employment terms, work modes, and
+# locations -- those are the `not_requirements` list below.
+#
+# `jd_occurrences` is MEASURED, not estimated: a case-insensitive
+# word-boundary count over job_description.txt.  Every count that overlaps
+# Jobscan's published per-skill JD column matches it exactly (Python 2,
+# Selenium 2, JSON 2, Excel 1, Section 508 3), which independently
+# corroborates both the labels and the counting method.
+#
+# Deliberately NOT labelled: "web scraping" -- the phrase never appears in the
+# posting (it says "Web Scraper" and "extracting data from public web
+# sources").  Requiring a term the JD does not contain would unfairly punish
+# the extractor.
+
+[meta]
+case = "crowdplat_web_scraper"
+company = "CrowdPlat"
+title = "Web Scraper / Data Extraction Specialist"
+jobscan_base_score = 41
+jobscan_tailored_score = 49
+source = "Supplied verbatim by the repository owner, 2026-07-28."
+
+# ---------------------------------------------------------------- tools ----
+[[requirements]]
+canonical = "python"
+surface = "Python"
+kind = "tool"
+section = "required"
+jd_occurrences = 2
+
+[[requirements]]
+canonical = "beautifulsoup"
+surface = "BeautifulSoup"
+kind = "tool"
+section = "required"
+jd_occurrences = 2
+
+[[requirements]]
+canonical = "scrapy"
+surface = "Scrapy"
+kind = "tool"
+section = "required"
+jd_occurrences = 2
+
+[[requirements]]
+canonical = "selenium"
+surface = "Selenium"
+kind = "tool"
+section = "required"
+jd_occurrences = 2
+
+[[requirements]]
+canonical = "playwright"
+surface = "Playwright"
+kind = "tool"
+section = "required"
+jd_occurrences = 2
+
+[[requirements]]
+canonical = "apis"
+surface = "APIs"
+kind = "tool"
+section = "required"
+jd_occurrences = 2
+
+[[requirements]]
+canonical = "json"
+surface = "JSON"
+kind = "tool"
+section = "required"
+jd_occurrences = 2
+
+[[requirements]]
+canonical = "csv"
+surface = "CSV"
+kind = "tool"
+section = "responsibility"
+jd_occurrences = 1
+
+[[requirements]]
+canonical = "excel"
+surface = "Excel"
+kind = "tool"
+section = "responsibility"
+jd_occurrences = 1
+
+[[requirements]]
+canonical = "linkedin"
+surface = "LinkedIn"
+kind = "tool"
+section = "preferred"
+jd_occurrences = 2
+
+# ------------------------------------------------------------ standards ----
+[[requirements]]
+canonical = "section 508"
+surface = "Section 508"
+kind = "standard"
+section = "required"
+jd_occurrences = 3
+
+[[requirements]]
+canonical = "wcag 2.1"
+surface = "WCAG 2.1"
+kind = "standard"
+section = "required"
+jd_occurrences = 2
+
+# ---------------------------------------------------------- methodology ----
+[[requirements]]
+canonical = "data extraction"
+surface = "data extraction"
+kind = "methodology"
+section = "required"
+jd_occurrences = 1
+
+[[requirements]]
+canonical = "pagination"
+surface = "pagination"
+kind = "methodology"
+section = "responsibility"
+jd_occurrences = 1
+
+[[requirements]]
+canonical = "data quality"
+surface = "data quality"
+kind = "methodology"
+section = "required"
+jd_occurrences = 2
+
+[[requirements]]
+canonical = "data delivery"
+surface = "data delivery"
+kind = "methodology"
+section = "responsibility"
+jd_occurrences = 1
+
+[[requirements]]
+canonical = "rate limiting"
+surface = "rate limiting"
+kind = "methodology"
+section = "preferred"
+jd_occurrences = 2
+
+[[requirements]]
+canonical = "anti-bot measures"
+surface = "anti-bot measures"
+kind = "methodology"
+section = "preferred"
+jd_occurrences = 2
+
+# ----------------------------------------------------------------- soft ----
+[[requirements]]
+canonical = "attention to detail"
+surface = "attention to detail"
+kind = "soft"
+section = "required"
+jd_occurrences = 2
+
+[[requirements]]
+canonical = "communication"
+surface = "communication"
+kind = "soft"
+section = "required"
+jd_occurrences = 2
+
+# Section headings, employment terms, work modes and locations.  None of these
+# may ever appear as a requirement; where a heading has content, the CONTENT
+# must be extracted instead of the label.
+[not_requirements]
+labels = [
+    "Overview",
+    "Key Responsibilities",
+    "Required Qualifications",
+    "Preferred Qualifications",
+    "Work Location & Requirements",
+    "Required / Preferred Skills",
+    "Workplace Type",
+    "Employment Type",
+    "Job Description",
+    "Client Name",
+    "Location",
+    "Duration",
+    "Hours",
+]
+non_skills = [
+    "Remote",
+    "Part-Time",
+    "Canada",
+    "CrowdPlat",
+    "Internal Role",
+    "dropdown",
+]

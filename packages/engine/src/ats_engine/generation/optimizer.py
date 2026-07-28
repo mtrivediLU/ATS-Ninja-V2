@@ -22,6 +22,7 @@ from ats_engine.models import (
     ResumePlan,
 )
 from ats_engine.parsing.vocab import normalize_term
+from ats_engine.rachana.preservation import PreservationGuard, build_guard
 from ats_engine.scoring.ats_v2 import AtsScoreV2, score_resume_v2
 from ats_engine.validation.calibration import (
     CalibrationProfile,
@@ -87,6 +88,9 @@ def optimize(
         )
 
     source = profile.raw_markdown
+    # Measured once: every candidate below is checked against this same source,
+    # and the optimizer evaluates many of them per run.
+    guard = build_guard(source, requirements)
     source_plan = _source_content_plan(base_plan, profile, links)
     context = gate_context or (
         build_resume_gate_context(profile, source_plan) if delivery_first else ResumeGateContext()
@@ -222,6 +226,7 @@ def optimize(
             links,
             source,
             context,
+            guard,
         )
         trace.rejected_actions.extend(rejected)
         candidate_score = _score_plan(candidate_plan, source, requirements, links, candidate_actions)
@@ -259,6 +264,22 @@ def optimize(
             trace,
             source_score,
             reason="No safe evidence-backed improvement was accepted; delivered the source projection.",
+        )
+        return source_plan, trace
+
+    # A delivered document must never state a JD-relevant term less often than
+    # the candidate's own source did.  This is checked once more at the end
+    # because the summary and bullet rewrites above take a different path into
+    # the plan than the batched placements do.
+    final_regressions = guard.regressions(generate_resume_text(current_plan))
+    if final_regressions:
+        trace.rejected_actions.append(
+            OptimizationRejection(action="final_plan", reason=final_regressions[0].describe())
+        )
+        _record_source_rollback(
+            trace,
+            source_score,
+            reason="Tailoring would have weakened a job-relevant term; delivered the protected source projection.",
         )
         return source_plan, trace
 
@@ -310,6 +331,7 @@ def _optimize_pr21_compat(
     behavioral rollback rather than a no-op diagnostic setting.
     """
     source = profile.raw_markdown
+    guard = build_guard(source, requirements)
     source_plan = _source_content_plan(base_plan, profile, links)
     original = score_resume_v2(source, requirements, links, source_resume_text=source)
     trace = OptimizationTrace(
@@ -353,6 +375,7 @@ def _optimize_pr21_compat(
             links,
             source,
             context,
+            guard,
         )
         trace.rejected_actions.extend(rejected)
         candidate_score = _score_plan(candidate_plan, source, requirements, links, candidate_actions)
@@ -425,7 +448,13 @@ def _source_content_plan(
     # never stated. A source summary wins; otherwise a verified role title is
     # the only safe deterministic seed before v2 placements are applied.
     plan.summary = _with_targeting(profile.source_summary or _source_role_summary(profile), plan.jd_profile)
-    plan.headline = plan.role_identity
+    # The source projection is the honest floor, so it keeps the candidate's own
+    # headline. Synthesizing one from `role_identity` -- which is the most
+    # recent job title whenever nothing matches -- is what replaced
+    # "Senior Software Engineer | Full-Stack, Data & AI Solutions" with
+    # "Business Intelligence Developer" on a posting that says "AI" nine times,
+    # making the "source-preserving" fallback score below the untouched source.
+    plan.headline = profile.source_headline or plan.role_identity
     plan.placement_actions = []
     plan.remaining_sections = deepcopy(profile.remaining_sections)
     if profile.source_skill_groups:
@@ -668,8 +697,18 @@ def _accept_safe_actions(
     links: list[EvidenceLink],
     source: str,
     context: ResumeGateContext,
+    guard: PreservationGuard | None = None,
 ) -> tuple[ResumePlan, list[PlacementAction], list[OptimizationRejection]]:
-    """Bisect a failed batch down to individually safe actions."""
+    """Bisect a failed batch down to individually safe actions.
+
+    ``guard`` is optional purely so a caller can never *lose* term protection by
+    forgetting the argument: omitting it measures the source here instead of
+    disabling the check. The optimizer passes a prebuilt guard because it
+    evaluates many candidates against one unchanging source.
+    """
+
+    if guard is None:
+        guard = build_guard(source, requirements)
     candidate_actions = [*accepted, *pending]
     candidate = _apply_actions(plan, pending, profile)
     findings = validate_resume_plan_findings(
@@ -680,14 +719,19 @@ def _accept_safe_actions(
         context,
     )
     blockers = _optimization_blockers(findings)
-    if not blockers:
+    # Rendering the candidate is the expensive step here, and a batch that
+    # already has a blocker is rejected regardless, so only pay for the term
+    # check when the batch would otherwise be accepted.
+    regressions = [] if blockers else guard.regressions(generate_resume_text(candidate))
+    if not blockers and not regressions:
         return candidate, candidate_actions, []
     if len(pending) == 1:
         action = pending[0]
+        reason = _finding_reason(blockers) if blockers else regressions[0].describe()
         return (
             plan,
             accepted,
-            [OptimizationRejection(action=_action_label(action), reason=_finding_reason(blockers))],
+            [OptimizationRejection(action=_action_label(action), reason=reason)],
         )
     midpoint = len(pending) // 2
     left_plan, left_actions, left_rejected = _accept_safe_actions(
@@ -699,6 +743,7 @@ def _accept_safe_actions(
         links,
         source,
         context,
+        guard,
     )
     right_plan, right_actions, right_rejected = _accept_safe_actions(
         left_plan,
@@ -709,6 +754,7 @@ def _accept_safe_actions(
         links,
         source,
         context,
+        guard,
     )
     return right_plan, right_actions, [*left_rejected, *right_rejected]
 

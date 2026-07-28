@@ -1,0 +1,44 @@
+Web Scraper / Data Extraction Specialist
+Client Name: CrowdPlat (Internal Role)
+Job Description (click to expand / collapse)
+dropdown
+Location: Remote, Canada Duration: Task-based, on-demand (no guaranteed minimum hours) Hours: Variable, per project need
+
+Overview
+
+This is a task-based freelance opportunity supporting outreach and research operations. The role focuses on locating and extracting structured contact data from public web sources and delivering clean, ready-to-use datasets quickly. This is not an ongoing development role — the emphasis is on accurate data delivery, not code ownership.
+
+Key Responsibilities
+
+Extract contact details (names, emails, job titles, institutions) from academic directories, university pages, and professional websites
+Deliver clean, structured output in CSV or Excel format ready to use with no cleanup required
+Work on specific data requests as assigned on a task-by-task basis
+Handle pagination and multiple source formats accurately
+Ensure all extracted and delivered data outputs are formatted in compliance with Section 508 accessibility standards where applicable
+Turn around requests quickly with minimal back and forth
+Required Qualifications
+
+Proven experience extracting data from public web sources accurately and at speed
+Proficiency in Python (BeautifulSoup, Scrapy, Selenium, or Playwright) or equivalent tools
+Ability to work with APIs and JSON data where available
+Familiarity with Section 508 and WCAG 2.1 accessibility standards
+Strong attention to detail with critical focus on data quality
+Reliable turnaround on short timelines with clear communication
+Preferred Qualifications
+
+Experience scraping academic or government directories
+Familiarity with LinkedIn, university faculty pages, and research profile databases
+Ability to handle anti-bot measures and rate limiting responsibly
+Work Location & Requirements
+
+Fully remote position
+Based in Canada
+Task-based on-demand role with no guaranteed minimum hours per week
+Required / Preferred Skills
+Required: Proven experience extracting data from public web sources accurately and at speed (2+ yrs), Proficiency in Python (BeautifulSoup, Scrapy, Selenium, or Playwright) or equivalent tools Required (2+ yrs), Ability to work with APIs and JSON data where available (2+ yrs), Familiarity with Section 508 and WCAG 2.1 accessibility standards (2+ yrs), Strong attention to detail with critical focus on data quality (2+ yrs), Reliable turnaround on short timelines with clear communication (2+ yrs)
+
+Preferred: Experience scraping academic or government directories (2+ yrs), Familiarity with LinkedIn, university faculty pages, and research profile databases (2+ yrs), Ability to handle anti-bot measures and rate limiting responsibly (2+ yrs)
+Workplace Type
+Remote
+Employment Type
+Part-Time

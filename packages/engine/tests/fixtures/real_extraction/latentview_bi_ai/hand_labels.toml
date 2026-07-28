@@ -1,0 +1,227 @@
+# Hand-labelled ground truth for the LatentView Analytics "Analytical BI & AI"
+# posting.
+#
+# See crowdplat_web_scraper/hand_labels.toml for the labelling rule and the
+# reasoning behind pre-committing these labels.  The same rule is applied here.
+#
+# `jd_occurrences` is MEASURED (case-insensitive word-boundary count over
+# job_description.txt).  The two highest-signal counts match Jobscan's
+# published JD column exactly -- AI 9 and BI 3 -- which is the cross-check that
+# these labels describe the real posting rather than the extractor's output.
+#
+# NOTE ON THE FOUR KNOWN JUNK TERMS
+# ---------------------------------
+# `BI Frameworks`, `AI Tooling Platforms`, `Required Technical Skills` and
+# `modern low-code` are section labels / mangled fragments that the current
+# extractor emits as requirements and the product then displays to the user as
+# gaps.  They are listed under [not_requirements].  Note that `low-code` and
+# `no-code` ARE genuine requirements -- the defect is the label `AI Tooling
+# Platforms` and the mangled surface `modern low code`, not the concept.
+
+[meta]
+case = "latentview_bi_ai"
+company = "LatentView Analytics"
+title = "Analytical BI & AI"
+jobscan_base_score = 75
+jobscan_tailored_score = 73
+jobscan_human_tailored_score = 83
+source = "Supplied verbatim by the repository owner, 2026-07-28."
+
+# ---------------------------------------------------------------- tools ----
+[[requirements]]
+canonical = "looker"
+surface = "Looker"
+kind = "tool"
+section = "required"
+jd_occurrences = 1
+
+[[requirements]]
+canonical = "sql"
+surface = "SQL"
+kind = "tool"
+section = "required"
+jd_occurrences = 1
+
+[[requirements]]
+canonical = "llms"
+surface = "LLMs"
+kind = "tool"
+section = "required"
+jd_occurrences = 1
+
+[[requirements]]
+canonical = "chatgpt"
+surface = "ChatGPT"
+kind = "tool"
+section = "required"
+jd_occurrences = 1
+
+[[requirements]]
+canonical = "claude"
+surface = "Claude"
+kind = "tool"
+section = "required"
+jd_occurrences = 1
+
+[[requirements]]
+canonical = "microsoft copilot"
+surface = "Microsoft Copilot"
+kind = "tool"
+section = "required"
+jd_occurrences = 1
+
+[[requirements]]
+canonical = "low-code"
+surface = "low-code"
+kind = "tool"
+section = "required"
+jd_occurrences = 1
+
+[[requirements]]
+canonical = "no-code"
+surface = "no-code"
+kind = "tool"
+section = "required"
+jd_occurrences = 1
+
+[[requirements]]
+canonical = "ai workflow orchestrators"
+surface = "AI workflow orchestrators"
+kind = "tool"
+section = "required"
+jd_occurrences = 1
+
+# --------------------------------------------------------------- domain ----
+[[requirements]]
+canonical = "business intelligence"
+surface = "business intelligence"
+kind = "domain"
+section = "responsibility"
+jd_occurrences = 2
+
+[[requirements]]
+canonical = "generative ai"
+surface = "Generative AI"
+kind = "domain"
+section = "required"
+jd_occurrences = 2
+
+[[requirements]]
+canonical = "data analytics"
+surface = "data analytics"
+kind = "domain"
+section = "preferred"
+jd_occurrences = 1
+
+[[requirements]]
+canonical = "business analytics"
+surface = "Business Analytics"
+kind = "domain"
+section = "preferred"
+jd_occurrences = 1
+
+[[requirements]]
+canonical = "information systems"
+surface = "Information Systems"
+kind = "domain"
+section = "preferred"
+jd_occurrences = 1
+
+[[requirements]]
+canonical = "business administration"
+surface = "Business Administration"
+kind = "domain"
+section = "preferred"
+jd_occurrences = 1
+
+# ---------------------------------------------------------- methodology ----
+[[requirements]]
+canonical = "coding assistance"
+surface = "coding assistance"
+kind = "methodology"
+section = "required"
+jd_occurrences = 1
+
+[[requirements]]
+canonical = "data cleaning"
+surface = "data cleaning"
+kind = "methodology"
+section = "required"
+jd_occurrences = 1
+
+[[requirements]]
+canonical = "narrative generation"
+surface = "narrative generation"
+kind = "methodology"
+section = "required"
+jd_occurrences = 1
+
+[[requirements]]
+canonical = "natural language querying"
+surface = "natural language data querying"
+kind = "methodology"
+section = "responsibility"
+jd_occurrences = 1
+
+[[requirements]]
+canonical = "automated report generation"
+surface = "automated report generation"
+kind = "methodology"
+section = "responsibility"
+jd_occurrences = 1
+
+[[requirements]]
+canonical = "data storytelling"
+surface = "data storytelling"
+kind = "methodology"
+section = "responsibility"
+jd_occurrences = 1
+
+[[requirements]]
+canonical = "dashboards"
+surface = "dashboards"
+kind = "methodology"
+section = "responsibility"
+jd_occurrences = 1
+
+[[requirements]]
+canonical = "agile"
+surface = "agile"
+kind = "methodology"
+section = "context"
+jd_occurrences = 1
+
+# ----------------------------------------------------------------- soft ----
+[[requirements]]
+canonical = "communication"
+surface = "communication"
+kind = "soft"
+section = "preferred"
+jd_occurrences = 1
+
+# The four junk terms the current extractor emits, plus the remaining section
+# labels.  `Analytical BI & AI` is the job TITLE and must be extracted as the
+# title, never as a skill requirement.
+[not_requirements]
+labels = [
+    "Job Role",
+    "Required Technical Skills",
+    "Preferred Qualifications",
+    "Key Performance Indicators",
+    "BI Frameworks",
+    "AI Tooling Platforms",
+    "GenAI Ecosystem",
+    "Advanced SQL",
+    "Education",
+    "Experience",
+    "Reporting Efficiency",
+    "Data Accuracy",
+    "Sprint Delivery",
+]
+non_skills = [
+    "Analytical BI & AI",
+    "modern low code",
+    "LatentView Analytics",
+    "Pacific Standard Time",
+    "Indian Standard Time",
+]

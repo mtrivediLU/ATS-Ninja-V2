@@ -61,12 +61,17 @@ _SPELLING_VARIANTS: Final[tuple[tuple[str, str], ...]] = (
 )
 
 
+@lru_cache(maxsize=65536)
 def normalize_term(text: str) -> str:
     """Return a conservative comparison key for a skill or requirement.
 
     The key is case-insensitive, whitespace/punctuation tolerant, and treats a
     small set of US/Canadian-English spelling variants as identical.  It is
     suitable for exact alias lookup, not for semantic similarity.
+
+    Memoized because it is pure and extremely hot: fidelity validation calls it
+    on the order of a million times for a single kit, and each call runs half a
+    dozen regex substitutions.
     """
 
     normalized = unicodedata.normalize("NFKC", text).casefold()
@@ -329,6 +334,76 @@ VOCABULARY: Final[tuple[VocabularyEntry, ...]] = (
     ),
     _entry("stakeholder communication", category="communication", kind="soft"),
     _entry("collaboration", aliases=("cross-functional collaboration",), category="communication", kind="soft"),
+    _entry("attention to detail", category="communication", kind="soft"),
+    # Generative AI / LLM stack.  A JD that names ChatGPT, Claude, or Copilot is
+    # naming a tool the candidate either has used or has not; before these
+    # entries existed the entire GenAI half of a modern BI posting was invisible
+    # to the demand model.
+    _entry("generative ai", aliases=("genai", "gen ai"), display="Generative AI", category="platform", kind="domain"),
+    _entry(
+        "llms", aliases=("llm", "large language models", "large language model"), display="LLMs", category="platform"
+    ),
+    _entry("chatgpt", aliases=("chat gpt",), display="ChatGPT", category="platform"),
+    _entry("claude", display="Claude", category="platform"),
+    _entry(
+        "microsoft copilot", aliases=("copilot", "github copilot"), display="Microsoft Copilot", category="platform"
+    ),
+    _entry("openai", display="OpenAI", category="platform"),
+    _entry("gemini", display="Gemini", category="platform"),
+    _entry("rag", aliases=("retrieval augmented generation",), display="RAG", category="platform", kind="methodology"),
+    _entry("prompt engineering", category="platform", kind="methodology"),
+    _entry("ai assistants", aliases=("ai assistant",), display="AI assistants", category="platform", kind="skill"),
+    _entry(
+        "ai workflow orchestrators",
+        aliases=("ai workflow orchestration", "ai orchestrator", "ai orchestrators"),
+        display="AI workflow orchestrators",
+        category="platform",
+    ),
+    _entry("low-code", aliases=("low code",), display="low-code", category="platform", kind="skill"),
+    _entry("no-code", aliases=("no code",), display="no-code", category="platform", kind="skill"),
+    _entry("coding assistance", category="platform", kind="methodology"),
+    _entry("narrative generation", category="bi_analytics", kind="methodology"),
+    _entry(
+        "natural language querying",
+        aliases=("natural language query", "natural language data querying", "natural language search"),
+        category="bi_analytics",
+        kind="methodology",
+    ),
+    _entry(
+        "automated report generation",
+        aliases=("automated reporting", "report generation"),
+        category="bi_analytics",
+        kind="methodology",
+    ),
+    _entry("data storytelling", aliases=("data story telling",), category="bi_analytics", kind="methodology"),
+    _entry("data cleaning", aliases=("data cleansing",), category="data_engineering", kind="methodology"),
+    _entry("lookml", display="LookML", category="bi_analytics"),
+    _entry("dbt", aliases=("data build tool",), display="dbt", category="data_engineering"),
+    # Analytics domains and degree fields that JDs name as qualifications.
+    _entry("data analytics", category="bi_analytics", kind="domain"),
+    _entry("business analytics", category="bi_analytics", kind="domain"),
+    _entry("information systems", category="business_analysis", kind="domain"),
+    _entry("business administration", category="business_analysis", kind="domain"),
+    _entry(
+        "agile",
+        aliases=("agile methodology", "scrum"),
+        display="agile",
+        category="business_analysis",
+        kind="methodology",
+    ),
+    # Web scraping / data extraction stack.
+    _entry("beautifulsoup", aliases=("beautiful soup", "bs4"), display="BeautifulSoup", category="framework"),
+    _entry("scrapy", display="Scrapy", category="framework"),
+    _entry("apis", aliases=("api", "rest api", "rest apis"), display="APIs", category="integration"),
+    _entry("json", display="JSON", category="integration"),
+    _entry("csv", display="CSV", category="integration"),
+    _entry("linkedin", display="LinkedIn", category="platform"),
+    _entry("web scraping", aliases=("web scraper", "webscraping"), category="data_engineering", kind="skill"),
+    _entry("data extraction", category="data_engineering", kind="skill"),
+    _entry("data delivery", category="data_engineering", kind="skill"),
+    _entry("pagination", category="web_development", kind="methodology"),
+    _entry("rate limiting", aliases=("rate limits",), category="web_development", kind="methodology"),
+    _entry("anti-bot measures", aliases=("anti bot", "anti-bot"), category="web_development", kind="methodology"),
 )
 
 
@@ -396,27 +471,63 @@ def find_vocabulary_matches(text: str) -> list[VocabularyMatch]:
 
     matches: list[VocabularyMatch] = []
     seen: set[tuple[str, int, int]] = set()
-    for entry in VOCABULARY:
-        if not is_admissible_entry(entry):
+    haystack = text.casefold()
+    for entry, alias, anchor in _admissible_alias_pairs():
+        # An alias pattern only tolerates separator variation *between* runs of
+        # characters, so its longest separator-free run must appear literally.
+        # Checking that first turns several hundred regex scans per call into a
+        # handful, without changing which aliases can match.
+        if anchor and anchor not in haystack:
             continue
-        for alias in entry.aliases:
-            if not _is_admissible_alias(alias, entry):
+        for found in _alias_pattern(alias).finditer(text):
+            key = (entry.canonical, found.start(), found.end())
+            if key in seen:
                 continue
-            for found in _alias_pattern(alias).finditer(text):
-                key = (entry.canonical, found.start(), found.end())
-                if key in seen:
-                    continue
-                seen.add(key)
-                matches.append(
-                    VocabularyMatch(
-                        entry=entry,
-                        surface=found.group(0),
-                        start=found.start(),
-                        end=found.end(),
-                        alias=alias,
-                    )
+            seen.add(key)
+            matches.append(
+                VocabularyMatch(
+                    entry=entry,
+                    surface=found.group(0),
+                    start=found.start(),
+                    end=found.end(),
+                    alias=alias,
                 )
+            )
     return sorted(matches, key=lambda match: (match.start, -(match.end - match.start), match.entry.canonical))
+
+
+@lru_cache(maxsize=1)
+def _admissible_alias_pairs() -> tuple[tuple[VocabularyEntry, str, str], ...]:
+    """Every matchable (entry, alias, anchor) triple, resolved once.
+
+    ``VOCABULARY`` is a module-level constant, so admissibility never changes
+    between calls. Recomputing it per call meant re-normalizing every alias of
+    every entry on each of the thousands of matcher invocations a single kit
+    performs.
+
+    ``anchor`` is the alias's longest run of non-separator characters, folded
+    for comparison -- a cheap necessary condition for the alias pattern to
+    match at all.
+    """
+
+    return tuple(
+        (entry, alias, _alias_anchor(alias))
+        for entry in VOCABULARY
+        if is_admissible_entry(entry)
+        for alias in entry.aliases
+        if _is_admissible_alias(alias, entry)
+    )
+
+
+def _alias_anchor(alias: str) -> str:
+    """Longest separator-free run in *alias*, casefolded.
+
+    ``_alias_pattern`` only allows separator characters to vary, so every other
+    character of the alias must appear contiguously in any text it matches.
+    """
+
+    runs = re.split(r"[\s._/-]+", alias.casefold())
+    return max(runs, key=len, default="")
 
 
 # Certification inference is deliberately one-way and narrowly scoped.  It
