@@ -14,7 +14,7 @@ from ats_engine.providers.base import LLMProvider, generate_json
 # location/company splitting, etc.) MUST bump this constant -- otherwise a
 # resume already cached under the old logic keeps being served unchanged
 # after the fix ships.
-PROFILE_CACHE_VERSION = "profile-v8-header-window"
+PROFILE_CACHE_VERSION = "profile-v9-certification-blocks"
 
 
 class ExtractionSuspectError(RuntimeError):
@@ -918,6 +918,22 @@ _TITLE_ROLE_WORDS = frozenset(
 )
 _LOCATION_MODIFIER_TAG = re.compile(r"\s*\((Remote|Hybrid|On-site|Onsite)\)\s*$", flags=re.IGNORECASE)
 _BARE_REMOTE_LOCATION = re.compile(r"^(Remote|Hybrid|On-site|Onsite)$", flags=re.IGNORECASE)
+# Visible anchor text of a "see my credential" hyperlink. These words are what
+# the reader clicks, never the name of a certification, so a line consisting of
+# one of them must not become an entry of its own.
+_CERTIFICATION_LINK_ANCHORS = frozenset(
+    {
+        "verify",
+        "view",
+        "view credential",
+        "view certificate",
+        "show credential",
+        "see credential",
+        "credential",
+        "certificate",
+        "link",
+    }
+)
 _YEAR = re.compile(r"\b(19|20)\d{2}\b")
 _URL = re.compile(r"(https?://[^\s|]+|www\.[^\s|]+)", flags=re.IGNORECASE)
 _EMAIL = re.compile(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}")
@@ -1300,9 +1316,33 @@ def _company_header_is_suspect(value: str) -> bool:
 
 
 def _heuristic_certifications(lines: list[str]) -> list[dict[str, str]]:
+    """Parse certifications as multi-line blocks, not as one-line records.
+
+    Real resumes write a certification across several lines::
+
+        Microsoft Certified: Azure Fundamentals (AZ-900)
+        2024
+        Credential ID: ABC123
+        Verify
+
+    Consuming one line at a time loses this outright: the year and
+    ``Credential ID`` lines strip to an empty name and were silently dropped
+    (taking the credential ID with them), while ``Verify`` -- the anchor text
+    of the credential hyperlink -- became a certification of its own. A line
+    that carries no name of its own is therefore treated as a continuation of
+    the certification above it, which is also what single-line layouts such as
+    ``Name | 2024 | Credential ID: ABC123`` already do within one line.
+    """
+
     certifications: list[dict[str, str]] = []
+    current: dict[str, str] | None = None
     for line in lines:
         if not line:
+            continue
+        # Anchor text of a credential hyperlink. The visible word is never the
+        # certification's name, and treating it as one invents an entry that
+        # the candidate cannot be asked about.
+        if line.strip(" .|-:").casefold() in _CERTIFICATION_LINK_ANCHORS:
             continue
         name, credential_id = _split_credential_id(line)
         year_match = _YEAR.search(name)
@@ -1313,15 +1353,22 @@ def _heuristic_certifications(lines: list[str]) -> list[dict[str, str]]:
             name = name.replace(url_match.group(0), "").strip(" |-")
         name = name.strip(" |-:")
         if not name:
+            # A detail line belonging to the certification above it.
+            if current is not None:
+                if credential_id and not current["credential_id"]:
+                    current["credential_id"] = credential_id
+                if year_match and not current["date"]:
+                    current["date"] = year_match.group(0)
+                if url_match and not current["link"]:
+                    current["link"] = url_match.group(0)
             continue
-        certifications.append(
-            {
-                "name": name,
-                "date": year_match.group(0) if year_match else "",
-                "link": url_match.group(0) if url_match else "",
-                "credential_id": credential_id,
-            }
-        )
+        current = {
+            "name": name,
+            "date": year_match.group(0) if year_match else "",
+            "link": url_match.group(0) if url_match else "",
+            "credential_id": credential_id,
+        }
+        certifications.append(current)
     return certifications
 
 

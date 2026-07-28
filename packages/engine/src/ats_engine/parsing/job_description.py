@@ -6,7 +6,7 @@ from collections.abc import Iterable
 from dataclasses import replace
 
 from ats_engine.models import JDProfile, Profile, RequirementTerm
-from ats_engine.parsing.jd_requirements import (
+from ats_engine.kensho.requirements import (
     JDHygiene,
     extract_requirements,
     filter_hygienic_jd_values,

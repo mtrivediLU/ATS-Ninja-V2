@@ -329,6 +329,66 @@ VOCABULARY: Final[tuple[VocabularyEntry, ...]] = (
     ),
     _entry("stakeholder communication", category="communication", kind="soft"),
     _entry("collaboration", aliases=("cross-functional collaboration",), category="communication", kind="soft"),
+    _entry("attention to detail", category="communication", kind="soft"),
+    # Generative AI / LLM stack.  A JD that names ChatGPT, Claude, or Copilot is
+    # naming a tool the candidate either has used or has not; before these
+    # entries existed the entire GenAI half of a modern BI posting was invisible
+    # to the demand model.
+    _entry("generative ai", aliases=("genai", "gen ai"), display="Generative AI", category="platform", kind="domain"),
+    _entry("llms", aliases=("llm", "large language models", "large language model"), display="LLMs", category="platform"),
+    _entry("chatgpt", aliases=("chat gpt",), display="ChatGPT", category="platform"),
+    _entry("claude", display="Claude", category="platform"),
+    _entry("microsoft copilot", aliases=("copilot", "github copilot"), display="Microsoft Copilot", category="platform"),
+    _entry("openai", display="OpenAI", category="platform"),
+    _entry("gemini", display="Gemini", category="platform"),
+    _entry("rag", aliases=("retrieval augmented generation",), display="RAG", category="platform", kind="methodology"),
+    _entry("prompt engineering", category="platform", kind="methodology"),
+    _entry("ai assistants", aliases=("ai assistant",), display="AI assistants", category="platform", kind="skill"),
+    _entry(
+        "ai workflow orchestrators",
+        aliases=("ai workflow orchestration", "ai orchestrator", "ai orchestrators"),
+        display="AI workflow orchestrators",
+        category="platform",
+    ),
+    _entry("low-code", aliases=("low code",), display="low-code", category="platform", kind="skill"),
+    _entry("no-code", aliases=("no code",), display="no-code", category="platform", kind="skill"),
+    _entry("coding assistance", category="platform", kind="methodology"),
+    _entry("narrative generation", category="bi_analytics", kind="methodology"),
+    _entry(
+        "natural language querying",
+        aliases=("natural language query", "natural language data querying", "natural language search"),
+        category="bi_analytics",
+        kind="methodology",
+    ),
+    _entry(
+        "automated report generation",
+        aliases=("automated reporting", "report generation"),
+        category="bi_analytics",
+        kind="methodology",
+    ),
+    _entry("data storytelling", aliases=("data story telling",), category="bi_analytics", kind="methodology"),
+    _entry("data cleaning", aliases=("data cleansing",), category="data_engineering", kind="methodology"),
+    _entry("lookml", display="LookML", category="bi_analytics"),
+    _entry("dbt", aliases=("data build tool",), display="dbt", category="data_engineering"),
+    # Analytics domains and degree fields that JDs name as qualifications.
+    _entry("data analytics", category="bi_analytics", kind="domain"),
+    _entry("business analytics", category="bi_analytics", kind="domain"),
+    _entry("information systems", category="business_analysis", kind="domain"),
+    _entry("business administration", category="business_analysis", kind="domain"),
+    _entry("agile", aliases=("agile methodology", "scrum"), display="agile", category="business_analysis", kind="methodology"),
+    # Web scraping / data extraction stack.
+    _entry("beautifulsoup", aliases=("beautiful soup", "bs4"), display="BeautifulSoup", category="framework"),
+    _entry("scrapy", display="Scrapy", category="framework"),
+    _entry("apis", aliases=("api", "rest api", "rest apis"), display="APIs", category="integration"),
+    _entry("json", display="JSON", category="integration"),
+    _entry("csv", display="CSV", category="integration"),
+    _entry("linkedin", display="LinkedIn", category="platform"),
+    _entry("web scraping", aliases=("web scraper", "webscraping"), category="data_engineering", kind="skill"),
+    _entry("data extraction", category="data_engineering", kind="skill"),
+    _entry("data delivery", category="data_engineering", kind="skill"),
+    _entry("pagination", category="web_development", kind="methodology"),
+    _entry("rate limiting", aliases=("rate limits",), category="web_development", kind="methodology"),
+    _entry("anti-bot measures", aliases=("anti bot", "anti-bot"), category="web_development", kind="methodology"),
 )
 
 
