@@ -1,0 +1,62 @@
+Economic Development - Part-Time IT Specialist
+June 12th, 2026 | Categories: Career Opportunities
+IT Specialist – Economic Development
+New Part-Time Position
+
+The Chiefs of Ontario is seeking a skilled and detail-oriented Part-Time IT Specialist to support the technical operations, data systems, and reporting environment of the First Nations Business Directory (FNBD) Portal and related Economic Development initiatives. Working under the supervision of the Project Manager - Verification & Certification and the Director of Economic Development, the IT Specialist will play a key role in ensuring data accuracy, platform performance, secure information flows, and smooth technical operation of the FNBD verification and certification processes, including dashboard and portal development and the process of implementation in the COO environment.
+
+LOCATION: 468 Queen Street East, Toronto ON
+
+DUTIES AND RESPONSIBILITIES:
+
+- Maintain and enhance Power BI data models (DAX, Power Query, star schema design) used across COO reporting environments.
+- Support the migration and implementation of the FNBD portal from the external consultant environment into the COO internal IT environment, ensuring secure configuration, system stability, data integrity, and continuity of operations.
+- Provide day-to-day IT support for the FNBD verification and certification system, including troubleshooting, user setup, and technical incident resolution.
+- Manage information flows, including data ingestion, transformation, refresh pipelines, and support structured uploads from survey platforms and Excel-based datasets.
+- Design, publish, and maintain Power BI dashboards and manage content within Power BI Service workspaces, including permissions and refresh cycles.
+- Support raw survey data preparation, structured file uploads, and geocoding processes where required.
+- Collaborate with consultants and COO IT to transition hosting, data structures, user permissions, and reporting environments into COO-controlled infrastructure in alignment with OCAP principles and internal cybersecurity standards.
+- Monitor system performance, conduct routine checks, and report technical issues to the PM-V&C and IT team.
+- Assist in implementing data security protocols, including access controls, audit logging, and internal validation requirements aligned with COO standards.
+- Maintain data quality checks, validation processes, and version control documentation for evolving datasets.
+- Document system updates, dataflows, model changes, and technical processes to ensure continuity and knowledge transfer.
+- Provide technical guidance and training to staff and support personnel as required.
+- Participate in meetings and contribute to process improvements related to FNBD and Economic Development data systems.
+- Development and implementation of the demand-side information architecture and user interface design within the Portal.
+- Other duties as assigned.
+
+Candidates must be willing to work flexible hours during peak periods, such as assembly seasons and out-of-town meetings. Travel will also be necessary.
+
+QUALIFICATIONS:
+
+- Diploma in related fields or Diploma with coursework in Information Technology, Computer Systems, Information Management, Data Analytics, or related field.
+- Equivalent experience will also be considered.
+- 1-3 years of experience in IT support, systems administration, data analytics and BI technical roles.
+- Strong working knowledge of Power BI Desktop (DAX, data modelling, Power Query).
+- Experience publishing and managing content in Power BI Service (workspaces, permissions, refresh cycles).
+- Experience transforming structured surveys or Excel-based datasets.
+- Experience with geocoding tools or ESRI ArcGIS visuals in Power BI.
+- Familiarity with M-Files or similar document-management systems is an asset.
+- Understanding of data governance, privacy, and cybersecurity best practices.
+- Strong understanding of data modelling best practices (e.g., star schema).
+- Experience in troubleshooting and maintaining multi-source data pipelines.
+- Ability to design user-friendly dashboards aligned with defined business requirements.
+- Strong communication skills and ability to explain technical concepts to non-technical staff.
+- Excellent documentation and organizational habits.
+- Comfortable working in environments involving Indigenous governance, community data, and principles of data sovereignty and respect.
+- Experience working with First Nations organizations or Indigenous-led data initiatives is an asset.
+- Understanding of the First Nations Principles of OCAP is an asset.
+
+BASE SALARY: $30,000 - $40,000 per year, as determined by experience
+
+DURATION: ASAP - March 31st, 2027
+
+Send a cover letter, resume, and two (2) references marked confidential to:
+
+Avery Recruiter, Human Resources: opportunities@coo.example
+
+Applications will be accepted until the position is filled.
+
+All Applicants must be eligible to work in Canada.
+
+Only successful Candidates will be contacted.

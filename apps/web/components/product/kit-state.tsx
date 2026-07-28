@@ -4,14 +4,17 @@ import Link from "next/link";
 import { useKit } from "@/components/product/kit-context";
 import { RecoveryState, RetryButton } from "@/components/product/recovery-state";
 import { Card, buttonClassName } from "@/components/ui/primitives";
+import { effectiveKitStatus, hasDeliveredArtifact } from "@/lib/product";
 
 export function KitStateBoundary({ children }: { children: React.ReactNode }) {
   const { kit, loading, error, delayed, refresh } = useKit();
   if (loading && !kit) return <LoadingKit />;
   if (error && !kit) return <RecoveryState state="unavailable" actions={<><RetryButton onClick={() => void refresh()} /><Link href="/history" className={buttonClassName()}>Return to history</Link></>} />;
   if (!kit) return <RecoveryState state="malformed" actions={<><RetryButton onClick={() => void refresh()} /><Link href="/history" className={buttonClassName()}>Return to history</Link></>} />;
-  if ((kit.status === "pending" || kit.status === "processing") && !kit.result) return <RecoveryState state={delayed ? "slow" : kit.status} pulse actions={<Link href="/history" className={buttonClassName("secondary")}>Return to history</Link>} />;
-  if (kit.status === "failed") return <RecoveryState state="failed" actions={<><Link href="/kits/new" className={buttonClassName("primary")}>Create another Kit</Link><Link href="/history" className={buttonClassName()}>Return to history</Link></>} />;
+  const status = effectiveKitStatus(kit);
+  if ((status === "pending" || status === "processing") && !kit.result) return <RecoveryState state={delayed ? "slow" : status} pulse actions={<Link href="/history" className={buttonClassName("secondary")}>Return to history</Link>} />;
+  if (status === "needs_input_review" && !hasDeliveredArtifact(kit.result)) return <RecoveryState state="needs-input-review" actions={<><Link href="/kits/new" className={buttonClassName("primary")}>Review inputs in a new Kit</Link><Link href="/history" className={buttonClassName()}>Return to history</Link></>} />;
+  if (status === "failed") return <RecoveryState state="failed" actions={<><Link href="/kits/new" className={buttonClassName("primary")}>Create another Kit</Link><Link href="/history" className={buttonClassName()}>Return to history</Link></>} />;
   if (!kit.result) return <RecoveryState state="malformed" actions={<><RetryButton onClick={() => void refresh()} /><Link href="/history" className={buttonClassName()}>Return to history</Link></>} />;
   return <>{children}</>;
 }

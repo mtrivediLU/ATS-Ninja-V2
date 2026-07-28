@@ -27,6 +27,35 @@ class KitStatus(StrEnum):
     PENDING = "pending"
     PROCESSING = "processing"
     COMPLETED = "completed"
+    PARTIALLY_COMPLETED = "partially_completed"
+    NEEDS_INPUT_REVIEW = "needs_input_review"
+    FAILED = "failed"
+
+
+class ValidationSeverityResponse(StrEnum):
+    """Structured validation severity from the delivery-first engine gate."""
+
+    FATAL = "fatal"
+    DEGRADE = "degrade"
+    WARN = "warn"
+
+
+class DocumentStateResponse(StrEnum):
+    """Honest delivery state for one artifact."""
+
+    GENERATED = "generated"
+    GENERATED_WITH_FALLBACK = "generated_with_fallback"
+    NEEDS_INPUT_REVIEW = "needs_input_review"
+    FAILED = "failed"
+    NOT_REQUESTED = "not_requested"
+
+
+class KitStateResponse(StrEnum):
+    """Engine delivery roll-up mirrored by the persisted API lifecycle."""
+
+    COMPLETED = "completed"
+    PARTIALLY_COMPLETED = "partially_completed"
+    NEEDS_INPUT_REVIEW = "needs_input_review"
     FAILED = "failed"
 
 
@@ -325,6 +354,27 @@ class ValidationSummaryResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class ValidationFindingResponse(BaseModel):
+    """One calibrated, structured delivery-gate finding."""
+
+    code: str = ""
+    severity: ValidationSeverityResponse = ValidationSeverityResponse.WARN
+    fact: str = ""
+    source_span: str = ""
+    detail: str = ""
+    detector_version: str = ""
+    original_code: str = ""
+
+
+class DeliveryReportResponse(BaseModel):
+    """Per-artifact delivery state and privacy-conscious diagnostics."""
+
+    state: DocumentStateResponse = DocumentStateResponse.NOT_REQUESTED
+    findings: list[ValidationFindingResponse] = Field(default_factory=list)
+    fallback_reason: str | None = None
+    calibration_suppressed: list[str] = Field(default_factory=list)
+
+
 class JobFitArtifactResponse(BaseModel):
     """Structured, deterministic-authoritative job-fit assessment."""
 
@@ -541,6 +591,9 @@ class OptimizationTraceResponse(BaseModel):
     accepted_actions: list[str] = Field(default_factory=list)
     rejected_actions: list[OptimizationRejectionResponse] = Field(default_factory=list)
     unreachable_terms: list[str] = Field(default_factory=list)
+    delivery_state: DocumentStateResponse = DocumentStateResponse.GENERATED_WITH_FALLBACK
+    fallback_reason: str = ""
+    calibration_suppressed: list[str] = Field(default_factory=list)
 
 
 class MatchReportResponse(BaseModel):
@@ -584,6 +637,11 @@ class ApplicationKitResponse(BaseModel):
     resolved_mode: str = ""
     generation: GenerationMetadataResponse = Field(default_factory=GenerationMetadataResponse)
     validation: ValidationSummaryResponse = Field(default_factory=ValidationSummaryResponse)
+    state: KitStateResponse = KitStateResponse.COMPLETED
+    delivery_reports: dict[str, DeliveryReportResponse] = Field(default_factory=dict)
+    target_role: str | None = None
+    target_company: str | None = None
+    target_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     resume: ResumeArtifactResponse | None = None
     cover_letter: CoverLetterArtifactResponse | None = None
     answers: AnswerArtifactResponse | None = None

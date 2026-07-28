@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import copy
+import json
+import re
+
 from ats_engine.evidence.matrix import build_evidence_matrix
 from ats_engine.kit.change_actions import ChangeAction, apply_change_actions
 from ats_engine.kit.change_ledger import build_resume_change_ledger
@@ -14,6 +18,7 @@ from ats_engine.kit.contract import (
     ResumeExperienceEntry,
 )
 from ats_engine.kit.orchestrator import generate_application_kit
+from ats_engine.kit.serialization import application_kit_from_dict, application_kit_to_dict
 from ats_engine.models import PlanDecision
 from ats_engine.parsing.job_description import parse_jd
 from ats_engine.parsing.resume import build_profile
@@ -367,3 +372,225 @@ def test_change_action_refreshes_claims_latex_and_revalidates() -> None:
     # Validation is refreshed (status is a valid post-rebuild state, never fatal here).
     assert resume.validation.status.value in {"generated", "repaired"}
     assert resume.validation.fatal is False
+
+
+# --------------------------------------------------------------------------- #
+# Regression coverage: reject/restore of a composed summary (main summary +
+# evidence-backed capability sentence + certification wording + targeting
+# clause) must always succeed and always reproduce the exact prior content.
+# See `_rebuild_resume` in `kit/change_actions.py`: the post-action fidelity
+# re-check used to compare the whole composed summary against only its bare
+# lead sentence, flagging the legitimate capability/certification/targeting
+# content as "unsupported" and refusing the restore outright.
+# --------------------------------------------------------------------------- #
+def test_accept_then_accept_is_exactly_stable() -> None:
+    """Two accepts in a row never drift the summary, revision, or ATS v2 score."""
+    kit = generate_application_kit(
+        resume_text=SYNTHETIC_RESUME, job_description=SYNTHETIC_JD, use_llm=False, include_resume=True
+    )
+    assert kit.resume is not None and kit.resume.document is not None and kit.match_report is not None
+    summary_id = "resume::summary"
+    first = apply_change_actions(
+        kit=kit,
+        resume_text=SYNTHETIC_RESUME,
+        job_description=SYNTHETIC_JD,
+        actions=[ChangeAction(summary_id, "accept")],
+        expected_revision=0,
+    )
+    assert first.ok and first.kit.revision == 1
+    second = apply_change_actions(
+        kit=first.kit,
+        resume_text=SYNTHETIC_RESUME,
+        job_description=SYNTHETIC_JD,
+        actions=[ChangeAction(summary_id, "accept")],
+        expected_revision=1,
+    )
+    assert second.ok and second.kit.revision == 2
+    assert second.kit.resume.document.summary == first.kit.resume.document.summary
+    assert second.kit.resume.text == first.kit.resume.text
+    assert second.kit.match_report.tailored_ats_match.score == first.kit.match_report.tailored_ats_match.score
+
+
+def test_reject_then_restore_reproduces_the_exact_summary() -> None:
+    """Isolated from the idempotency check above: one reject/restore cycle
+    must refuse nothing and must reproduce the delivered summary exactly."""
+    kit = generate_application_kit(
+        resume_text=SYNTHETIC_RESUME, job_description=SYNTHETIC_JD, use_llm=False, include_resume=True
+    )
+    assert kit.resume is not None and kit.resume.document is not None
+    summary_id = "resume::summary"
+    delivered_summary = kit.resume.document.summary
+    rejected = apply_change_actions(
+        kit=kit,
+        resume_text=SYNTHETIC_RESUME,
+        job_description=SYNTHETIC_JD,
+        actions=[ChangeAction(summary_id, "reject")],
+        expected_revision=0,
+    )
+    assert rejected.ok, rejected.errors
+    assert rejected.kit.resume.document.summary != delivered_summary
+    restored = apply_change_actions(
+        kit=rejected.kit,
+        resume_text=SYNTHETIC_RESUME,
+        job_description=SYNTHETIC_JD,
+        actions=[ChangeAction(summary_id, "restore")],
+        expected_revision=1,
+    )
+    assert restored.ok, restored.errors
+    assert restored.kit.resume.document.summary == delivered_summary
+
+
+def test_five_reject_restore_cycles_never_drift() -> None:
+    kit = generate_application_kit(
+        resume_text=SYNTHETIC_RESUME, job_description=SYNTHETIC_JD, use_llm=False, include_resume=True
+    )
+    assert kit.resume is not None and kit.resume.document is not None
+    summary_id = "resume::summary"
+    baseline = kit.resume.document.summary
+    current = kit
+    revision = 0
+    for cycle in range(5):
+        rejected = apply_change_actions(
+            kit=current,
+            resume_text=SYNTHETIC_RESUME,
+            job_description=SYNTHETIC_JD,
+            actions=[ChangeAction(summary_id, "reject")],
+            expected_revision=revision,
+        )
+        assert rejected.ok, f"cycle {cycle}: reject refused: {rejected.errors}"
+        assert rejected.kit.resume.document.summary != baseline
+        revision += 1
+        restored = apply_change_actions(
+            kit=rejected.kit,
+            resume_text=SYNTHETIC_RESUME,
+            job_description=SYNTHETIC_JD,
+            actions=[ChangeAction(summary_id, "restore")],
+            expected_revision=revision,
+        )
+        assert restored.ok, f"cycle {cycle}: restore refused: {restored.errors}"
+        assert restored.kit.resume.document.summary == baseline, f"cycle {cycle}: summary drifted"
+        revision += 1
+        current = restored.kit
+    assert current.revision == 10
+
+
+def test_delivered_summary_contains_capability_certification_and_targeting_segments() -> None:
+    """The summary this whole suite reject/restores is not a bare identity
+    sentence -- it carries an evidence-backed capability phrase, a
+    certification call-out, and the JD targeting clause, all of which must
+    survive the round trip above byte-for-byte."""
+    kit = generate_application_kit(
+        resume_text=SYNTHETIC_RESUME, job_description=SYNTHETIC_JD, use_llm=False, include_resume=True
+    )
+    assert kit.resume is not None and kit.resume.document is not None
+    summary = kit.resume.document.summary
+    assert "Relevant work includes" in summary
+    assert "certified" in summary.lower()
+    assert re.search(r"\bTargeting\s+.+?\bopportunities\.", summary)
+
+
+def test_refused_action_on_summary_ledger_is_fully_atomic() -> None:
+    """A refused batch must leave every field of the passed-in kit -- not just
+    the revision counter -- byte-for-byte unchanged: document, rendered text,
+    LaTeX, validation, and the change ledger itself."""
+    kit = generate_application_kit(
+        resume_text=SYNTHETIC_RESUME, job_description=SYNTHETIC_JD, use_llm=False, include_resume=True
+    )
+    assert kit.resume is not None
+    # An unreversible grounding-removal record can never be rejected/restored;
+    # this is a deterministic way to force a refusal without depending on any
+    # fixture-specific fidelity/score edge case.
+    from ats_engine.kit.contract import ChangeRecord
+
+    kit.resume.change_ledger.append(
+        ChangeRecord(
+            id="grounding::atomicity-check",
+            artifact=ArtifactKind.RESUME,
+            change_type=ChangeType.GROUNDING_REMOVAL,
+            operation=ChangeOperation.REMOVED,
+            original_text="Google",
+            tailored_text="",
+            reason="removed unsupported employer",
+            reversible=False,
+        )
+    )
+    before = copy.deepcopy(kit)
+    result = apply_change_actions(
+        kit=kit,
+        resume_text=SYNTHETIC_RESUME,
+        job_description=SYNTHETIC_JD,
+        actions=[ChangeAction("grounding::atomicity-check", "reject")],
+        expected_revision=0,
+    )
+    assert not result.ok
+    assert result.kit is kit  # the exact same object is handed back, never a mutated copy
+    assert kit.revision == before.revision
+    assert kit.resume.document == before.resume.document
+    assert kit.resume.text == before.resume.text
+    assert kit.resume.latex == before.resume.latex
+    assert kit.resume.validation == before.resume.validation
+    assert kit.resume.change_ledger == before.resume.change_ledger
+    assert kit.match_report == before.match_report
+
+
+def test_restore_reproduces_the_exact_ats_v2_score_and_surfaced_keywords() -> None:
+    kit = generate_application_kit(
+        resume_text=SYNTHETIC_RESUME, job_description=SYNTHETIC_JD, use_llm=False, include_resume=True
+    )
+    assert kit.resume is not None and kit.match_report is not None
+    summary_id = "resume::summary"
+    baseline_score = kit.match_report.tailored_ats_match.score
+    baseline_keywords = list(kit.match_report.keywords_surfaced_by_tailoring)
+    rejected = apply_change_actions(
+        kit=kit,
+        resume_text=SYNTHETIC_RESUME,
+        job_description=SYNTHETIC_JD,
+        actions=[ChangeAction(summary_id, "reject")],
+        expected_revision=0,
+    )
+    assert rejected.ok, rejected.errors
+    restored = apply_change_actions(
+        kit=rejected.kit,
+        resume_text=SYNTHETIC_RESUME,
+        job_description=SYNTHETIC_JD,
+        actions=[ChangeAction(summary_id, "restore")],
+        expected_revision=1,
+    )
+    assert restored.ok, restored.errors
+    assert restored.kit.match_report is not None
+    assert restored.kit.match_report.tailored_ats_match.score == baseline_score
+    assert restored.kit.match_report.keywords_surfaced_by_tailoring == baseline_keywords
+
+
+def test_reject_restore_survives_a_serialization_round_trip() -> None:
+    """The immutable ledger baseline that reject/restore depends on must
+    itself survive a JSON persist/reload cycle (the real API/DB path)."""
+    kit = generate_application_kit(
+        resume_text=SYNTHETIC_RESUME, job_description=SYNTHETIC_JD, use_llm=False, include_resume=True
+    )
+    assert kit.resume is not None and kit.resume.document is not None
+    baseline = kit.resume.document.summary
+    persisted = json.loads(json.dumps(application_kit_to_dict(kit)))
+    reloaded = application_kit_from_dict(persisted)
+    assert reloaded.resume is not None and reloaded.resume.document is not None
+    assert reloaded.resume.document.summary == baseline
+
+    summary_id = "resume::summary"
+    rejected = apply_change_actions(
+        kit=reloaded,
+        resume_text=SYNTHETIC_RESUME,
+        job_description=SYNTHETIC_JD,
+        actions=[ChangeAction(summary_id, "reject")],
+        expected_revision=0,
+    )
+    assert rejected.ok, rejected.errors
+    assert rejected.kit.resume.document.summary != baseline
+    restored = apply_change_actions(
+        kit=rejected.kit,
+        resume_text=SYNTHETIC_RESUME,
+        job_description=SYNTHETIC_JD,
+        actions=[ChangeAction(summary_id, "restore")],
+        expected_revision=1,
+    )
+    assert restored.ok, restored.errors
+    assert restored.kit.resume.document.summary == baseline

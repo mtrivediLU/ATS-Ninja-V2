@@ -6,10 +6,10 @@ import { useFeedback } from "@/components/product/feedback";
 import type { ArtifactView } from "@/components/product/use-artifact-view";
 import { Dialog } from "@/components/ui/dialog";
 import { Button, StatusLabel, Tooltip } from "@/components/ui/primitives";
-import type { ArtifactValidation, Claim } from "@/lib/api-types";
-import { trustCounts } from "@/lib/artifact-presentation";
+import type { ArtifactValidation, Claim, DocumentState } from "@/lib/api-types";
+import { artifactPresentationState, trustCounts } from "@/lib/artifact-presentation";
 import { copyText, downloadText } from "@/lib/product";
-import { editedPresentation } from "@/lib/status";
+import { artifactStatePresentation, editedPresentation } from "@/lib/status";
 
 type ArtifactToolbarProps = {
   title: string;
@@ -21,6 +21,7 @@ type ArtifactToolbarProps = {
   downloadExtension?: "txt" | "md";
   view: ArtifactView;
   onViewChange: (view: ArtifactView) => void;
+  deliveryState?: DocumentState;
   editing?: boolean;
   editable?: boolean;
   dirty?: boolean;
@@ -44,6 +45,7 @@ export function ArtifactToolbar({
   downloadExtension = "txt",
   view,
   onViewChange,
+  deliveryState,
   editing = false,
   editable = false,
   dirty = false,
@@ -62,7 +64,15 @@ export function ArtifactToolbar({
   const [resetOpen, setResetOpen] = useState(false);
   const [includeLatex, setIncludeLatex] = useState(false);
   const counts = trustCounts(claims, validation);
-  const source = editing ? "unsaved local edit" : edited ? "local edit — not revalidated" : "generated version";
+  const deliveredAsFallback = deliveryState === "generated_with_fallback";
+  const source = editing
+    ? "unsaved local edit"
+    : edited
+      ? "local edit — not revalidated"
+      : deliveredAsFallback
+        ? "delivered fallback"
+        : "generated version";
+  const serverState = artifactPresentationState(validation, text, false, deliveryState);
 
   async function copy() {
     try {
@@ -86,9 +96,10 @@ export function ArtifactToolbar({
 
   return <>
     <div className="-mx-4 -mt-6 mb-5 flex flex-wrap items-center gap-2 border-b border-border-subtle bg-surface px-4 py-3 sm:-mx-6 sm:px-6">
-      <div className="min-w-0"><h2 className="font-semibold">{title}</h2><p className="text-xs text-ink-muted">{editing ? "Editing locally — not revalidated" : edited ? "Edited since generation — not revalidated" : "Generated server version"}</p></div>
+      <div className="min-w-0"><h2 className="font-semibold">{title}</h2><p className="text-xs text-ink-muted">{editing ? "Editing locally — not revalidated" : edited ? "Edited since generation — not revalidated" : deliveredAsFallback ? "Source-preserving server fallback" : "Generated server version"}</p></div>
       <div className="flex flex-wrap gap-1"><span className="rounded-pill border border-positive-border bg-positive-bg px-2.5 py-1 text-xs font-semibold text-positive">{counts.supported} supported</span>{counts.adjusted > 0 && <span className="rounded-pill border border-warning-border bg-warning-bg px-2.5 py-1 text-xs font-semibold text-warning">{counts.adjusted} adjusted</span>}{counts.removed > 0 && <span className="rounded-pill border border-danger-border bg-danger-bg px-2.5 py-1 text-xs font-semibold text-danger">{counts.removed} removed</span>}{counts.withheld > 0 && <span className="rounded-pill border border-danger-border bg-danger-bg px-2.5 py-1 text-xs font-semibold text-danger">{counts.withheld} withheld</span>}</div>
       {edited && <StatusLabel presentation={editedPresentation} />}
+      {!editing && !edited && deliveryState && <StatusLabel presentation={artifactStatePresentation[serverState]} />}
       {dirty && <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-warning"><span aria-hidden="true" className="size-2 rounded-pill bg-warning" />Unsaved local changes</span>}
       <span className="flex-1" />
       <div className="inline-flex rounded-control border border-border bg-surface-subtle p-0.5" role="group" aria-label="Artifact view">

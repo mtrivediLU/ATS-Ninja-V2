@@ -128,6 +128,12 @@ class EvidenceLink:
     tier: str
     resume_span: str = ""
     resume_location: str = ""
+    # Most links need one source span. Curated bridges may require a
+    # conjunction of independently structured facts (for example an ETL span
+    # plus a multi-system ingestion bullet); retain every contributing span
+    # instead of silently crediting only the last one.
+    supporting_spans: tuple[str, ...] = ()
+    supporting_locations: tuple[str, ...] = ()
     match_type: str = "missing"
     surface_to_use: str = ""
     max_placement: str = "none"
@@ -175,6 +181,12 @@ class Profile:
     # tiered flat maps; retaining this optional representation lets the v2
     # planner preserve headings and ordering without fabricating a new layout.
     source_skill_groups: list[tuple[str, list[str]]] = field(default_factory=list)
+    # Source-authored sections that are not one of the core structured
+    # experience/education/certification groups (for example Publications).
+    # Keeping them typed on the profile prevents the parser from attaching
+    # publication lines to the preceding education entry merely because the
+    # section was previously unknown.
+    remaining_sections: list[tuple[str, list[str]]] = field(default_factory=list)
     extraction_warnings: list[str] = field(default_factory=list)
 
     @property
@@ -222,6 +234,10 @@ class JDProfile:
     # Additive v2 requirement representation.  ``technical_keywords`` remains
     # populated for the v1-compatible consumers and persisted-kit readers.
     requirements: list[RequirementTerm] = field(default_factory=list)
+    # Deterministic extraction completeness signal for callers that need to
+    # decide whether a sparse/garbled JD merits review. It is an annotation,
+    # never an ATS score or delivery gate; the default preserves old callers.
+    parse_confidence: float = 0.0
 
 
 @dataclass(slots=True)
@@ -290,6 +306,7 @@ class ResumePlan:
     requirements: list[RequirementTerm] = field(default_factory=list)
     evidence_links: list[EvidenceLink] = field(default_factory=list)
     placement_actions: list[PlacementAction] = field(default_factory=list)
+    remaining_sections: list[tuple[str, list[str]]] = field(default_factory=list)
 
 
 @dataclass(slots=True)

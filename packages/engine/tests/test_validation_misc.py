@@ -70,6 +70,7 @@ def test_cover_letter_word_count_bounds() -> None:
 def test_fatal_validation_error_classification() -> None:
     # Truth-critical / structural failures block delivery.
     assert is_fatal_validation_error("resume: invented or unsupported employer: fake labs")
+    assert is_fatal_validation_error("RESUME: INVENTED OR UNSUPPORTED EMPLOYER: FAKE LABS")
     assert is_fatal_validation_error("resume: unsupported metric: 300%")
     assert is_fatal_validation_error("completeness: resume has 1 experience entries, source has 6")
     assert is_fatal_validation_error("resume: missing \\end{document}")

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ats_engine.generation.document_normalization import normalize_document_text
+from ats_engine.generation.document_normalization import normalize_generated_prose, strip_banned_dashes
 from ats_engine.generation.latex_renderer import resume_to_latex
 from ats_engine.models import ResumePlan
 
@@ -66,16 +66,22 @@ def generate_resume_text(plan: ResumePlan) -> str:
         if cert.credential_id:
             parts.append(f"Credential ID: {cert.credential_id}")
         lines.append("- " + " | ".join(parts))
+    for heading, section_lines in plan.remaining_sections:
+        clean_lines = [line for line in section_lines if line.strip()]
+        if not clean_lines:
+            continue
+        lines.extend(["", heading or "Additional Information"])
+        lines.extend(f"- {line}" for line in clean_lines)
     # Do not run style repair across the rendered document: it would silently
     # rewrite candidate-authored experience bullets (for example
     # "Architected"/"Streamlined") after the grounded plan had approved them.
-    return normalize_document_text(_strip_banned_dashes("\n".join(lines).strip()))
+    return normalize_generated_prose("\n".join(lines).strip())
 
 
 def generate_resume_latex(plan: ResumePlan) -> str:
     """Produce a complete Overleaf-ready LaTeX resume."""
     user_info = _user_info(plan)
-    return _strip_banned_dashes(resume_to_latex(generate_resume_text(plan), user_info)).strip()
+    return strip_banned_dashes(resume_to_latex(generate_resume_text(plan), user_info)).strip()
 
 
 def format_resume_output(plan: ResumePlan, latex_code: str) -> str:
@@ -105,10 +111,6 @@ def _user_info(plan: ResumePlan) -> dict[str, str]:
         "work_authorization": contact.work_authorization,
         "relocation": contact.relocation,
     }
-
-
-def _strip_banned_dashes(text: str) -> str:
-    return text.replace("—", ",").replace("–", " to ").replace("--", "-")
 
 
 def _field_line(fields: list[tuple[str, str]]) -> str:

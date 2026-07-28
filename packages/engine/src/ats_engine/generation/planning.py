@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Callable
 from datetime import datetime
@@ -13,6 +14,7 @@ from ats_engine.models import (
     ContactInfo,
     CoverLetterPlan,
     EvidenceItem,
+    EvidenceLink,
     Experience,
     JDProfile,
     PlanDecision,
@@ -21,7 +23,7 @@ from ats_engine.models import (
 )
 from ats_engine.parsing.resume import find_metrics, term_in_text
 from ats_engine.providers.base import LLMProvider, generate_json, generate_text, run_concurrently
-from ats_engine.validation.fidelity import bullet_fidelity_errors
+from ats_engine.validation.fidelity import bullet_fidelity_errors, extract_named_entities
 from ats_engine.validation.naturalness import (
     bullet_safety_errors,
     normalized_bullet_key,
@@ -64,22 +66,49 @@ def build_resume_plan(
     years_span = _career_years(profile.experiences)
     working_knowledge = [item.real_evidence for item in evidence if item.evidence_tier == "C" and item.real_evidence]
     skill_groups = _build_skill_groups(evidence, profile, working_knowledge)
+    deterministic_headline = _headline(
+        jd_profile,
+        role_identity,
+        evidence,
+        evidence_links if jd_profile.requirements else None,
+    )
 
-    # The summary and the bullet rewrite are independent provider calls; running
-    # them concurrently instead of back-to-back roughly halves this part of the
-    # pipeline's wall-clock time whenever a model is available.
+    # Headline, summary, and bullet proposals are independent provider calls.
+    # Run them concurrently and validate/fallback per field so one malformed
+    # response cannot discard another usable section.
     results = run_concurrently(
         {
-            "summary": lambda: _build_summary(role_identity, top_keywords, jd_profile, profile, years_span, provider),
-            "experience": lambda: _select_experience(profile, evidence, jd_profile, batch_provider),
+            "headline": lambda: _build_headline(
+                deterministic_headline,
+                role_identity,
+                jd_profile,
+                evidence_links,
+                provider,
+            ),
+            "summary": lambda: _build_summary(
+                role_identity,
+                top_keywords,
+                jd_profile,
+                profile,
+                years_span,
+                evidence_links,
+                provider,
+            ),
+            "experience": lambda: _select_experience(
+                profile,
+                evidence,
+                evidence_links,
+                jd_profile,
+                batch_provider,
+            ),
         }
     )
+    headline = cast(str, results["headline"])
     summary = cast(str, results["summary"])
     experience, bullet_decisions = cast("tuple[list[Experience], list[PlanDecision]]", results["experience"])
     residual_gap = _first_gap(evidence)
     probability = interview_probability(evidence)
     analysis = _analysis_lines(evidence, residual_gap, jd_profile)
-    headline = _headline(jd_profile, role_identity, evidence)
     work_mode_line = _work_mode_line(jd_profile)
 
     plan_decisions = _summary_decisions(summary, jd_profile) + _skill_decisions(skill_groups) + bullet_decisions
@@ -103,6 +132,7 @@ def build_resume_plan(
         plan_decisions=plan_decisions,
         requirements=list(jd_profile.requirements),
         evidence_links=evidence_links,
+        remaining_sections=[(heading, list(lines)) for heading, lines in profile.remaining_sections],
     )
 
 
@@ -287,18 +317,138 @@ def choose_role_identity(jd_profile: JDProfile, profile: Profile) -> str:
     return "Professional"
 
 
-def _headline(jd_profile: JDProfile, role_identity: str, evidence: list[EvidenceItem]) -> str:
-    # A target job title is never a substitute for the candidate's supported identity.
-    title = role_identity
-    keywords = _dedupe(
-        [
-            item.real_evidence if item.evidence_tier == "adjacency" and item.real_evidence else item.keyword
-            for item in evidence
-            if item.evidence_tier in {"A", "B", "adjacency"} and len(item.keyword) > 2
-        ]
+def _headline(
+    jd_profile: JDProfile,
+    role_identity: str,
+    evidence: list[EvidenceItem],
+    links: list[EvidenceLink] | None = None,
+) -> str:
+    """Build a concise, evidence-backed headline without JD context noise.
+
+    A headline is a candidate identity, not a miniature job description.  Only
+    direct-experience or certification-backed multi-word tools/methodologies
+    may follow the candidate's verified role.  ``evidence`` remains in the
+    signature for legacy callers; typed links carry the tier and vocabulary
+    kind required for the stricter v2 policy.
+    """
+    del jd_profile
+    if links is None:
+        # Retain the historical, pre-v2 projection for legacy callers that
+        # have no typed requirement links at all. V2 callers always pass a
+        # list (possibly empty), so their headline remains subject to the
+        # stricter source-tier and vocabulary-kind policy below.
+        legacy_keywords = _dedupe(
+            [
+                item.real_evidence if item.evidence_tier == "adjacency" and item.real_evidence else item.keyword
+                for item in evidence
+                if item.evidence_tier in {"A", "B", "adjacency"} and len(item.keyword) > 2
+            ]
+        )[:3]
+        legacy_suffix = ", ".join(legacy_keywords)
+        return f"{role_identity} | {legacy_suffix}" if legacy_suffix else role_identity
+    if not links:
+        return role_identity
+
+    ranked = _headline_credited_links(links)
+    phrases = _dedupe(
+        [link.surface_to_use or link.requirement.surface or link.requirement.canonical for link in ranked]
     )[:3]
-    suffix = ", ".join(keywords)
-    return f"{title} | {suffix}" if suffix else title
+    suffix = ", ".join(phrases)
+    return f"{role_identity} | {suffix}" if suffix else role_identity
+
+
+def _headline_credited_links(links: list[EvidenceLink]) -> list[EvidenceLink]:
+    """Return the only resolver links allowed to appear in a headline."""
+    ranked = [
+        link
+        for link in links
+        if link.tier in {"A", "cert"}
+        and link.requirement.kind in {"tool", "methodology"}
+        # Multi-word terminology conveys a precise, source-backed capability;
+        # bare terms like SQL or Git belong in the skills section instead.
+        and link.requirement.ngram >= 2
+        and bool(link.resume_span.strip())
+    ]
+    ranked.sort(
+        key=lambda link: (
+            0 if link.tier == "A" else 1,
+            -link.requirement.weight,
+            -link.requirement.ngram,
+            link.requirement.canonical,
+        )
+    )
+    return ranked
+
+
+def _build_headline(
+    fallback: str,
+    role_identity: str,
+    jd_profile: JDProfile,
+    links: list[EvidenceLink],
+    provider: LLMProvider | None,
+) -> str:
+    """Accept one source-mapped structured headline or return the deterministic one.
+
+    The model may select and order already-credited phrases; it cannot coin a
+    synonym, change the candidate's role identity, or introduce a term without
+    a resolver evidence span. This keeps the proposal useful for wording/layout
+    judgment while deterministic provenance remains authoritative.
+    """
+    credited = _headline_credited_links(links)
+    allowed_terms = _dedupe(
+        [link.surface_to_use or link.requirement.surface or link.requirement.canonical for link in credited]
+    )
+    if provider is None or not allowed_terms:
+        return fallback
+
+    evidence = [
+        {
+            "term": link.surface_to_use or link.requirement.surface or link.requirement.canonical,
+            "kind": link.requirement.kind,
+            "tier": link.tier,
+            "source_span": link.resume_span,
+            "source_location": link.resume_location,
+        }
+        for link in credited
+    ]
+    prompt = (
+        "Propose one structured ATS-safe resume headline using only the exact credited terms below. "
+        "The candidate role identity is immutable. Select up to three precise terms that best align "
+        "with the target role; never add synonyms, soft skills, context terms, seniority, employers, "
+        "metrics, or responsibilities.\n\n"
+        f"Target job title: {jd_profile.title}\n"
+        f"Target company: {jd_profile.company}\n"
+        f"Prioritized JD requirements: {json.dumps(_dedupe([link.requirement.surface for link in credited])[:8])}\n"
+        f"Exact source evidence: {json.dumps(evidence)}\n"
+        f"Explicit allowed terminology: {json.dumps(allowed_terms)}\n"
+        f"Protected facts that cannot be removed or modified: {json.dumps([role_identity])}\n"
+        'Output constraints: one line, at most three credited terms, format "<role identity> | '
+        '<term 1>, <term 2>, <term 3>", no em dash, en dash, or double hyphen.\n\n'
+        f"{PROHIBITED_INVENTION_CLAUSE}\n\n"
+        "Return ONLY one JSON object with exactly this shape: "
+        '{"source_span":"resume:headline","action":"rewrite_headline",'
+        '"terms":["exact credited term"],"text":"..."}.'
+    )
+    data = generate_json(provider, prompt, retries=1)
+    if not isinstance(data, dict):
+        return fallback
+    if data.get("source_span") != "resume:headline" or data.get("action") != "rewrite_headline":
+        return fallback
+    raw_terms = data.get("terms")
+    if not isinstance(raw_terms, list) or not 1 <= len(raw_terms) <= 3:
+        return fallback
+    terms = [str(term).strip() for term in raw_terms]
+    allowed_by_key = {term.casefold(): term for term in allowed_terms}
+    if any(not term or term.casefold() not in allowed_by_key for term in terms) or len(
+        {term.casefold() for term in terms}
+    ) != len(terms):
+        return fallback
+    selected = [allowed_by_key[term.casefold()] for term in terms]
+    expected = f"{role_identity} | {', '.join(selected)}"
+    candidate = _clean_llm_line(str(data.get("text", "")))
+    if candidate != expected or not _style_ok(candidate) or len(candidate.split()) > 24:
+        return fallback
+    return candidate
 
 
 def _work_mode_line(jd_profile: JDProfile) -> str:
@@ -414,6 +564,7 @@ def _build_summary(
     jd_profile: JDProfile,
     profile: Profile,
     years_span: int | None,
+    links: list[EvidenceLink],
     provider: LLMProvider | None,
 ) -> str:
     fallback = _fallback_summary(role_identity, top_keywords, jd_profile, years_span)
@@ -425,16 +576,37 @@ def _build_summary(
         if years_span
         else "Years of experience cannot be reliably determined; do not state a specific number of years."
     )
+    allowed_terminology = _dedupe(
+        [
+            link.surface_to_use or link.requirement.surface or link.requirement.canonical
+            for link in links
+            if link.tier in {"A", "B", "cert"}
+        ]
+    )
+    prioritized_requirements = _dedupe(
+        [
+            link.requirement.surface or link.requirement.canonical
+            for link in sorted(
+                links,
+                key=lambda item: (-item.requirement.weight, item.requirement.canonical),
+            )
+        ]
+    )[:8]
+    protected_facts = _protected_facts(profile.source_summary)
     prompt = (
-        "Write a 3 to 4 sentence professional resume summary tailored to the target role below. "
-        "Ground every claim only in the candidate facts provided; never invent employers, tools, or numbers.\n\n"
+        "Propose one structured professional-summary rewrite. Ground every claim only in the exact source "
+        "evidence below; never invent employers, tools, responsibilities, or numbers.\n\n"
         f"Role identity to use: {role_identity}\n"
         f"Target job title: {jd_profile.title}\n"
         f"Target company: {jd_profile.company}\n"
         f"Domain: {jd_profile.domain or 'not specified'}\n"
-        f"Keywords to mirror where truthful: {', '.join(top_keywords) or 'none specific'}\n"
+        f"Prioritized JD requirements: {json.dumps(prioritized_requirements)}\n"
+        f"Explicit allowed terminology: {json.dumps(allowed_terminology or top_keywords)}\n"
         f"{years_line}\n\n"
-        f"Candidate's real experience highlights:\n{_experience_highlights(profile)}\n\n"
+        f"Source span: resume:summary\n"
+        f"Exact source summary evidence: {json.dumps(profile.source_summary)}\n"
+        f"Exact supporting experience evidence:\n{_experience_highlights(profile)}\n"
+        f"Protected facts that cannot be removed or modified: {json.dumps(protected_facts)}\n\n"
         "Rules: no em dashes, en dashes, or double hyphens. Do not state any number, percentage, or metric "
         "that is not already given above. Avoid cliche resume filler (results-driven, detail-oriented, "
         "passionate about, proven track record, dynamic, innovative, seamless, robust, leveraged, spearheaded, "
@@ -442,7 +614,8 @@ def _build_summary(
         "'day-to-day delivery' with nothing specific behind it.\n\n"
         f"{_target_title_instruction(jd_profile.title)}\n\n"
         f"{PROHIBITED_INVENTION_CLAUSE}\n\n"
-        "Return ONLY the summary text, no headers, no quotes."
+        "Return ONLY one JSON object with exactly this shape: "
+        '{"source_span":"resume:summary","action":"rewrite_summary","text":"..."}.'
     )
 
     def validate(candidate: str) -> bool:
@@ -456,9 +629,24 @@ def _build_summary(
         found = {metric.lower() for metric in find_metrics(candidate)}
         if not found.issubset(allowed):
             return False
-        return not _mentions_tier_c(candidate, profile)
+        if _mentions_tier_c(candidate, profile):
+            return False
+        return not (
+            profile.source_summary
+            and bullet_fidelity_errors(
+                profile.source_summary,
+                candidate,
+                source_text=profile.raw_markdown,
+            )
+        )
 
-    return _llm_generate(provider, prompt, validate, fallback)
+    data = generate_json(provider, prompt, retries=1)
+    if not isinstance(data, dict):
+        return fallback
+    if data.get("source_span") != "resume:summary" or data.get("action") != "rewrite_summary":
+        return fallback
+    candidate = _clean_llm_line(str(data.get("text", "")))
+    return candidate if validate(candidate) else fallback
 
 
 def _fallback_summary(
@@ -485,6 +673,112 @@ def _fallback_summary(
     # the identical filler while the same input is always reproducible.
     closing = select_summary_closing(f"{role_identity}|{jd_profile.title}|{jd_profile.company}|{skills_clause}")
     return f"{role_identity}{years_clause}{skills_clause}.{domain_clause}{target_clause} {closing}"
+
+
+def rewrite_summary(
+    role_identity: str,
+    profile: Profile,
+    jd_profile: JDProfile,
+    links: list[EvidenceLink] | None = None,
+    *,
+    years_span: int | None = None,
+) -> str:
+    """Create a deterministic, source-preserving summary rewrite candidate.
+
+    This is intentionally a planning primitive rather than an automatic
+    pipeline mutation.  An optimizer or delivery workflow can propose the
+    returned text as a reviewable ``summary`` action, then apply its usual
+    scoring and calibrated validation gates.  The helper itself never invents
+    a candidate fact: it preserves the complete source summary when present,
+    adds only tier-A evidence phrases, and names certification codes only from
+    resolver-backed certificate spans.
+    """
+    source_summary = _summary_sentence(profile.source_summary)
+    lead = source_summary or _summary_lead(role_identity, years_span)
+    phrases = _summary_evidence_phrases(links or [])
+    cert_callouts = _summary_certificate_callouts(links or [])
+    parts = [lead]
+    if phrases:
+        parts.append(f"Relevant work includes {_summary_join(phrases)}.")
+    if cert_callouts:
+        parts.append(f"{_summary_join(cert_callouts)}.")
+    if _is_real_target_title(jd_profile.title):
+        parts.append(f"Targeting {jd_profile.title} opportunities.")
+    return _summary_clean(" ".join(part for part in parts if part))
+
+
+def _summary_lead(role_identity: str, years_span: int | None) -> str:
+    if years_span is not None and years_span > 0:
+        return f"{role_identity} with {years_span}+ years of experience."
+    return f"{role_identity}."
+
+
+def _summary_sentence(text: str) -> str:
+    """Retain source wording while making it safe to append deterministic prose."""
+    source = (text or "").strip()
+    if not source:
+        return ""
+    if source[-1:] not in {".", "!", "?"}:
+        source = f"{source}."
+    return source
+
+
+def _summary_evidence_phrases(links: list[EvidenceLink]) -> list[str]:
+    """Select up to three direct, non-soft phrases from distinct categories."""
+    ranked = sorted(
+        (link for link in links if link.tier == "A" and link.requirement.kind != "soft"),
+        key=lambda link: (-link.requirement.weight, -link.requirement.ngram, link.requirement.canonical),
+    )
+    phrases: list[str] = []
+    categories: set[str] = set()
+    for link in ranked:
+        category = link.requirement.category or "other"
+        if category in categories:
+            continue
+        phrase = (link.surface_to_use or link.requirement.surface or link.requirement.canonical).strip()
+        if not phrase:
+            continue
+        categories.add(category)
+        phrases.append(phrase)
+        if len(phrases) == 3:
+            break
+    return _dedupe(phrases)
+
+
+def _summary_certificate_callouts(links: list[EvidenceLink]) -> list[str]:
+    """Render stable, certificate-backed callouts without claiming production use."""
+    callouts: list[str] = []
+    seen_codes: set[str] = set()
+    for link in sorted(
+        (item for item in links if item.tier == "cert" and item.resume_span.strip()),
+        key=lambda item: (item.requirement.canonical, item.resume_span.casefold()),
+    ):
+        code = _certificate_code(link.resume_span)
+        if not code or code in seen_codes:
+            continue
+        seen_codes.add(code)
+        prefix = "Microsoft " if "microsoft" in link.resume_span.casefold() else ""
+        callouts.append(f"{prefix}{code} certified")
+    return callouts[:2]
+
+
+def _certificate_code(span: str) -> str:
+    match = re.search(r"\b(?:PL|AZ)-\d{3}\b", span or "", flags=re.IGNORECASE)
+    return match.group(0).upper() if match is not None else ""
+
+
+def _summary_clean(text: str) -> str:
+    """Avoid machine-style dash punctuation without deleting source facts."""
+    cleaned = (text or "").replace("—", ",").replace("–", "-").replace("--", "-")
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def _summary_join(values: list[str]) -> str:
+    if len(values) < 2:
+        return values[0] if values else ""
+    if len(values) == 2:
+        return f"{values[0]} and {values[1]}"
+    return f"{', '.join(values[:-1])}, and {values[-1]}"
 
 
 def _is_real_target_title(title: str) -> bool:
@@ -607,6 +901,7 @@ def _build_skill_groups(
 def _select_experience(
     profile: Profile,
     evidence: list[EvidenceItem],
+    links: list[EvidenceLink],
     jd_profile: JDProfile,
     provider: LLMProvider | None,
 ) -> tuple[list[Experience], list[PlanDecision]]:
@@ -640,6 +935,11 @@ def _select_experience(
         entries.append((experience, chosen, source_bullets))
 
     all_originals = [bullet for _, chosen, _ in entries for bullet in chosen]
+    source_spans = [
+        f"resume::exp{exp_index}::bullet{bullet_index}"
+        for exp_index, (_experience, chosen, _raw_bullets) in enumerate(entries)
+        for bullet_index, _bullet in enumerate(chosen)
+    ]
     # Bullets already carrying two or more JD keywords are targeted as-is;
     # rewriting them spends tokens for little gain and risks quality drift.
     # Only the under-aligned bullets go to the model.
@@ -647,7 +947,15 @@ def _select_experience(
     rewritten_flat = list(all_originals)
     if provider is not None and needs_rewrite:
         batch = [all_originals[index] for index in needs_rewrite]
-        rewritten_batch = _rewrite_bullets_batch(batch, jd_profile, keywords, profile, provider)
+        rewritten_batch = _rewrite_bullets_batch(
+            batch,
+            jd_profile,
+            keywords,
+            profile,
+            provider,
+            source_spans=[source_spans[index] for index in needs_rewrite],
+            links=links,
+        )
         for position, index in enumerate(needs_rewrite):
             rewritten_flat[index] = rewritten_batch[position]
     # Repair *generated* duplication without ever dropping a candidate bullet: if a
@@ -727,6 +1035,9 @@ def _rewrite_bullets_batch(
     keywords: list[str],
     profile: Profile,
     provider: LLMProvider,
+    *,
+    source_spans: list[str] | None = None,
+    links: list[EvidenceLink] | None = None,
 ) -> list[str]:
     """Rewrite every selected bullet in a single provider call instead of one per bullet.
 
@@ -736,34 +1047,84 @@ def _rewrite_bullets_batch(
     item in the response, falling back to that item's untouched original on any
     failure.
     """
-    top_keywords = ", ".join(keywords[:6]) or "none specific"
-    numbered = "\n".join(f"{index + 1}. {bullet}" for index, bullet in enumerate(bullets))
+    spans = source_spans or [f"resume::bullet{index}" for index in range(len(bullets))]
+    if len(spans) != len(bullets):
+        return bullets
+    prioritized_requirements = _dedupe(
+        [
+            link.requirement.surface or link.requirement.canonical
+            for link in sorted(
+                links or [],
+                key=lambda item: (-item.requirement.weight, item.requirement.canonical),
+            )
+        ]
+    )[:8]
+    items = [
+        {
+            "source_span": source_span,
+            "action": "rewrite_bullet",
+            "source_evidence": bullet,
+            "allowed_terminology": [keyword for keyword in keywords if _keyword_hits(bullet, [keyword])],
+            "protected_facts": _protected_facts(bullet),
+            "constraints": {"max_words": 34, "single_line": True},
+        }
+        for source_span, bullet in zip(spans, bullets, strict=True)
+    ]
     prompt = (
-        "Rewrite each of the following resume bullets so it foregrounds the target job's priorities, "
+        "Propose a structured rewrite for each resume bullet so it foregrounds the target job's priorities, "
         "while staying 100% factually identical to its own original: same system, same tools, same scope, "
         "same numbers. Do not invent or drop any metric, tool, or outcome for any bullet, and do not name "
         "a tool that is not already in that bullet's original text. Keep each rewrite to one line, under "
         "34 words. Vary sentence openings across the set so consecutive bullets do not start the same way.\n\n"
         f"Target job title: {jd_profile.title}\n"
-        f"Keywords to emphasize where truthful: {top_keywords}\n\n"
-        f"Original bullets:\n{numbered}\n\n"
+        f"Target company: {jd_profile.company}\n"
+        f"Prioritized JD requirements: {json.dumps(prioritized_requirements)}\n"
+        f"Structured source inputs: {json.dumps(items)}\n\n"
         "Rules: no em dashes, en dashes, or double hyphens. Avoid cliche resume verbs (leveraged, "
         "spearheaded, architected, orchestrated, streamlined, championed, synergized, facilitated).\n\n"
         f"{PROHIBITED_INVENTION_CLAUSE}\n\n"
-        f"Return ONLY a JSON array of exactly {len(bullets)} strings, one rewritten bullet per input bullet, "
-        "in the same order. No bullet numbers inside the strings, no commentary, no markdown fences."
+        f"Return ONLY a JSON array of exactly {len(bullets)} objects. Each object must contain the unchanged "
+        'source_span, action="rewrite_bullet", and text. Do not return commentary or markdown fences.'
     )
 
     data = generate_json(provider, prompt, retries=1)
-    if not isinstance(data, list) or len(data) != len(bullets):
+    if not isinstance(data, list):
         return bullets
 
     known_skills = list(profile.tier_a) + list(profile.tier_b) + list(profile.tier_c)
+    proposals = {
+        str(item.get("source_span")): item
+        for item in data
+        if isinstance(item, dict)
+        and item.get("action") == "rewrite_bullet"
+        and isinstance(item.get("source_span"), str)
+    }
     rewritten: list[str] = []
-    for original, candidate in zip(bullets, data, strict=False):
-        candidate_text = _clean_llm_line(str(candidate)) if candidate is not None else ""
+    for source_span, original in zip(spans, bullets, strict=True):
+        candidate = proposals.get(source_span)
+        candidate_text = _clean_llm_line(str(candidate.get("text", ""))) if candidate is not None else ""
         rewritten.append(candidate_text if _bullet_is_valid(candidate_text, original, known_skills) else original)
     return rewritten
+
+
+_TEAM_FACT = re.compile(
+    r"\b(?:team|group)\s+of\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+"
+    r"(?:engineers?|developers?|analysts?|people|members?|staff)\b",
+    flags=re.IGNORECASE,
+)
+_CREDENTIAL_FACT = re.compile(r"\b[A-Z]{2,8}-\d{2,6}\b")
+
+
+def _protected_facts(text: str) -> list[str]:
+    """Return exact high-risk facts an AI proposal must retain."""
+    return _dedupe(
+        [
+            *find_metrics(text),
+            *extract_named_entities(text),
+            *(match.group(0) for match in _TEAM_FACT.finditer(text or "")),
+            *(match.group(0) for match in _CREDENTIAL_FACT.finditer(text or "")),
+        ]
+    )
 
 
 def _bullet_is_valid(

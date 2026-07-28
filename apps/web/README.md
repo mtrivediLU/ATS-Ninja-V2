@@ -119,20 +119,22 @@ upload step with no new component needed — the wizard renders every string in
 `extraction.warnings` and switches the banner to its warning tone whenever the
 array is non-empty.
 
-`lib/product.ts`'s `kitTarget()` reads target company/role from whichever
-requested artifact carries it (LinkedIn Outreach, then Cover Letter) instead
-of only the former, so the header does not show "Target company unavailable"
-just because Outreach wasn't requested. `safeWithheldReason()` maps a withheld
-artifact's persisted validation errors to one of a small set of safe,
-actionable messages instead of a generic fallback.
+`lib/product.ts`'s `kitTarget()` prefers v7's explicit JD-parsed target and
+confidence, then reads target company/role from whichever older requested
+artifact carries it (LinkedIn Outreach or Cover Letter). Low-confidence v7
+targets render as editable, view-local fields instead of being asserted as
+certain. `safeWithheldReason()` maps a withheld artifact's persisted validation
+errors to one of a small set of safe, actionable messages instead of a generic
+fallback.
 
 ## Artifact selection and polling
 
 The frontend sends all six persisted include flags explicitly. The API retains
 `requested_mode` compatibility for older clients. After a `202`, the browser
 navigates to the real Kit route and polls `GET /api/v1/kits/{id}` every 1.5
-seconds without overlapping requests. Polling stops on `completed` or `failed`
-and is aborted when the route unmounts.
+seconds without overlapping requests. Polling stops on every terminal state:
+`completed`, `partially_completed`, `needs_input_review`, or `failed`; it is
+also aborted when the route unmounts.
 
 ## Trust, evidence, and artifact state
 
@@ -140,6 +142,12 @@ Every real workspace defaults to a route-backed **Trust** view (`?view=content`
 opens Content). Trust summaries show supported, adjusted, removed, withheld, and
 warning counts from the returned records; their trace-distribution percentage is
 explicitly labelled as presentation, not a quality/readiness/AI-confidence score.
+
+ApplicationKit v7 delivery reports remain authoritative in presentation.
+`generated_with_fallback` documents stay downloadable and use the
+“Delivered résumé match” score label; `partially_completed` kits retain every
+successfully delivered artifact. `needs_input_review` is an actionable recovery
+state, not a hidden failure.
 
 The evidence panel renders bounded API excerpts only. It filters returned traces
 by artifact and D2 status, supports keyboard ←/→ traversal, and restores focus on

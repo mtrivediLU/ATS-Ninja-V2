@@ -1,4 +1,4 @@
-import type { MatchReport } from "@/lib/api-types";
+import type { DocumentState, MatchReport } from "@/lib/api-types";
 import { Card } from "@/components/ui/primitives";
 import { scoreComparisonState } from "@/lib/results-presentation";
 
@@ -8,10 +8,11 @@ import { scoreComparisonState } from "@/lib/results-presentation";
  * is the two-panel-plus-delta summary a candidate needs at a glance. Never
  * invents an improvement — a flat or lower tailored score is stated plainly.
  */
-export function ScoreComparison({ report }: { report: MatchReport }) {
+export function ScoreComparison({ report, resumeState }: { report: MatchReport; resumeState?: DocumentState }) {
   const state = scoreComparisonState(
     Math.round(report.original_ats_match.score),
     report.tailored_ats_match ? Math.round(report.tailored_ats_match.score) : null,
+    resumeState === "generated_with_fallback",
   );
 
   return (
@@ -27,7 +28,7 @@ export function ScoreComparison({ report }: { report: MatchReport }) {
       </span>
       <div aria-hidden="true" className="mt-3 grid gap-3 sm:grid-cols-2">
         <ScorePanel label="Original résumé" score={state.original} />
-        <ScorePanel label="Tailored résumé" score={state.tailored} tinted />
+        <ScorePanel label={state.deliveredLabel} score={state.tailored} tinted />
       </div>
       {state.deltaLabel && (
         <p aria-hidden="true" className="mt-3 text-sm font-semibold text-ink">

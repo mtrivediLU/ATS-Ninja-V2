@@ -9,6 +9,7 @@ from ats_engine.kit.contract import (
     APPLICATION_KIT_V4,
     APPLICATION_KIT_V5,
     APPLICATION_KIT_V6,
+    APPLICATION_KIT_V7,
     AnswerArtifact,
     AnswerItem,
     ApplicationKit,
@@ -27,6 +28,8 @@ from ats_engine.kit.contract import (
     ConsistencyValidation,
     CoverLetterArtifact,
     CoverLetterDocument,
+    DeliveryReport,
+    DocumentState,
     EvidenceRef,
     FitBand,
     FitCategory,
@@ -41,6 +44,7 @@ from ats_engine.kit.contract import (
     InterviewQuestionCategory,
     JobFitArtifact,
     JobPriorityItem,
+    KitState,
     LinkedInOutreachArtifact,
     MatchReport,
     OptimizationRejection,
@@ -70,6 +74,7 @@ from ats_engine.kit.contract import (
     TechnicalStudyTopic,
     ValidationSummary,
 )
+from ats_engine.validation.findings import ValidationFinding, ValidationSeverity
 
 """JSON serialization boundary for the ApplicationKit contract.
 
@@ -104,6 +109,13 @@ def application_kit_to_dict(kit: ApplicationKit) -> dict[str, Any]:
         "resolved_mode": kit.resolved_mode,
         "generation": _generation_to_dict(kit.generation),
         "validation": _validation_summary_to_dict(kit.validation),
+        "target_role": kit.target_role,
+        "target_company": kit.target_company,
+        "target_confidence": kit.target_confidence,
+        "state": kit.state.value,
+        "delivery_reports": {
+            artifact.value: _delivery_report_to_dict(report) for artifact, report in kit.delivery_reports.items()
+        },
         "resume": _resume_to_dict(kit.resume) if kit.resume is not None else None,
         "cover_letter": (_cover_letter_to_dict(kit.cover_letter) if kit.cover_letter is not None else None),
         "answers": _answers_to_dict(kit.answers) if kit.answers is not None else None,
@@ -216,6 +228,9 @@ def _match_report_to_dict(report: MatchReport) -> dict[str, Any]:
                 {"action": item.action, "reason": item.reason} for item in report.optimization_trace.rejected_actions
             ],
             "unreachable_terms": list(report.optimization_trace.unreachable_terms),
+            "delivery_state": report.optimization_trace.delivery_state.value,
+            "fallback_reason": report.optimization_trace.fallback_reason,
+            "calibration_suppressed": list(report.optimization_trace.calibration_suppressed),
         },
     }
 
@@ -245,6 +260,30 @@ def _artifact_validation_to_dict(validation: ArtifactValidation) -> dict[str, An
         "warnings": list(validation.warnings),
         "repaired_claims": validation.repaired_claims,
         "rejected_claims": validation.rejected_claims,
+    }
+
+
+def _validation_finding_to_dict(finding: ValidationFinding) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "code": finding.code,
+        "severity": finding.severity.value,
+        "fact": finding.fact,
+        "source_span": finding.source_span,
+        "detail": finding.detail,
+        "detector_version": finding.detector_version,
+    }
+    original_code = getattr(finding, "original_code", None)
+    if original_code:
+        payload["original_code"] = original_code
+    return payload
+
+
+def _delivery_report_to_dict(report: DeliveryReport) -> dict[str, Any]:
+    return {
+        "state": report.state.value,
+        "findings": [_validation_finding_to_dict(finding) for finding in report.findings],
+        "fallback_reason": report.fallback_reason,
+        "calibration_suppressed": list(report.calibration_suppressed),
     }
 
 
@@ -568,6 +607,11 @@ def application_kit_from_dict(data: dict[str, Any]) -> ApplicationKit:
         resolved_mode=str(data.get("resolved_mode", "")),
         generation=_generation_from_dict(data.get("generation") or {}),
         validation=_validation_summary_from_dict(data.get("validation") or {}),
+        target_role=str(data.get("target_role", "")),
+        target_company=str(data.get("target_company", "")),
+        target_confidence=_safe_float(data.get("target_confidence"), 0.0),
+        state=_kit_state_from_dict(data),
+        delivery_reports=_delivery_reports_from_dict(data),
         resume=_resume_from_dict(data.get("resume")),
         cover_letter=_cover_letter_from_dict(data.get("cover_letter")),
         answers=_answers_from_dict(data.get("answers")),
@@ -693,6 +737,12 @@ def _match_report_from_dict(raw: object) -> MatchReport | None:
                 if isinstance(item, dict)
             ],
             unreachable_terms=[str(item) for item in trace_data.get("unreachable_terms") or []],
+            delivery_state=_document_state(
+                trace_data.get("delivery_state"),
+                DocumentState.GENERATED_WITH_FALLBACK,
+            ),
+            fallback_reason=str(trace_data.get("fallback_reason", "")),
+            calibration_suppressed=[str(item) for item in trace_data.get("calibration_suppressed") or []],
         ),
     )
 
@@ -727,6 +777,158 @@ def _artifact_validation_from_dict(raw: dict[str, Any]) -> ArtifactValidation:
         repaired_claims=int(raw.get("repaired_claims", 0)),
         rejected_claims=int(raw.get("rejected_claims", 0)),
     )
+
+
+def _validation_finding_from_dict(raw: object) -> ValidationFinding | None:
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return ValidationFinding(
+            code=str(raw.get("code", "")),
+            severity=ValidationSeverity(str(raw.get("severity", ValidationSeverity.WARN.value))),
+            fact=str(raw.get("fact", "")),
+            source_span=str(raw.get("source_span", "")),
+            detail=str(raw.get("detail", "")),
+            detector_version=str(raw.get("detector_version", "")),
+            **({"original_code": str(raw.get("original_code"))} if raw.get("original_code") is not None else {}),
+        )
+    except (TypeError, ValueError):
+        return None
+
+
+def _delivery_report_from_dict(raw: object, *, default_state: DocumentState) -> DeliveryReport:
+    if not isinstance(raw, dict):
+        return DeliveryReport(state=default_state)
+    findings = [
+        finding
+        for finding in (_validation_finding_from_dict(item) for item in raw.get("findings") or [])
+        if finding is not None
+    ]
+    try:
+        state = DocumentState(str(raw.get("state", default_state.value)))
+    except ValueError:
+        state = default_state
+    fallback_reason_raw = raw.get("fallback_reason")
+    return DeliveryReport(
+        state=state,
+        findings=findings,
+        fallback_reason=str(fallback_reason_raw) if fallback_reason_raw is not None else None,
+        calibration_suppressed=[str(item) for item in raw.get("calibration_suppressed") or []],
+    )
+
+
+def _legacy_document_state(raw: object, *, requested: bool) -> DocumentState:
+    if not isinstance(raw, dict):
+        return DocumentState.FAILED if requested else DocumentState.NOT_REQUESTED
+    validation = raw.get("validation")
+    if bool(raw.get("withheld")) or (
+        isinstance(validation, dict)
+        and (bool(validation.get("fatal")) or str(validation.get("status", "")) == ArtifactStatus.REJECTED.value)
+    ):
+        return DocumentState.FAILED
+    text = str(raw.get("text", "") or "")
+    return DocumentState.GENERATED if text or raw else DocumentState.FAILED
+
+
+def _legacy_requested_kinds(data: dict[str, Any]) -> set[ArtifactKind]:
+    """Recover v1-v6 requested intent before delivery reports existed.
+
+    Historical payloads used compact selection codes (``R``, ``C``, ``Q``)
+    as well as free-form requested-mode values.  A missing requested primary
+    artifact is a failed delivery, never silently "not requested".
+    """
+    mode = f"{data.get('resolved_mode', '')} {data.get('requested_mode', '')}".casefold()
+    requested: set[ArtifactKind] = set()
+    compact = "".join(ch for ch in mode.upper() if ch in "RCQ")
+    if "R" in compact or "resume" in mode:
+        requested.add(ArtifactKind.RESUME)
+    if "C" in compact or "cover" in mode:
+        requested.add(ArtifactKind.COVER_LETTER)
+    if "Q" in compact or "answer" in mode or "question" in mode:
+        requested.add(ArtifactKind.ANSWERS)
+    return requested
+
+
+def _delivery_reports_from_dict(data: dict[str, Any]) -> dict[ArtifactKind, DeliveryReport]:
+    reports_raw = data.get("delivery_reports")
+    reports = reports_raw if isinstance(reports_raw, dict) else {}
+    result: dict[ArtifactKind, DeliveryReport] = {}
+    field_by_kind = {
+        ArtifactKind.RESUME: "resume",
+        ArtifactKind.COVER_LETTER: "cover_letter",
+        ArtifactKind.ANSWERS: "answers",
+        ArtifactKind.JOB_FIT: "job_fit",
+        ArtifactKind.INTERVIEW_PREP: "interview_prep",
+        ArtifactKind.LINKEDIN_OUTREACH: "linkedin_outreach",
+    }
+    requested = _legacy_requested_kinds(data)
+    for kind, field_name in field_by_kind.items():
+        default_state = _legacy_document_state(data.get(field_name), requested=kind in requested)
+        result[kind] = _delivery_report_from_dict(reports.get(kind.value), default_state=default_state)
+    return result
+
+
+def _kit_state_from_dict(data: dict[str, Any]) -> KitState:
+    raw_state = data.get("state")
+    if raw_state is not None:
+        try:
+            return KitState(str(raw_state))
+        except ValueError:
+            pass
+    return _infer_kit_state(_delivery_reports_from_dict(data))
+
+
+def _infer_kit_state(reports: dict[ArtifactKind, DeliveryReport]) -> KitState:
+    delivered = {DocumentState.GENERATED, DocumentState.GENERATED_WITH_FALLBACK}
+    primary = [
+        reports[kind]
+        for kind in (ArtifactKind.RESUME, ArtifactKind.COVER_LETTER)
+        if reports[kind].state is not DocumentState.NOT_REQUESTED
+    ]
+    secondary = [
+        report
+        for kind, report in reports.items()
+        if kind not in {ArtifactKind.RESUME, ArtifactKind.COVER_LETTER}
+        and report.state is not DocumentState.NOT_REQUESTED
+    ]
+    requested = [*primary, *secondary]
+    if not requested:
+        return KitState.COMPLETED
+    if primary:
+        if any(report.state is DocumentState.NEEDS_INPUT_REVIEW for report in primary):
+            return KitState.NEEDS_INPUT_REVIEW
+        if all(report.state in delivered for report in primary):
+            return (
+                KitState.PARTIALLY_COMPLETED
+                if any(report.state not in delivered for report in secondary)
+                else KitState.COMPLETED
+            )
+        if any(report.state in delivered for report in primary):
+            return KitState.PARTIALLY_COMPLETED
+        return KitState.FAILED
+    if any(report.state is DocumentState.NEEDS_INPUT_REVIEW for report in requested):
+        return KitState.NEEDS_INPUT_REVIEW
+    if all(report.state in delivered for report in requested):
+        return KitState.COMPLETED
+    if any(report.state in delivered for report in requested):
+        return KitState.PARTIALLY_COMPLETED
+    return KitState.FAILED
+
+
+def _document_state(raw: object, default: DocumentState) -> DocumentState:
+    try:
+        return DocumentState(str(raw))
+    except ValueError:
+        return default
+
+
+def _safe_float(raw: object, default: float) -> float:
+    if not isinstance(raw, (str, int, float)):
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
 
 
 def _resume_from_dict(raw: dict[str, Any] | None) -> ResumeArtifact | None:
@@ -1116,8 +1318,13 @@ def is_application_kit_v5(raw: dict[str, Any]) -> bool:
 
 
 def is_application_kit_v6(raw: dict[str, Any]) -> bool:
-    """True when a persisted result is the current v6 ApplicationKit."""
+    """True when a persisted result is a v6 ApplicationKit."""
     return str(raw.get("schema_version", "")) == APPLICATION_KIT_V6
+
+
+def is_application_kit_v7(raw: dict[str, Any]) -> bool:
+    """True when a persisted result is the current v7 ApplicationKit."""
+    return str(raw.get("schema_version", "")) == APPLICATION_KIT_V7
 
 
 def _looks_like_phase1_result(raw: dict[str, Any]) -> bool:
@@ -1206,6 +1413,8 @@ def adapt_legacy_result(raw: dict[str, Any]) -> dict[str, Any]:
             "errors": errors,
             "warnings": warnings,
         },
+        "state": KitState.FAILED.value if fatal else KitState.COMPLETED.value,
+        "delivery_reports": {},
         "resume": resume,
         "cover_letter": cover,
         "answers": answers,
@@ -1214,6 +1423,23 @@ def adapt_legacy_result(raw: dict[str, Any]) -> dict[str, Any]:
         "linkedin_outreach": None,
         "warnings": ["Served from a legacy Phase 1 result record (pre-ApplicationKit)."],
     }
+
+
+def _with_delivery_projection(raw: dict[str, Any]) -> dict[str, Any]:
+    """Add v7 delivery semantics to an older payload without changing its schema."""
+    normalized = dict(raw)
+    normalized.setdefault("target_role", "")
+    normalized.setdefault("target_company", "")
+    # Old payloads had no calibrated target confidence.  ``None`` prevents a
+    # client from treating an absent signal as a real low-confidence score.
+    normalized.setdefault("target_confidence", None)
+    reports = _delivery_reports_from_dict(normalized)
+    normalized["delivery_reports"] = {kind.value: _delivery_report_to_dict(report) for kind, report in reports.items()}
+    # Historical records had no honest state machine. Infer from artifact
+    # delivery instead of trusting an old transport status that may have said
+    # completed while a primary document was rejected.
+    normalized["state"] = _infer_kit_state(reports).value
+    return normalized
 
 
 def normalize_persisted_result(raw: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -1225,8 +1451,10 @@ def normalize_persisted_result(raw: dict[str, Any] | None) -> dict[str, Any] | N
     """
     if raw is None:
         return None
-    if is_application_kit_v6(raw):
+    if is_application_kit_v7(raw):
         return raw
+    if is_application_kit_v6(raw):
+        return _with_delivery_projection(raw)
     if is_application_kit_v5(raw):
         normalized = dict(raw)
         match_report = normalized.get("match_report")
@@ -1241,10 +1469,13 @@ def normalize_persisted_result(raw: dict[str, Any] | None) -> dict[str, Any] | N
                     "accepted_actions": [],
                     "rejected_actions": [],
                     "unreachable_terms": [],
+                    "delivery_state": DocumentState.GENERATED_WITH_FALLBACK.value,
+                    "fallback_reason": "",
+                    "calibration_suppressed": [],
                 },
             )
             normalized["match_report"] = match_report
-        return normalized
+        return _with_delivery_projection(normalized)
     if is_application_kit_v4(raw):
         # A stored v4 kit is read as-is: it never had a match report or change
         # ledgers, and it is NOT rewritten into v5 (its schema_version stays v4).
@@ -1253,24 +1484,24 @@ def normalize_persisted_result(raw: dict[str, Any] | None) -> dict[str, Any] | N
         normalized.setdefault("match_report", None)
         normalized.setdefault("stage_timings", {"stages_ms": {}})
         normalized.setdefault("revision", 0)
-        return normalized
+        return _with_delivery_projection(normalized)
     if is_application_kit_v3(raw):
         normalized = dict(raw)
         normalized.setdefault("linkedin_outreach", None)
-        return normalized
+        return _with_delivery_projection(normalized)
     if is_application_kit_v2(raw):
         normalized = dict(raw)
         normalized.setdefault("interview_prep", None)
         normalized.setdefault("linkedin_outreach", None)
-        return normalized
+        return _with_delivery_projection(normalized)
     if is_application_kit_v1(raw):
         normalized = dict(raw)
         normalized.setdefault("job_fit", None)
         normalized.setdefault("interview_prep", None)
         normalized.setdefault("linkedin_outreach", None)
-        return normalized
+        return _with_delivery_projection(normalized)
     if _looks_like_phase1_result(raw):
-        return adapt_legacy_result(raw)
+        return _with_delivery_projection(adapt_legacy_result(raw))
     return {
         "schema_version": UNKNOWN_SCHEMA_VERSION,
         "engine_version": "",
@@ -1293,6 +1524,8 @@ def normalize_persisted_result(raw: dict[str, Any] | None) -> dict[str, Any] | N
             "errors": [],
             "warnings": ["Unrecognized result schema; not interpreted."],
         },
+        "state": KitState.FAILED.value,
+        "delivery_reports": {},
         "resume": None,
         "cover_letter": None,
         "answers": None,

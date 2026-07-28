@@ -19,3 +19,13 @@ def normalize_document_text(value: str) -> str:
     clean = _COMMA_HYPHEN_BREAK.sub("", clean)
     clean = _SAFE_SUFFIX_BREAK.sub("", clean)
     return re.sub(r"[ \t]+", " ", clean).strip()
+
+
+def strip_banned_dashes(value: str) -> str:
+    """Apply the single generated-document dash policy without changing facts."""
+    return (value or "").replace("—", ",").replace("–", " to ").replace("--", "-")
+
+
+def normalize_generated_prose(value: str) -> str:
+    """Normalize generated presentation fields and enforce the dash policy."""
+    return normalize_document_text(strip_banned_dashes(value))

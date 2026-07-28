@@ -40,6 +40,7 @@ Frequency does not affect impact: scoring is presence-based.
 # Change types produced from an instrumented plan decision, mapped 1:1.
 _DECISION_TYPE: dict[str, ChangeType] = {
     "summary": ChangeType.SUMMARY,
+    "headline": ChangeType.HEADLINE,
     "targeting_clause": ChangeType.TARGETING_CLAUSE,
     "bullet": ChangeType.BULLET,
     "skill": ChangeType.SKILL,
@@ -50,7 +51,13 @@ _DECISION_TYPE: dict[str, ChangeType] = {
 # one is a regeneration concern, not a single-unit toggle. Bullets, the summary,
 # and the targeting clause are fully reversible.
 _REVERSIBLE_TYPES: frozenset[ChangeType] = frozenset(
-    {ChangeType.SUMMARY, ChangeType.TARGETING_CLAUSE, ChangeType.BULLET, ChangeType.COVER_LETTER_PARAGRAPH}
+    {
+        ChangeType.SUMMARY,
+        ChangeType.HEADLINE,
+        ChangeType.TARGETING_CLAUSE,
+        ChangeType.BULLET,
+        ChangeType.COVER_LETTER_PARAGRAPH,
+    }
 )
 
 

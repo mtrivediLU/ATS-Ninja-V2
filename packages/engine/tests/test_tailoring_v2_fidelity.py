@@ -11,6 +11,7 @@ SOURCE_BULLET = (
     "maintained 100% uptime for Mission-Critical Reporting."
 )
 RAW_RESUME = f"""Alex Example
+Professional Experience
 Flosonics Medical | Data Engineer | Toronto, ON (Remote) | 2020 - Present
 - {SOURCE_BULLET}
 Education

@@ -16,6 +16,8 @@ import pytest
 from ats_engine.config import EngineSettings
 from ats_engine.evidence.resolver import resolve_requirements
 from ats_engine.generation.integration_planner import plan_placements
+from ats_engine.kit.change_actions import ChangeAction, apply_change_actions
+from ats_engine.kit.contract import ChangeType
 from ats_engine.kit.orchestrator import generate_application_kit
 from ats_engine.kit.serialization import application_kit_to_dict
 from ats_engine.models import ContactInfo, EvidenceLink, JDProfile, Profile, RequirementTerm
@@ -26,12 +28,12 @@ from ats_engine.validation.fidelity import BulletPair, validate_resume_fidelity
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "coo_it_specialist"
 EMPLOYERS = (
-    "Flosonics Medical",
-    "LoopX",
-    "City of Greater Sudbury",
-    "Minax Inc.",
-    "Mineral Exploration Research Centre",
-    "Tata Consultancy Services",
+    "Northstar Medical Systems",
+    "Harborline Analytics",
+    "City of Northbridge",
+    "Cedar Peak Software",
+    "Meridian Research Centre",
+    "Global Systems Consulting",
 )
 TITLES = (
     "Senior Software Engineer",
@@ -41,7 +43,7 @@ TITLES = (
     "Data Analyst",
     "Systems Analyst",
 )
-DATES = ("2022 - Present", "2020 - 2022", "2018 - 2020", "2016 - 2018", "2014 - 2016", "2012 - 2014")
+DATES = ("2021 - Present", "2019 - 2021", "2017 - 2019", "2015 - 2017", "2013 - 2015", "2011 - 2013")
 REQUIRED_TERMS = {
     "power query",
     "star schema",
@@ -121,20 +123,46 @@ def test_fixture_parses_all_source_structure_without_orphan_employers(profile) -
     assert tuple(experience.company for experience in profile.experiences) == EMPLOYERS
     assert tuple(experience.title for experience in profile.experiences) == TITLES
     assert tuple(experience.dates for experience in profile.experiences) == DATES
-    assert profile.experiences[0].location == "Toronto, ON (Remote)"
+    assert profile.experiences[0].location == "Harbor City, ON (Remote)"
     assert not profile.extraction_warnings
 
-    minax = next(experience for experience in profile.experiences if experience.company == "Minax Inc.")
+    minax = next(experience for experience in profile.experiences if experience.company == "Cedar Peak Software")
     assert any(
         "Cloud SQL Auth Proxy, configuring secure communication between services." in bullet for bullet in minax.bullets
     )
-    sudbury = next(experience for experience in profile.experiences if experience.company == "City of Greater Sudbury")
+    sudbury = next(experience for experience in profile.experiences if experience.company == "City of Northbridge")
     assert any("Zoom-Info and Lead Forensics" in bullet for bullet in sudbury.bullets)
 
     source_skills = [item for _heading, items in profile.source_skill_groups for item in items]
     assert "CSS3" in source_skills
     assert "CSS3." not in source_skills
     assert not any("pragmatic use" in item.casefold() for item in source_skills)
+
+
+def test_rejecting_a_coo_summary_rewrite_restores_source_and_keeps_v2_floor(
+    coo_kit, resume_text: str, job_description: str
+) -> None:  # type: ignore[no-untyped-def]
+    assert coo_kit.resume is not None and coo_kit.match_report is not None
+    summary = next(
+        record
+        for record in coo_kit.resume.change_ledger
+        if record.change_type is ChangeType.SUMMARY and record.operation.value == "rewritten"
+    )
+    result = apply_change_actions(
+        kit=coo_kit,
+        resume_text=resume_text,
+        job_description=job_description,
+        actions=[ChangeAction(summary.id, "reject")],
+        expected_revision=coo_kit.revision,
+    )
+
+    assert result.ok, result.errors
+    assert result.kit.resume is not None and result.kit.match_report is not None
+    assert summary.original_text in result.kit.resume.document.summary
+    assert result.kit.resume.validation.fatal is False
+    assert result.kit.match_report.score_basis == "ats_v2"
+    assert result.kit.match_report.tailored_ats_match is not None
+    assert result.kit.match_report.tailored_ats_match.score >= result.kit.match_report.original_ats_match.score
 
 
 def test_fixture_extracts_only_real_phrase_requirements(
@@ -181,7 +209,7 @@ def test_fixture_end_to_end_optimizes_without_losing_source_facts(
 
     candidate_text = coo_kit.resume.text
     assert candidate_text
-    for fact in (*EMPLOYERS, *TITLES, *DATES, "Toronto, ON (Remote)", "team of four engineers", "100% uptime"):
+    for fact in (*EMPLOYERS, *TITLES, *DATES, "Harbor City, ON (Remote)", "team of four engineers", "100% uptime"):
         assert fact in candidate_text
     for credential_id in ("MS-30001", "MS-40002", "AZ-90003", "SF-10004"):
         assert credential_id in candidate_text

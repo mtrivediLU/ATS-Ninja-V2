@@ -1,0 +1,29 @@
+ClaimSecure
+IT Administrator
+
+The IT Administrator maintains and supports the company's core infrastructure, business systems, and end-user technology. This role partners with the ClaimSecure operations team to keep services reliable, secure, documented, and recoverable.
+
+RESPONSIBILITIES
+
+- Administer Microsoft 365, Active Directory, Windows Server, and user access.
+- Monitor backups, virtualization, VMware hosts, and network availability.
+- Resolve helpdesk incidents and document recurring technical issues.
+- Maintain endpoint security, patching, asset inventory, and disaster-recovery procedures.
+- Support business applications, vendor integrations, and secure data transfers.
+- Build operational dashboards and reports for service-level trends.
+
+REQUIRED QUALIFICATIONS
+
+- Experience administering Active Directory and Windows Server.
+- Practical Microsoft 365 administration and troubleshooting experience.
+- Knowledge of networking, DNS, DHCP, VPNs, firewalls, and endpoint security.
+- Experience with VMware, backups, disaster recovery, and helpdesk workflows.
+- Clear documentation and stakeholder communication skills.
+
+PREFERRED QUALIFICATIONS
+
+- PowerShell or Python automation experience.
+- Familiarity with SQL reporting and dashboard development.
+
+To apply, send a resume to careers@claimsecure.com.
+ClaimSecure is committed to an inclusive and accessible recruitment process.

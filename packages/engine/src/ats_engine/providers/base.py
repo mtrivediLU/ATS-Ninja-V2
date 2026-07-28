@@ -70,8 +70,12 @@ def generate_text(
 
     try:
         text = _clean(provider.complete(prompt))
-    except Exception:
-        logger.exception("LLM text generation failed.")
+    except Exception as exc:
+        # Provider exceptions are untrusted too: SDKs and test doubles may
+        # include prompt fragments, candidate content, URLs, or credentials in
+        # their message. Log only the exception type and preserve deterministic
+        # fallback behavior.
+        logger.warning("LLM text generation failed (%s).", type(exc).__name__)
         return ""
 
     if text:
@@ -106,8 +110,12 @@ def generate_json(
 
         try:
             raw = _clean(provider.complete(current_prompt))
-        except Exception:
-            logger.exception("LLM JSON generation failed on attempt %s.", attempt)
+        except Exception as exc:
+            logger.warning(
+                "LLM JSON generation failed on attempt %s (%s).",
+                attempt,
+                type(exc).__name__,
+            )
             return None
 
         last_raw = raw

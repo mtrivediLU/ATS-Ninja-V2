@@ -61,7 +61,7 @@ async def read_kit(kit_id: UUID, session: SessionDep) -> KitRead:
 
 @router.post("/{kit_id}/change-actions", response_model=KitRead)
 async def submit_change_actions(kit_id: UUID, payload: ChangeActionRequest, session: SessionDep) -> KitRead:
-    """Apply a batch of accept/reject/restore actions to a completed v5 or v6 kit.
+    """Apply a batch of accept/reject/restore actions to a delivered v5-v7 kit.
 
     Deterministic and LLM-free. Returns the updated kit (with an incremented
     revision). A truth-grounding removal can never be reverted (422); a stale
@@ -75,7 +75,7 @@ async def submit_change_actions(kit_id: UUID, payload: ChangeActionRequest, sess
     if outcome.status == "not_completed":
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Change actions require a completed ApplicationKit v5 or v6 result.",
+            detail="Change actions require a completed or partially completed ApplicationKit v5-v7 result.",
         )
     if outcome.status == "conflict":
         raise HTTPException(

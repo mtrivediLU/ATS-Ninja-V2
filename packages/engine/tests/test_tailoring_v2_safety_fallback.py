@@ -10,7 +10,8 @@ from ats_engine.evidence.resolver import resolve_requirements
 from ats_engine.generation.optimizer import optimize
 from ats_engine.generation.pipeline import run_pipeline, validate_pipeline_result
 from ats_engine.generation.planning import build_resume_plan
-from ats_engine.models import Mode
+from ats_engine.kit.contract import DocumentState
+from ats_engine.models import Mode, PlanDecision
 from ats_engine.parsing.job_description import parse_jd
 from ats_engine.parsing.resume import build_profile
 from ats_engine.scoring.ats_v2 import AtsScoreV2
@@ -73,8 +74,8 @@ def test_zero_requirement_v2_restores_source_bullet_and_runs_raw_fidelity_gate()
     assert "resume: fidelity: unsupported metric introduced: 20" in errors
 
 
-def test_low_score_projection_falls_back_to_safe_source_plan(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    """Score rejection must never re-expose the legacy (possibly LLM) plan."""
+def test_low_score_projection_requires_review_without_reexposing_unsafe_plan(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """An internally regressive floor is withheld honestly, never mislabeled."""
     resume_text = """Avery Doe
 TECHNICAL SKILLS
 Python
@@ -100,6 +101,17 @@ Required qualifications:
     )
     unsafe_base_plan.summary = "Invented 10 years of Rust leadership."
     unsafe_base_plan.experience[0].bullets = ["Invented Rust reporting for a new employer."]
+    unsafe_base_plan.plan_decisions = [
+        PlanDecision(
+            kind="bullet",
+            location_id="resume::exp0::bullet0",
+            original_text="Built Python reports for finance users.",
+            tailored_text="Invented Rust reporting for a new employer.",
+            operation="rewritten",
+            reason="Unsafe provider proposal.",
+            matched_keywords=["Rust"],
+        )
+    ]
 
     scores = iter(
         (
@@ -114,6 +126,52 @@ Required qualifications:
     assert plan is not unsafe_base_plan
     assert plan.experience[0].bullets == ["Built Python reports for finance users."]
     assert "Invented" not in plan.summary
+    assert all("Invented" not in decision.tailored_text for decision in plan.plan_decisions)
     assert trace.rejected_actions
     assert trace.rejected_actions[0].action == "source_content_plan"
-    assert "safe source-content fallback" in trace.rejected_actions[0].reason
+    assert "requires review" in trace.rejected_actions[0].reason
+    assert trace.delivery_state is DocumentState.NEEDS_INPUT_REVIEW
+    assert "did not preserve the original ATS score" in trace.fallback_reason
+
+
+def test_delivery_first_kill_switch_uses_pr21_score_only_path(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """The rollout flag skips calibration and quality proposals, not just metadata."""
+    resume_text = """Avery Doe
+TECHNICAL SKILLS
+Python
+PROFESSIONAL EXPERIENCE
+Cedar Labs
+Analyst 2020 - 2024
+- Built Python reports for finance users.
+"""
+    job_description = """Job Title: Python Analyst
+Company: Example
+Required qualifications:
+- Python
+"""
+    profile = build_profile(resume_text)
+    jd_profile = parse_jd(job_description, profile=profile, tailoring_v2=True)
+    links = resolve_requirements(jd_profile.requirements, profile, resume_text)
+    base_plan = build_resume_plan(
+        contacts=profile.contact,
+        jd_profile=jd_profile,
+        profile=profile,
+        provider=None,
+    )
+
+    def fail_quality_stage(*_args: object, **_kwargs: object) -> str:
+        raise AssertionError("quality stage ran")
+
+    monkeypatch.setattr(optimizer_module, "rewrite_summary", fail_quality_stage)
+
+    _plan, trace = optimize(
+        profile,
+        jd_profile,
+        jd_profile.requirements,
+        links,
+        base_plan,
+        delivery_first=False,
+    )
+
+    assert all(not action.startswith(("quality:", "ai:")) for action in trace.accepted_actions)
+    assert trace.calibration_suppressed == []

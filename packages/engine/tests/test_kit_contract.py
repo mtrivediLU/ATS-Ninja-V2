@@ -17,6 +17,7 @@ from ats_engine import (
     is_application_kit_v4,
     is_application_kit_v5,
     is_application_kit_v6,
+    is_application_kit_v7,
     normalize_persisted_result,
 )
 from ats_engine.kit.serialization import LEGACY_SCHEMA_VERSION, UNKNOWN_SCHEMA_VERSION
@@ -42,7 +43,7 @@ def _kit(mode: Mode = Mode.RESUME_AND_COVER) -> ApplicationKit:
 
 
 def test_schema_version_is_explicit_and_versioned() -> None:
-    assert SCHEMA_VERSION == "application-kit/v6"
+    assert SCHEMA_VERSION == "application-kit/v7"
     kit = _kit()
     assert kit.schema_version == SCHEMA_VERSION
     assert kit.engine_version  # populated
@@ -198,12 +199,54 @@ PHASE1_RESULT = {
 }
 
 
-def test_v6_result_is_detected_and_passed_through() -> None:
+def test_v7_result_is_detected_and_passed_through() -> None:
     kit = _kit()
     data = application_kit_to_dict(kit)
-    assert data["schema_version"] == "application-kit/v6"
-    assert is_application_kit_v6(data)
+    assert data["schema_version"] == "application-kit/v7"
+    assert is_application_kit_v7(data)
     assert normalize_persisted_result(data) == data
+
+
+def test_v6_result_remains_readable_with_inferred_delivery_state() -> None:
+    data = application_kit_to_dict(_kit())
+    data["schema_version"] = "application-kit/v6"
+    for field in ("target_role", "target_company", "target_confidence", "state", "delivery_reports"):
+        data.pop(field, None)
+
+    assert is_application_kit_v6(data)
+    normalized = normalize_persisted_result(data)
+
+    assert normalized is not None
+    assert normalized["schema_version"] == "application-kit/v6"
+    assert normalized["state"] == "completed"
+    assert normalized["delivery_reports"]["resume"]["state"] == "generated"
+    assert normalized["delivery_reports"]["cover_letter"]["state"] == "generated"
+    restored = application_kit_from_dict(normalized)
+    assert restored.schema_version == "application-kit/v6"
+    assert restored.state.value == "completed"
+
+
+def test_v1_to_v6_projection_uses_requested_intent_for_missing_primary_artifacts() -> None:
+    data = application_kit_to_dict(_kit())
+    data["schema_version"] = "application-kit/v6"
+    data["resolved_mode"] = "RC"
+    data["cover_letter"] = None
+    for field in ("target_role", "target_company", "target_confidence", "state", "delivery_reports"):
+        data.pop(field, None)
+
+    normalized = normalize_persisted_result(data)
+
+    assert normalized is not None
+    assert normalized["target_confidence"] is None
+    assert normalized["delivery_reports"]["resume"]["state"] == "generated"
+    assert normalized["delivery_reports"]["cover_letter"]["state"] == "failed"
+    assert normalized["state"] == "partially_completed"
+
+    resume_only = dict(data)
+    resume_only["resolved_mode"] = "R"
+    normalized_resume_only = normalize_persisted_result(resume_only)
+    assert normalized_resume_only is not None
+    assert normalized_resume_only["delivery_reports"]["cover_letter"]["state"] == "not_requested"
 
 
 def test_v5_result_remains_readable_with_v6_defaults() -> None:

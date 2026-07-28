@@ -99,3 +99,8 @@ def test_engine_settings_from_env_overrides() -> None:
     assert settings.ollama_base_url == "http://ollama:11434"  # trailing slash trimmed
     assert settings.ollama_model == "qwen2.5"
     assert settings.llm_cache_enabled is False
+
+
+def test_engine_settings_delivery_first_kill_switch() -> None:
+    assert EngineSettings.from_env({"ENGINE_DELIVERY_FIRST": "0"}).delivery_first is False
+    assert EngineSettings.from_env({"ENGINE_DELIVERY_FIRST": "off"}).delivery_first is False

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import uuid
+from copy import deepcopy
 
 import httpx
 import pytest
@@ -169,6 +170,149 @@ async def test_export_for_unavailable_artifact_returns_client_error(client: http
     assert response.status_code == 422
 
 
+async def test_delivered_resume_remains_exportable_from_partially_completed_kit(
+    client: httpx.AsyncClient,
+    sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    kit_id = await _create_completed_kit(client)
+    async with sessionmaker() as session:
+        kit = await session.get(Kit, uuid.UUID(kit_id))
+        assert kit is not None
+        kit.status = KitStatus.PARTIALLY_COMPLETED
+        await session.commit()
+
+    pdf = await client.post(
+        "/api/v1/document-exports/pdf",
+        json={"kit_id": kit_id, "artifact_type": "resume", "template_id": "classic"},
+    )
+    docx = await client.post(
+        "/api/v1/document-exports/docx",
+        json={"kit_id": kit_id, "artifact_type": "resume", "template_id": "classic"},
+    )
+    assert pdf.status_code == 200
+    assert docx.status_code == 200
+    assert "jordan rivera" in _pdf_text(pdf.content).lower()
+    assert "jordan rivera" in _docx_text(docx.content).lower()
+
+
+async def test_failed_v7_artifact_is_not_exported_even_if_stale_text_exists(
+    client: httpx.AsyncClient,
+    sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    kit_id = await _create_completed_kit(client)
+    async with sessionmaker() as session:
+        kit = await session.get(Kit, uuid.UUID(kit_id))
+        assert kit is not None and kit.result is not None
+        changed = dict(kit.result)
+        reports = dict(changed["delivery_reports"])
+        reports["resume"] = {**reports.get("resume", {}), "state": "failed"}
+        changed["delivery_reports"] = reports
+        changed["state"] = "partially_completed"
+        kit.result = changed
+        kit.status = KitStatus.PARTIALLY_COMPLETED
+        await session.commit()
+
+    response = await client.post(
+        "/api/v1/document-exports/pdf",
+        json={"kit_id": kit_id, "artifact_type": "resume", "template_id": "classic"},
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize("endpoint", ["pdf", "docx"])
+async def test_failed_artifact_blocks_local_edits_too(
+    client: httpx.AsyncClient,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    endpoint: str,
+) -> None:
+    kit_id = await _create_completed_kit(client)
+    async with sessionmaker() as session:
+        kit = await session.get(Kit, uuid.UUID(kit_id))
+        assert kit is not None and kit.result is not None
+        changed = dict(kit.result)
+        reports = dict(changed["delivery_reports"])
+        reports["resume"] = {**reports["resume"], "state": "failed"}
+        changed["delivery_reports"] = reports
+        changed["state"] = "needs_input_review"
+        kit.result = changed
+        kit.status = KitStatus.NEEDS_INPUT_REVIEW
+        await session.commit()
+
+    response = await client.post(
+        f"/api/v1/document-exports/{endpoint}",
+        json={
+            "kit_id": kit_id,
+            "artifact_type": "resume",
+            "template_id": "classic",
+            "content_source": "local_edit",
+            "local_edit_text": "Unsafe stale local content",
+        },
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize("endpoint", ["pdf", "docx"])
+async def test_needs_review_kit_exports_only_its_delivered_sibling(
+    client: httpx.AsyncClient,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    endpoint: str,
+) -> None:
+    kit_id = await _create_completed_kit(client)
+    async with sessionmaker() as session:
+        kit = await session.get(Kit, uuid.UUID(kit_id))
+        assert kit is not None and kit.result is not None
+        changed = dict(kit.result)
+        reports = dict(changed["delivery_reports"])
+        reports["resume"] = {**reports["resume"], "state": "generated"}
+        reports["cover_letter"] = {**reports["cover_letter"], "state": "needs_input_review"}
+        changed["delivery_reports"] = reports
+        changed["state"] = "needs_input_review"
+        kit.result = changed
+        kit.status = KitStatus.NEEDS_INPUT_REVIEW
+        await session.commit()
+
+    delivered = await client.post(
+        f"/api/v1/document-exports/{endpoint}",
+        json={"kit_id": kit_id, "artifact_type": "resume", "template_id": "classic"},
+    )
+    withheld = await client.post(
+        f"/api/v1/document-exports/{endpoint}",
+        json={"kit_id": kit_id, "artifact_type": "cover_letter", "template_id": "classic"},
+    )
+    assert delivered.status_code == 200
+    assert withheld.status_code == 422
+
+
+async def test_rejected_legacy_v6_artifact_is_not_exported_when_stale_text_exists(
+    client: httpx.AsyncClient,
+    sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    kit_id = await _create_completed_kit(client)
+    async with sessionmaker() as session:
+        kit = await session.get(Kit, uuid.UUID(kit_id))
+        assert kit is not None and kit.result is not None
+        changed = dict(kit.result)
+        changed["schema_version"] = "application-kit/v6"
+        changed.pop("state", None)
+        changed.pop("delivery_reports", None)
+        resume = dict(changed["resume"])
+        resume_validation = dict(resume["validation"])
+        resume_validation.update({"status": "rejected", "fatal": True})
+        resume["validation"] = resume_validation
+        changed["resume"] = resume
+        validation = dict(changed["validation"])
+        validation.update({"passed": False, "fatal": True})
+        changed["validation"] = validation
+        kit.result = changed
+        await session.commit()
+
+    response = await client.post(
+        "/api/v1/document-exports/pdf",
+        json={"kit_id": kit_id, "artifact_type": "resume", "template_id": "classic"},
+    )
+    assert response.status_code == 422
+
+
 async def test_export_for_unknown_kit_returns_404(client: httpx.AsyncClient) -> None:
     response = await client.post(
         "/api/v1/document-exports/pdf",
@@ -301,3 +445,40 @@ async def test_pdf_and_docx_exports_reflect_the_same_current_revision(client: ht
     assert "jordan rivera" in docx_text
     assert "acme analytics" in pdf_text
     assert "acme analytics" in docx_text
+
+
+async def test_pdf_and_docx_exports_preserve_certification_credential_ids(
+    client: httpx.AsyncClient,
+    sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    kit_id = await _create_completed_kit(client)
+    credential_id = "SYNTHETIC-CREDENTIAL-042"
+    async with sessionmaker() as session:
+        kit = await session.get(Kit, uuid.UUID(kit_id))
+        assert kit is not None and kit.result is not None
+        changed = deepcopy(kit.result)
+        document = changed["resume"]["document"]
+        document["certifications"] = [
+            {
+                "name": "Synthetic Analytics Certification",
+                "date": "2026",
+                "link": "",
+                "credential_id": credential_id,
+            }
+        ]
+        kit.result = changed
+        await session.commit()
+
+    pdf_response = await client.post(
+        "/api/v1/document-exports/pdf",
+        json={"kit_id": kit_id, "artifact_type": "resume", "template_id": "classic"},
+    )
+    docx_response = await client.post(
+        "/api/v1/document-exports/docx",
+        json={"kit_id": kit_id, "artifact_type": "resume", "template_id": "classic"},
+    )
+
+    assert pdf_response.status_code == 200
+    assert docx_response.status_code == 200
+    assert credential_id in _pdf_text(pdf_response.content)
+    assert credential_id in _docx_text(docx_response.content)

@@ -27,7 +27,7 @@ from app.schemas import (
     ApplicationKitResponse,
     CoverLetterDocumentResponse,
     DocumentExportRequest,
-    KitStatus,
+    DocumentStateResponse,
     ResumeDocumentResponse,
 )
 
@@ -134,8 +134,12 @@ def build_docx_export(kit: Kit, payload: DocumentExportRequest) -> RenderedDocxE
 
 
 def _resolve(kit: Kit, payload: DocumentExportRequest) -> tuple[str, str, _ResolvedArtifact]:
-    if kit.status != KitStatus.COMPLETED or not kit.result:
-        raise DocumentExportError("This kit has no completed result to export yet.")
+    # A persisted transport status is not an artifact authorization decision.
+    # In particular, a v7 ``needs_input_review`` kit may still have a safely
+    # delivered sibling document.  The selected artifact's delivery report is
+    # the authoritative gate below.
+    if not kit.result:
+        raise DocumentExportError("This kit has no result to export yet.")
 
     result = ApplicationKitResponse.model_validate(normalize_persisted_result(kit.result))
     company, role = _kit_target(result)
@@ -148,6 +152,7 @@ def _resolve(kit: Kit, payload: DocumentExportRequest) -> tuple[str, str, _Resol
 
 
 def _resolve_resume(result: ApplicationKitResponse, payload: DocumentExportRequest) -> _ResolvedArtifact:
+    _require_delivered_report(result, "resume")
     if payload.content_source == "local_edit":
         text = payload.local_edit_text.strip()
         if not text:
@@ -164,6 +169,7 @@ def _resolve_resume(result: ApplicationKitResponse, payload: DocumentExportReque
 
 
 def _resolve_cover_letter(result: ApplicationKitResponse, payload: DocumentExportRequest) -> _ResolvedArtifact:
+    _require_delivered_report(result, "cover_letter")
     if payload.content_source == "local_edit":
         text = payload.local_edit_text.strip()
         if not text:
@@ -181,6 +187,18 @@ def _resolve_cover_letter(result: ApplicationKitResponse, payload: DocumentExpor
     return _ResolvedArtifact(candidate_name="", document=None, plain_text=result.cover_letter.text)
 
 
+def _require_delivered_report(result: ApplicationKitResponse, artifact: str) -> None:
+    """Honor explicit v7 delivery state while retaining legacy compatibility."""
+    report = result.delivery_reports.get(artifact)
+    if report is None:
+        return
+    if report.state not in {
+        DocumentStateResponse.GENERATED,
+        DocumentStateResponse.GENERATED_WITH_FALLBACK,
+    }:
+        raise DocumentExportError(f"This kit has no delivered {artifact.replace('_', ' ')} to export.")
+
+
 def _kit_target(result: ApplicationKitResponse) -> tuple[str, str]:
     """Resolve target company/role the same way the frontend's kitTarget() does.
 
@@ -195,12 +213,14 @@ def _kit_target(result: ApplicationKitResponse) -> tuple[str, str]:
     cover_document = result.cover_letter.document if result.cover_letter else None
 
     company = (
-        (draft.target_company if draft else "")
+        result.target_company
+        or (draft.target_company if draft else "")
         or (company_ref.excerpt if company_ref else "")
         or (cover_document.recipient_company if cover_document else "")
     )
     role = (
-        (draft.target_role if draft else "")
+        result.target_role
+        or (draft.target_role if draft else "")
         or (role_ref.excerpt if role_ref else "")
         or (cover_document.target_role if cover_document else "")
     )
@@ -234,7 +254,15 @@ def _to_engine_resume_document(document: ResumeDocumentResponse) -> ResumeDocume
             )
             for entry in document.education
         ],
-        certifications=[ResumeCertificationEntry(item.name, item.date, item.link) for item in document.certifications],
+        certifications=[
+            ResumeCertificationEntry(
+                name=item.name,
+                date=item.date,
+                link=item.link,
+                credential_id=item.credential_id,
+            )
+            for item in document.certifications
+        ],
         remaining_sections=[(section.heading, list(section.lines)) for section in document.remaining_sections],
     )
 

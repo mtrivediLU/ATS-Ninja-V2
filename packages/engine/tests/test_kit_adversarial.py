@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from ats_engine import ApplicationKit, ArtifactStatus, ClaimStatus, ClaimType, generate_application_kit
@@ -325,10 +327,20 @@ def test_audit_target_role_cannot_be_recast_as_candidate_history() -> None:
 
 
 def test_audit_resume_summary_bypass_is_absent_from_text_and_latex() -> None:
-    summary = (
+    fabricated_text = (
         "I was a founding engineer for an enterprise platform. "
         "I focus on clear communication, careful delivery, maintainable systems, and honest scope. "
         "I work closely with stakeholders and document decisions so teams can build on the work with confidence."
+    )
+    # The summary planner now requires a typed response. Keep the attack valid
+    # at that boundary so it reaches the independent ApplicationKit truth gate;
+    # malformed plain text would merely test the earlier deterministic fallback.
+    summary = json.dumps(
+        {
+            "source_span": "resume:summary",
+            "action": "rewrite_summary",
+            "text": fabricated_text,
+        }
     )
     provider = FabricatingProvider(summary=summary)
     kit = generate_application_kit(

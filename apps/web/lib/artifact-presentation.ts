@@ -1,4 +1,4 @@
-import type { ArtifactValidation, Claim } from "@/lib/api-types";
+import type { ArtifactValidation, Claim, DocumentState } from "@/lib/api-types";
 import type { ArtifactPresentationState, EvidenceState } from "@/lib/status";
 
 export type TrustCounts = {
@@ -45,8 +45,22 @@ export function artifactPresentationState(
   validation: ArtifactValidation,
   text: string,
   manuallyEdited = false,
+  deliveryState?: DocumentState,
 ): ArtifactPresentationState {
   if (manuallyEdited) return "edited";
+  if (deliveryState === "generated_with_fallback") return text.trim() ? "generated-with-fallback" : "empty";
+  if (deliveryState === "needs_input_review") return "needs-input-review";
+  if (deliveryState === "failed") return "failed";
+  if (deliveryState === "not_requested") return "not-requested";
+  // A v7 delivery report is authoritative. In particular, do not hide a
+  // delivered document because a legacy validation string was also retained.
+  if (deliveryState === "generated") {
+    if (!text.trim()) return "empty";
+    if (validation.status === "repaired" || validation.warnings.length > 0 || validation.errors.length > 0) {
+      return "warning";
+    }
+    return "generated";
+  }
   if (validation.fatal || validation.status === "rejected") return "withheld";
   if (!text.trim()) return "empty";
   if (validation.status === "repaired" || validation.warnings.length > 0 || validation.errors.length > 0) return "warning";

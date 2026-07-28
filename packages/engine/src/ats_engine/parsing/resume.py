@@ -9,8 +9,12 @@ from ats_engine.parsing.line_refs import number_lines, render_numbered_lines, re
 from ats_engine.providers.base import LLMProvider, generate_json
 
 # Cache namespace for parsed profiles. Bump when parsing behavior changes so
-# stale cached profiles are not served after a logic update.
-PROFILE_CACHE_VERSION = "profile-v5-tailoring-v2-structure-summary-and-wraps"
+# stale cached profiles are not served after a logic update. Any change to the
+# heuristic parser below (header classification, continuation joining,
+# location/company splitting, etc.) MUST bump this constant -- otherwise a
+# resume already cached under the old logic keeps being served unchanged
+# after the fix ships.
+PROFILE_CACHE_VERSION = "profile-v8-header-window"
 
 
 class ExtractionSuspectError(RuntimeError):
@@ -132,6 +136,13 @@ def extract_profile(resume_text: str, provider: LLMProvider | None = None) -> Pr
 
     if not _looks_usable(data) or _is_materially_less_complete(data, heuristic_data):
         data = heuristic_data
+    else:
+        # The deterministic parse is an immutable evidence floor. Provider
+        # output may improve the structure of an entry the source parser
+        # already identified, but it may not replace or add candidate facts.
+        # This boundary is deliberately earlier than ApplicationKit grounding:
+        # structured resume fields are candidate evidence themselves.
+        data = _merge_provider_data(heuristic_data, data, text)
 
     return _build_profile(data, text)
 
@@ -207,19 +218,320 @@ def _is_materially_less_complete(candidate: Any, baseline: dict[str, Any]) -> bo
     return False
 
 
+_CONTACT_FIELDS = ("name", "email", "phone", "linkedin", "website", "location")
+_EXPERIENCE_FIELDS = ("company", "title", "location", "dates")
+_EDUCATION_FIELDS = ("institution", "degree", "location", "dates")
+_CERTIFICATION_FIELDS = ("name", "date", "link", "credential_id")
+
+
+def _merge_provider_data(
+    baseline: dict[str, Any],
+    candidate: dict[str, Any],
+    source_text: str,
+) -> dict[str, Any]:
+    """Merge source-backed provider structure onto the deterministic floor.
+
+    The provider is not an evidence source. Unmatched provider records are
+    discarded, existing deterministic values are never overwritten, and a
+    provider value can fill a blank only when it occurs in the source context
+    for that exact deterministic record.
+    """
+    sections = _split_into_sections([line.strip() for line in source_text.splitlines()])
+    merged = dict(baseline)
+    merged["contact"] = _merge_provider_contact(
+        baseline.get("contact"),
+        candidate.get("contact"),
+        source_text,
+    )
+    merged["experiences"] = _merge_provider_entries(
+        baseline.get("experiences"),
+        candidate.get("experiences"),
+        sections.get("experience", []),
+        identity_fields=("company", "title", "dates"),
+        value_fields=_EXPERIENCE_FIELDS,
+    )
+    merged["education"] = _merge_provider_entries(
+        baseline.get("education"),
+        candidate.get("education"),
+        sections.get("education", []),
+        identity_fields=("institution", "degree", "dates"),
+        value_fields=_EDUCATION_FIELDS,
+    )
+    merged["certifications"] = _merge_provider_entries(
+        baseline.get("certifications"),
+        candidate.get("certifications"),
+        sections.get("certifications", []),
+        identity_fields=("name",),
+        value_fields=_CERTIFICATION_FIELDS,
+    )
+    merged["skills_listed"] = _merge_provider_skills(
+        baseline.get("skills_listed"),
+        candidate.get("skills_listed"),
+        baseline,
+        sections,
+        source_text,
+    )
+    # An existing summary is already recovered verbatim by the deterministic
+    # parser. A provider-authored paraphrase is prose, not resume evidence.
+    merged["summary_text"] = str(baseline.get("summary_text", "") or "")
+    return merged
+
+
+def _dict_value(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _dict_entries(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [dict(entry) for entry in value if isinstance(entry, dict)]
+
+
+def _merge_provider_contact(baseline: Any, candidate: Any, source_text: str) -> dict[str, Any]:
+    merged = _dict_value(baseline)
+    proposed = _dict_value(candidate)
+    contact_context = _contact_source_context(source_text)
+    for field in _CONTACT_FIELDS:
+        if str(merged.get(field, "") or "").strip():
+            continue
+        # Name parsing has no safe provider-only fill: an employer, school, or
+        # headline in the header is also literal text but is not the candidate's
+        # name. The deterministic parser owns that identity decision.
+        if field == "name":
+            continue
+        value = _source_backed_provider_field(field, proposed.get(field), contact_context)
+        if value:
+            merged[field] = value
+    return merged
+
+
+def _contact_source_context(source_text: str) -> str:
+    """Return only the resume header where candidate contact facts can occur."""
+    lines: list[str] = []
+    for raw_line in source_text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if _detect_heading(line) is not None:
+            break
+        lines.append(line)
+        if len(lines) >= 10:
+            break
+    return "\n".join(lines)
+
+
+def _merge_provider_entries(
+    baseline: Any,
+    candidate: Any,
+    source_lines: list[str],
+    *,
+    identity_fields: tuple[str, ...],
+    value_fields: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    merged = _dict_entries(baseline)
+    proposed = _dict_entries(candidate)
+    contexts = _entry_source_contexts(source_lines, merged, identity_fields)
+
+    for entry in proposed:
+        match_index = _matching_source_entry(entry, merged, contexts, identity_fields)
+        if match_index is None:
+            # A literal phrase somewhere in the resume does not prove that it
+            # belongs to a new role, school, or certification. Only a provider
+            # record tied to a deterministic source record may be retained.
+            continue
+        target = merged[match_index]
+        context = contexts[match_index]
+        for field in value_fields:
+            # Provider output cannot establish the identity of a role, school,
+            # degree, or credential. Those fields are the match anchors owned
+            # by deterministic parsing; only typed metadata gaps may be filled.
+            if field in identity_fields:
+                continue
+            if str(target.get(field, "") or "").strip():
+                continue
+            value = _source_backed_provider_field(field, entry.get(field), context)
+            if value:
+                target[field] = value
+
+        target_bullets = _string_list(target.get("bullets"))
+        seen_bullets = {_normalize(_clean_bullet(value)) for value in target_bullets}
+        for raw_bullet in _string_list(entry.get("bullets")):
+            bullet = _clean_bullet(raw_bullet)
+            if not bullet or not _source_contains_exact(context, bullet):
+                continue
+            normalized = _normalize(bullet)
+            if normalized not in seen_bullets:
+                target_bullets.append(bullet)
+                seen_bullets.add(normalized)
+        if target_bullets or "bullets" in target:
+            target["bullets"] = target_bullets
+    return merged
+
+
+def _entry_source_contexts(
+    source_lines: list[str],
+    entries: list[dict[str, Any]],
+    identity_fields: tuple[str, ...],
+) -> list[str]:
+    """Map deterministic entries to their local source spans in source order."""
+    starts: list[int | None] = []
+    cursor = 0
+    for entry in entries:
+        anchors = [
+            str(entry.get(field, "") or "").strip()
+            for field in identity_fields
+            if str(entry.get(field, "") or "").strip()
+        ]
+        start = next(
+            (
+                index
+                for index in range(cursor, len(source_lines))
+                if any(_source_contains_exact(source_lines[index], anchor) for anchor in anchors)
+            ),
+            None,
+        )
+        starts.append(start)
+        if start is not None:
+            cursor = start + 1
+
+    contexts: list[str] = []
+    for index, start in enumerate(starts):
+        if start is None:
+            contexts.append("")
+            continue
+        next_start = next(
+            (candidate for candidate in starts[index + 1 :] if candidate is not None),
+            len(source_lines),
+        )
+        contexts.append("\n".join(source_lines[start:next_start]))
+    return contexts
+
+
+def _matching_source_entry(
+    proposed: dict[str, Any],
+    baseline: list[dict[str, Any]],
+    contexts: list[str],
+    identity_fields: tuple[str, ...],
+) -> int | None:
+    best_index: int | None = None
+    best_score = 0
+    for index, source_entry in enumerate(baseline):
+        context = contexts[index]
+        if not context:
+            continue
+        score = 0
+        for field in identity_fields:
+            proposed_value = _source_backed_text(proposed.get(field), context)
+            source_value = str(source_entry.get(field, "") or "").strip()
+            if proposed_value and source_value and _same_source_fact(proposed_value, source_value):
+                score += 1
+        if score > best_score:
+            best_index = index
+            best_score = score
+    return best_index
+
+
+def _same_source_fact(left: str, right: str) -> bool:
+    normalized_left = _normalize(left).strip()
+    normalized_right = _normalize(right).strip()
+    if not normalized_left or not normalized_right:
+        return False
+    return normalized_left == normalized_right or (
+        min(len(normalized_left), len(normalized_right)) >= 4
+        and (normalized_left in normalized_right or normalized_right in normalized_left)
+    )
+
+
+def _merge_provider_skills(
+    baseline_skills: Any,
+    candidate_skills: Any,
+    baseline: dict[str, Any],
+    sections: dict[str, list[str]],
+    source_text: str,
+) -> list[str]:
+    skills = _string_list(baseline_skills)
+    evidence_parts = [
+        _source_summary_text(source_text),
+        *sections.get("skills", []),
+        *sections.get("projects", []),
+    ]
+    for entry in _dict_entries(baseline.get("experiences")) + _dict_entries(baseline.get("education")):
+        evidence_parts.extend(_string_list(entry.get("bullets")))
+    for certification in _dict_entries(baseline.get("certifications")):
+        evidence_parts.append(str(certification.get("name", "") or ""))
+    evidence_text = "\n".join(evidence_parts)
+
+    for skill in _string_list(candidate_skills):
+        if term_in_text_affirmative(skill, evidence_text):
+            skills.append(skill)
+    return _dedupe_terms(skills)
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _source_backed_text(value: Any, source_text: str) -> str:
+    text = str(value or "").strip()
+    return text if text and _source_contains_exact(source_text, text) else ""
+
+
+def _source_backed_provider_field(field: str, value: Any, source_text: str) -> str:
+    """Validate the literal value and its field-specific source shape."""
+    text = _source_backed_text(value, source_text)
+    if not text:
+        return ""
+    if field == "email":
+        return text if _EMAIL.fullmatch(text) is not None else ""
+    if field == "phone":
+        return text if _PHONE.fullmatch(text) is not None else ""
+    if field == "linkedin":
+        return text if _LINKEDIN.fullmatch(text) is not None else ""
+    if field in {"website", "link"}:
+        return text if _URL.fullmatch(text) is not None else ""
+    if field == "dates":
+        return text if _DATE_RANGE.fullmatch(text) is not None else ""
+    if field == "date":
+        return text if _YEAR.search(text) is not None else ""
+    if field == "credential_id":
+        _, source_credential_id = _split_credential_id(source_text)
+        return text if _same_source_fact(text, source_credential_id) else ""
+    if field == "location":
+        is_named_location = _LOCATION_TAIL.fullmatch(text) is not None
+        is_work_mode = text.lower() in {"remote", "hybrid", "on-site", "onsite"}
+        return text if is_named_location or is_work_mode else ""
+    return ""
+
+
+def _source_contains_exact(source_text: str, value: str) -> bool:
+    normalized_value = _normalize(value).strip()
+    if not normalized_value:
+        return False
+    if normalized_value in _normalize(source_text):
+        return True
+    # PDF extraction commonly leaves a hard line break after a source-written
+    # hyphen (``Zoom-\nInfo``). The deterministic parser rejoins that exact
+    # token as ``Zoom-Info``; accept only this narrow, source-preserving
+    # de-wrapping—not fuzzy token overlap.
+    dewrapped_source = re.sub(r"-[ \t]*\r?\n[ \t]*(?=[A-Za-z0-9])", "-", source_text)
+    return normalized_value in _normalize(dewrapped_source)
+
+
 def _build_profile(data: dict[str, Any], source_text: str) -> Profile:
     contact_data = data.get("contact") or {}
     contact = ContactInfo(
-        name=str(contact_data.get("name", "")).strip(),
-        email=str(contact_data.get("email", "")).strip(),
-        phone=str(contact_data.get("phone", "")).strip(),
-        linkedin=str(contact_data.get("linkedin", "")).strip(),
-        website=str(contact_data.get("website", "")).strip(),
-        location=str(contact_data.get("location", "")).strip(),
+        name=_source_backed_text(contact_data.get("name"), source_text),
+        email=_source_backed_text(contact_data.get("email"), source_text),
+        phone=_source_backed_text(contact_data.get("phone"), source_text),
+        linkedin=_source_backed_text(contact_data.get("linkedin"), source_text),
+        website=_source_backed_text(contact_data.get("website"), source_text),
+        location=_source_backed_text(contact_data.get("location"), source_text),
     )
 
     experiences = _clean_experiences(data.get("experiences") or [], source_text)
-    education = _clean_education(data.get("education") or [])
+    education = _clean_education(data.get("education") or [], source_text)
     # Skill taxonomy is source evidence in its own right.  Preserve the
     # candidate-authored groups even when an LLM supplied a flatter skill list
     # (or omitted some entries).  The flat list remains the compatibility
@@ -227,18 +539,29 @@ def _build_profile(data: dict[str, Any], source_text: str) -> Profile:
     source_sections = _split_into_sections([line.strip() for line in source_text.splitlines()])
     source_summary = _source_summary_text(source_text)
     source_skill_groups = _heuristic_skill_groups(source_sections.get("skills", []))
+    remaining_sections = _remaining_sections(source_sections)
     source_skills = [item for _, items in source_skill_groups for item in items]
-    skills_listed = _dedupe_terms([str(s) for s in (data.get("skills_listed") or []) if str(s).strip()] + source_skills)
+    skills_listed = _dedupe_terms(
+        [
+            str(skill)
+            for skill in (data.get("skills_listed") or [])
+            if str(skill).strip() and term_in_text_affirmative(str(skill), source_text)
+        ]
+        + source_skills
+    )
 
     # Certification identifiers are often omitted by an LLM because they look
     # like opaque metadata.  Enrich the structured parse from the raw source so
     # the identifier is retained as candidate evidence rather than discarded.
-    certifications = _clean_certifications(data.get("certifications") or [])
+    certifications = _clean_certifications(data.get("certifications") or [], source_text)
     certifications = _merge_source_certifications(
         certifications,
-        _clean_certifications(_heuristic_certifications(source_sections.get("certifications", []))),
+        _clean_certifications(
+            _heuristic_certifications(source_sections.get("certifications", [])),
+            source_text,
+        ),
     )
-    summary_text = str(data.get("summary_text", "") or "")
+    summary_text = source_summary
 
     tier_a, tier_b, tier_c = _tier_skills(skills_listed, experiences, summary_text)
     supported_metrics = _extract_supported_metrics(experiences)
@@ -264,77 +587,79 @@ def _build_profile(data: dict[str, Any], source_text: str) -> Profile:
         raw_markdown=source_text,
         source_summary=source_summary,
         source_skill_groups=source_skill_groups,
+        remaining_sections=remaining_sections,
         extraction_warnings=extraction_warnings,
     )
 
 
 def _clean_experiences(raw_entries: list[Any], source_text: str) -> list[Experience]:
-    normalized_source = _normalize(source_text)
     experiences: list[Experience] = []
     for entry in raw_entries:
         if not isinstance(entry, dict):
             continue
-        company = str(entry.get("company", "")).strip()
-        title = str(entry.get("title", "")).strip()
+        company = _source_backed_text(entry.get("company"), source_text)
+        title = _source_backed_text(entry.get("title"), source_text)
         if not company and not title:
-            continue
-        # Guard against fabricated employers: the company name (or a meaningful
-        # chunk of it) must actually appear in the source resume.
-        if company and not _fuzzy_contains(normalized_source, company):
             continue
         bullets = [
             _clean_bullet(bullet)
-            for bullet in (entry.get("bullets") or [])
-            if _clean_bullet(bullet) and _fuzzy_contains(normalized_source, _clean_bullet(bullet), threshold=0.5)
+            for bullet in _string_list(entry.get("bullets"))
+            if _clean_bullet(bullet) and _source_contains_exact(source_text, _clean_bullet(bullet))
         ]
         experiences.append(
             Experience(
                 company=company or title,
                 title=title,
-                location=str(entry.get("location", "")).strip(),
-                dates=str(entry.get("dates", "")).strip(),
+                location=_source_backed_text(entry.get("location"), source_text),
+                dates=_source_backed_text(entry.get("dates"), source_text),
                 bullets=bullets,
             )
         )
     return experiences
 
 
-def _clean_education(raw_entries: list[Any]) -> list[Education]:
+def _clean_education(raw_entries: list[Any], source_text: str) -> list[Education]:
     education: list[Education] = []
     for entry in raw_entries:
         if not isinstance(entry, dict):
             continue
-        institution = str(entry.get("institution", "")).strip()
-        degree = str(entry.get("degree", "")).strip()
+        institution = _source_backed_text(entry.get("institution"), source_text)
+        degree = _source_backed_text(entry.get("degree"), source_text)
         if not institution and not degree:
             continue
-        bullets = [_clean_bullet(b) for b in (entry.get("bullets") or []) if _clean_bullet(b)]
+        bullets = [
+            _clean_bullet(bullet)
+            for bullet in _string_list(entry.get("bullets"))
+            if _clean_bullet(bullet) and _source_contains_exact(source_text, _clean_bullet(bullet))
+        ]
         education.append(
             Education(
                 institution=institution or degree,
-                location=str(entry.get("location", "")).strip(),
+                location=_source_backed_text(entry.get("location"), source_text),
                 degree=degree,
-                dates=str(entry.get("dates", "")).strip(),
+                dates=_source_backed_text(entry.get("dates"), source_text),
                 bullets=bullets,
             )
         )
     return education
 
 
-def _clean_certifications(raw_entries: list[Any]) -> list[Certification]:
+def _clean_certifications(raw_entries: list[Any], source_text: str) -> list[Certification]:
     certifications: list[Certification] = []
     for entry in raw_entries:
         if not isinstance(entry, dict):
             continue
         name, embedded_credential_id = _split_credential_id(str(entry.get("name", "")))
+        name = _source_backed_text(name, source_text)
         if not name:
             continue
+        credential_id = str(entry.get("credential_id", "")).strip() or embedded_credential_id
         certifications.append(
             Certification(
                 name=name,
-                date=str(entry.get("date", "")).strip(),
-                link=str(entry.get("link", "")).strip(),
-                credential_id=str(entry.get("credential_id", "")).strip() or embedded_credential_id,
+                date=_source_backed_text(entry.get("date"), source_text),
+                link=_source_backed_text(entry.get("link"), source_text),
+                credential_id=_source_backed_text(credential_id, source_text),
             )
         )
     return certifications
@@ -350,7 +675,7 @@ def _merge_source_certifications(parsed: list[Certification], source: list[Certi
     a shared parenthesized credential code such as ``PL-300``.
     """
     if not source:
-        return [Certification(name=item.name, date=item.date, link=item.link) for item in parsed]
+        return []
 
     remaining = list(source)
     merged: list[Certification] = []
@@ -364,7 +689,9 @@ def _merge_source_certifications(parsed: list[Certification], source: list[Certi
             None,
         )
         if match_index is None:
-            merged.append(Certification(name=certification.name, date=certification.date, link=certification.link))
+            # The provider cannot establish a new certification record. Even a
+            # literal token elsewhere in the resume may be aspirational or name
+            # a target credential rather than one the candidate holds.
             continue
         candidate = remaining.pop(match_index)
         merged.append(
@@ -489,20 +816,6 @@ def _normalize(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").lower())
 
 
-def _fuzzy_contains(normalized_haystack: str, needle: str, threshold: float = 0.6) -> bool:
-    """Loose substring check so minor LLM whitespace/punctuation drift doesn't reject real content."""
-    normalized_needle = _normalize(needle)
-    if not normalized_needle:
-        return False
-    if normalized_needle in normalized_haystack:
-        return True
-    tokens = [tok for tok in re.findall(r"[a-z0-9%]+", normalized_needle) if len(tok) > 2]
-    if not tokens:
-        return normalized_needle in normalized_haystack
-    hits = sum(1 for tok in tokens if tok in normalized_haystack)
-    return (hits / len(tokens)) >= threshold
-
-
 def _dedupe_terms(items: list[str]) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
@@ -538,6 +851,17 @@ _SECTION_KEYWORDS = {
         "licenses and certifications",
         "licenses & certifications",
     },
+    "publications": {"publications", "selected publications", "research publications"},
+    "projects": {"projects", "selected projects", "technical projects"},
+    "awards": {"awards", "honours", "honors", "awards and honours", "awards and honors"},
+    "volunteering": {"volunteering", "volunteer experience", "community involvement"},
+}
+
+_REMAINING_SECTION_LABELS = {
+    "publications": "Publications",
+    "projects": "Projects",
+    "awards": "Awards",
+    "volunteering": "Volunteer Experience",
 }
 
 _DATE_RANGE = re.compile(
@@ -551,6 +875,49 @@ _LOCATION_TAIL = re.compile(
     r"(?P<location>[A-Z][A-Za-z.'-]*(?:\s+[A-Z][A-Za-z.'-]*){0,2},\s*"
     r"(?:[A-Z]{2}|[A-Z][A-Za-z]+)(?:,\s*(?:[A-Z]{2}|[A-Z][A-Za-z]+))?)\s*$"
 )
+
+# Header-line classification (see `_classify_header_line`): distinguishes a
+# location line from a title line from a company/institution line among the
+# few non-bullet lines that precede an entry's date line. Resume-local --
+# deliberately not shared with `parsing/job_description.py`'s JD-side title
+# vocabulary, which serves a different domain with different tolerances
+# (that list lacks "associate"/"intern" and includes "officer"/"supervisor",
+# which are not resume-title-shaped enough here).
+_TITLE_ROLE_WORDS = frozenset(
+    {
+        "administrator",
+        "analyst",
+        "architect",
+        "associate",
+        "consultant",
+        "coordinator",
+        "developer",
+        "director",
+        "engineer",
+        "intern",
+        "lead",
+        "manager",
+        "scientist",
+        "specialist",
+        # `_heuristic_entries` reuses this same classifier for education
+        # entries (institution/location/degree/dates -- the same 4-line
+        # shape as company/location/title/dates), so degree-type words are
+        # included too: without them, a degree line like "Master of
+        # Computational Science" fails the title check, falls into the same
+        # catch-all bucket as the institution name, and creates a false
+        # "two possible companies" ambiguity that (via the legacy fallback)
+        # can promote the location line into the institution field instead.
+        "bachelor",
+        "bachelors",
+        "master",
+        "masters",
+        "doctorate",
+        "phd",
+        "diploma",
+    }
+)
+_LOCATION_MODIFIER_TAG = re.compile(r"\s*\((Remote|Hybrid|On-site|Onsite)\)\s*$", flags=re.IGNORECASE)
+_BARE_REMOTE_LOCATION = re.compile(r"^(Remote|Hybrid|On-site|Onsite)$", flags=re.IGNORECASE)
 _YEAR = re.compile(r"\b(19|20)\d{2}\b")
 _URL = re.compile(r"(https?://[^\s|]+|www\.[^\s|]+)", flags=re.IGNORECASE)
 _EMAIL = re.compile(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}")
@@ -617,6 +984,16 @@ def _split_into_sections(lines: list[str]) -> dict[str, list[str]]:
     return sections
 
 
+def _remaining_sections(sections: dict[str, list[str]]) -> list[tuple[str, list[str]]]:
+    """Return source-authored non-core sections without changing their text."""
+    output: list[tuple[str, list[str]]] = []
+    for section, label in _REMAINING_SECTION_LABELS.items():
+        values = [_clean_bullet(line) for line in sections.get(section, []) if _clean_bullet(line)]
+        if values:
+            output.append((label, values))
+    return output
+
+
 def _source_summary_text(text: str) -> str:
     """Return an explicit summary section without accidentally including contact lines."""
     collecting = False
@@ -648,6 +1025,104 @@ def _detect_heading(line: str) -> str | None:
     return None
 
 
+def _extract_modifier_tag(line: str) -> tuple[str, str]:
+    """Split a trailing "(Remote)"/"(Hybrid)"/"(On-site)" tag off a line."""
+    match = _LOCATION_MODIFIER_TAG.search(line)
+    if not match:
+        return line, ""
+    return line[: match.start()].rstrip(), f" ({match.group(1)})"
+
+
+def _has_role_word(text: str) -> bool:
+    words = re.findall(r"[A-Za-z]+", text)
+    return bool(words) and any(word.casefold().rstrip("s") in _TITLE_ROLE_WORDS for word in words)
+
+
+def _classify_header_line(line: str) -> tuple[str, str, str]:
+    """Classify one pre-date header line as location / title / company.
+
+    Returns ``(kind, value, embedded_location)``: ``value`` is the line with
+    its own modifier tag/location tail removed; ``embedded_location`` is a
+    location split out of a combined line (``"Title, City, ST"``,
+    ``"Company | City, ST"``, ``"Company, City, ST"``) via the existing
+    rightmost-tail `_split_location_tail`, else ``""``.
+
+    Order matters: title is checked BEFORE the bare-location shape. A line
+    like "Software Engineer, Toronto, ON" would otherwise satisfy the bare
+    two-segment location shape just as readily as a real "Toronto, ON" --
+    the only thing that disambiguates them is that the first segment
+    contains a role noun, so that check must run first.
+    """
+    stripped = line.strip()
+    core, tag = _extract_modifier_tag(stripped)
+    location, remainder = _split_location_tail(core)
+    title_source = remainder if location else core
+
+    # The word-count cap is measured on the title with any trailing
+    # parenthetical removed (a thesis title like "Master of Computational
+    # Science (Thesis: ML for Geological Discovery)" would otherwise fail
+    # the cap on parenthetical word count alone, even though the actual
+    # degree/role phrase is short); the parenthetical stays in the returned
+    # `title_source` value, it is only excluded from this length check.
+    title_core = re.sub(r"\s*\([^)]*\)\s*$", "", title_source).strip()
+    if len(title_core.split()) <= 6 and _has_role_word(title_core):
+        return "title", title_source, (f"{location}{tag}" if location else "")
+
+    if not location and (
+        _BARE_REMOTE_LOCATION.match(core) is not None
+        or (len(core.split()) <= 4 and _LOCATION_TAIL.fullmatch(core) is not None)
+    ):
+        return "location", f"{core}{tag}", ""
+
+    if location:
+        return "company", remainder, f"{location}{tag}"
+    return "company", f"{core}{tag}", ""
+
+
+def _looks_like_all_caps_heading(line: str) -> bool:
+    """True for a short, unrecognized all-caps sub-heading fragment.
+
+    Recognised section headings (EXPERIENCE/EDUCATION/SKILLS/...) are already
+    stripped before `_heuristic_entries` ever sees a line (`_detect_heading`);
+    this guards only against a rogue heading-shaped fragment that isn't in
+    that fixed keyword set, so it never gets glued onto a bullet as if it
+    were prose.
+    """
+    stripped = line.strip().rstrip(":")
+    if not (4 <= len(stripped) <= 40):
+        return False
+    if " " not in stripped and len(stripped) < 6:
+        return False  # a short bare acronym like "SQL" is not a heading
+    return stripped.isupper()
+
+
+_HEADER_LABEL_CONNECTORS = frozenset({"of", "and", "the", "for", "in", "at", "on"})
+
+
+def _looks_like_header_label(line: str) -> bool:
+    """True when a line reads as a plausible company/institution/location
+    label rather than ordinary continuation prose.
+
+    Deliberately narrower than `_classify_header_line`'s "company" bucket,
+    which is a catch-all for anything not location/title-shaped -- including
+    ordinary lowercase bullet-continuation prose like "100% uptime for
+    critical production services." A genuine header label in practice is
+    short and dominated by capitalized words (allowing common lowercase
+    connectors: of/and/the/for/in/at/on); a wrapped bullet continuation is
+    ordinary sentence-case prose. This is the guard actually used to decide
+    whether a line might be the *next* entry's header (and so must not be
+    swallowed into the *previous* entry's last bullet), separate from the
+    3-line header-window classification itself.
+    """
+    words = re.findall(r"[A-Za-z][A-Za-z'.-]*", line)
+    if not words or len(words) > 8:
+        return False
+    significant = [word for word in words if word.casefold() not in _HEADER_LABEL_CONNECTORS]
+    if not significant:
+        return False
+    return all(word[0].isupper() for word in significant)
+
+
 def _heuristic_entries(lines: list[str], *, kind: str) -> list[dict[str, Any]]:
     """Group section lines into entries.
 
@@ -671,7 +1146,12 @@ def _heuristic_entries(lines: list[str], *, kind: str) -> list[dict[str, Any]]:
         if entry and (entry[primary] or entry[secondary] or entry["bullets"]):
             entries.append(entry)
 
-    def apply_header(entry: dict[str, Any], header_lines: list[str]) -> None:
+    def _apply_legacy_header(entry: dict[str, Any], header_lines: list[str]) -> None:
+        """Original positional 2-line header logic (company = first line,
+        title = second line). Used as the fallback whenever the classifier
+        below can't confidently identify exactly one company line in the
+        window -- ambiguity always defers to this well-understood behavior
+        rather than guessing."""
         if not header_lines:
             return
         head = header_lines[0]
@@ -684,9 +1164,65 @@ def _heuristic_entries(lines: list[str], *, kind: str) -> list[dict[str, Any]]:
         if location:
             entry["location"] = entry["location"] or (location + suffix)
             head = head_without_location
-        entry[primary] = head
+        if not entry[primary]:
+            entry[primary] = head
         if len(header_lines) > 1 and not entry[secondary]:
             entry[secondary] = header_lines[1]
+
+    def apply_header(entry: dict[str, Any], header_lines: list[str]) -> None:
+        window = header_lines[-3:]
+        if not window:
+            return
+
+        classified = [_classify_header_line(line) for line in window]
+        company_hits = [item for item in classified if item[0] == "company"]
+
+        # A bare location with no comma (a lone country name like "India",
+        # not matched by `_classify_header_line`'s comma-anchored location
+        # shape) reads as "company" by that classifier's catch-all bucket,
+        # creating a false two-company ambiguity in an otherwise-unambiguous
+        # Company/Location/Title window. When the window is exactly that
+        # shape -- two consecutive "company" hits immediately followed by a
+        # confident "title" hit -- position (not pattern-matching) resolves
+        # it: the first line is the company, the second is the location.
+        if (
+            len(company_hits) == 2
+            and len(window) == 3
+            and classified[0][0] == "company"
+            and classified[1][0] == "company"
+            and classified[2][0] == "title"
+        ):
+            if not entry[primary]:
+                entry[primary] = classified[0][1]
+            if not entry["location"]:
+                entry["location"] = classified[1][1]
+            if not entry[secondary]:
+                entry[secondary] = classified[2][1]
+            return
+
+        # Ambiguity gate: trust the classifier only when exactly one line in
+        # the window resolves to "company" -- zero (nothing left to assign)
+        # or two-or-more (can't tell which is the real employer) both fall
+        # back unchanged to the original positional last-two-lines rule.
+        if len(company_hits) != 1:
+            _apply_legacy_header(entry, window[-2:])
+            return
+
+        company_value = company_hits[0][1]
+        if not entry[primary]:
+            entry[primary] = company_value
+
+        location_candidates = [
+            value if kind == "location" else embedded
+            for kind, value, embedded in classified
+            if kind == "location" or embedded
+        ]
+        if location_candidates and not entry["location"]:
+            entry["location"] = location_candidates[-1]
+
+        title_hits = [item for item in classified if item[0] == "title"]
+        if title_hits and not entry[secondary]:
+            entry[secondary] = title_hits[-1][1]
 
     for line in lines:
         if not line:
@@ -705,10 +1241,12 @@ def _heuristic_entries(lines: list[str], *, kind: str) -> list[dict[str, Any]]:
             if remainder:
                 current[secondary] = remainder
             # A valid resume header is a company/institution line plus an
-            # optional title/degree immediately before its dates.  Restrict
-            # the parser to that local context so a PDF wrap orphan cannot be
-            # promoted into an employer for the next role.
-            apply_header(current, header_buffer[-2:])
+            # optional title/degree immediately before its dates. Restrict
+            # the parser to that local context (now a 3-line window, wide
+            # enough for the dominant Company/Location/Title/Dates shape)
+            # so a PDF wrap orphan cannot be promoted into an employer for
+            # the next role.
+            apply_header(current, header_buffer)
             header_buffer = []
             continue
 
@@ -727,6 +1265,13 @@ def _heuristic_entries(lines: list[str], *, kind: str) -> list[dict[str, Any]]:
                 line[0].islower()
                 or _ORPHAN_BULLET_CONTINUATION.search(line) is not None
                 or current["bullets"][-1].rstrip().endswith("-")
+                or (
+                    not header_buffer
+                    and not current["bullets"][-1].rstrip().endswith((".", "!", "?", ":"))
+                    and _DATE_RANGE.search(line) is None
+                    and not _looks_like_all_caps_heading(line)
+                    and not _looks_like_header_label(line)
+                )
             )
         ):
             separator = "" if current["bullets"][-1].rstrip().endswith("-") else " "
@@ -896,13 +1441,23 @@ def _split_credential_id(value: str) -> tuple[str, str]:
 def _split_location_tail(value: str) -> tuple[str, str]:
     """Return ``(location, remaining_header)`` for a plausible location tail.
 
-    A conventional greedy regex turns ``Flosonics Medical Toronto, ON`` into
+    A conventional greedy regex turns ``Northstar Medical Toronto, ON`` into
     one giant location.  Consider each capitalized token boundary and choose
     the rightmost valid city/region tail instead.  Municipal employer names
     such as ``City of Greater Sudbury, ON`` remain intact unless the city is
     repeated as an actual location suffix.
     """
     text = value.strip()
+    # A pipe is an explicit column boundary in common resume layouts. Honor it
+    # before the capitalized-tail heuristic so a multi-word city such as
+    # ``Harbor City, ON`` is not truncated to ``City, ON`` and left attached to
+    # the employer as ``Northstar Medical Systems | Harbor``.
+    if "|" in text:
+        remainder, candidate = (part.strip() for part in text.rsplit("|", 1))
+        match = _LOCATION_TAIL.fullmatch(candidate)
+        if remainder and match is not None:
+            return match.group("location").strip(), remainder
+
     candidates: list[tuple[int, str]] = []
     for start_match in re.finditer(r"(?<!\S)[A-Z]", text):
         match = _LOCATION_TAIL.match(text[start_match.start() :])

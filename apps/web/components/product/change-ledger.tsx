@@ -17,6 +17,7 @@ import { Badge, Banner, Button, Card, Select } from "@/components/ui/primitives"
 
 const TYPE_LABEL: Record<ChangeType, string> = {
   summary: "Summary",
+  headline: "Headline",
   targeting_clause: "Targeting clause",
   bullet: "Bullet rewrite",
   skill: "Skill surfacing",

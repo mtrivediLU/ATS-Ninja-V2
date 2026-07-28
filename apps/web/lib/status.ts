@@ -14,13 +14,21 @@ import {
 } from "lucide-react";
 
 export type StatusTone = "positive" | "warning" | "danger" | "info" | "neutral" | "edited" | "unavailable";
-export type KitLifecycleStatus = "pending" | "processing" | "completed" | "failed";
+export type KitLifecycleStatus =
+  | "pending"
+  | "processing"
+  | "completed"
+  | "partially_completed"
+  | "needs_input_review"
+  | "failed";
 export type ClaimStatus = "supported" | "repaired" | "rejected";
 export type EvidenceState = "supported" | "adjusted" | "removed" | "withheld" | "unavailable";
 export type ArtifactPresentationState =
   | "generated"
+  | "generated-with-fallback"
   | "warning"
   | "withheld"
+  | "needs-input-review"
   | "not-requested"
   | "unavailable"
   | "failed"
@@ -40,6 +48,18 @@ export const kitStatusPresentation: Record<KitLifecycleStatus, StatusPresentatio
   pending: { label: "Pending", accessibleLabel: "Kit status: Pending", tone: "neutral", icon: CircleDashed },
   processing: { label: "Processing", accessibleLabel: "Kit status: Processing", tone: "info", icon: Clock3 },
   completed: { label: "Completed", accessibleLabel: "Kit status: Completed", tone: "positive", icon: Check },
+  partially_completed: {
+    label: "Partially completed",
+    accessibleLabel: "Kit status: Partially completed; delivered artifacts remain available",
+    tone: "warning",
+    icon: TriangleAlert,
+  },
+  needs_input_review: {
+    label: "Needs input review",
+    accessibleLabel: "Kit status: Needs input review before documents can be delivered",
+    tone: "warning",
+    icon: FileWarning,
+  },
   failed: { label: "Failed", accessibleLabel: "Kit status: Failed", tone: "danger", icon: X },
 };
 
@@ -117,6 +137,12 @@ export const artifactStatePresentation: Record<ArtifactPresentationState, Status
     tone: "positive",
     icon: Check,
   },
+  "generated-with-fallback": {
+    label: "Delivered with fallback",
+    accessibleLabel: "Artifact status: Delivered with a source-preserving fallback",
+    tone: "warning",
+    icon: TriangleAlert,
+  },
   warning: {
     label: "Ready with notes",
     accessibleLabel: "Artifact status: Generated with validation notes",
@@ -124,6 +150,12 @@ export const artifactStatePresentation: Record<ArtifactPresentationState, Status
     icon: TriangleAlert,
   },
   withheld: withheldPresentation,
+  "needs-input-review": {
+    label: "Needs input review",
+    accessibleLabel: "Artifact status: Needs input review before it can be delivered",
+    tone: "warning",
+    icon: FileWarning,
+  },
   "not-requested": notRequestedPresentation,
   unavailable: unavailablePresentation,
   failed: {

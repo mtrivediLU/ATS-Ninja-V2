@@ -167,6 +167,7 @@ def normalize_extracted_text(text: str) -> str:
     # detection sees a normal marker; letters only, so numeric leads like
     # "-5%" are left untouched.
     normalized = _BULLET_MARKER_NO_GAP.sub(r"\1 \2", normalized)
+    normalized = _repair_glued_skill_words(normalized)
     normalized = _join_wrapped_bullet_lines(normalized)
     return re.sub(r"\n{4,}", "\n\n\n", normalized).strip()
 
@@ -202,6 +203,111 @@ def _join_wrapped_bullet_lines(text: str) -> str:
     return "\n".join(joined)
 
 
+# A local, generic "Label: rest-of-line" line-shape gate for the skills-line
+# glued-word repair below. Deliberately broad (it will also match e.g.
+# "Credential ID: ..." lines) -- safety comes entirely from the exact-match
+# tables below, not from this gate, since this module has no cross-section
+# awareness (section parsing is a later, separate stage in `parsing.resume`).
+_SKILL_LABEL_LINE = re.compile(r"^(?P<label>[A-Za-z][A-Za-z0-9&/ ,'.-]{0,48}):\s*(?P<items>\S.*)$")
+
+# Curated, exact-match fixes for column-extraction glued words observed in
+# skills lines (missing inter-word spacing from tight/zero-width kerning
+# between styled spans, e.g. a bold label immediately followed by regular
+# text -- a different defect class from the hyphen wraps above, no hyphen
+# involved at all). Exact-match only, by design: "prefer a curated
+# vocabulary-driven split over a general heuristic" -- a general
+# lower-upper-boundary splitter would also mangle genuine camelCase brand
+# names like "ZoomInfo"/"PowerPoint"/"GitHub" (see `_KNOWN_SINGLE_TOKENS`).
+_GLUED_LABEL_FIXES = {
+    "Databases&DataEngineering": "Databases & Data Engineering",
+    "BI&DataGovernance": "BI & Data Governance",
+}
+_GLUED_ITEM_FIXES = {
+    "MSSQLServer": "MS SQL Server",
+    "DataWarehousing": "Data Warehousing",
+    "DataModeling": "Data Modeling",
+    "ETL/ELTPipelines": "ETL/ELT Pipelines",
+}
+# Never split by construction (the repair below only ever consults the two
+# exact-match tables above; nothing outside them is ever touched). Kept as an
+# explicit list purely so a test can assert every one of these round-trips
+# unchanged, proving the point by construction rather than by chance.
+_KNOWN_SINGLE_TOKENS = frozenset(
+    {
+        "PostgreSQL",
+        "JavaScript",
+        "PowerShell",
+        "ArcGIS",
+        "SharePoint",
+        "GitHub",
+        "DevOps",
+        "MySQL",
+        "SQLite",
+        "IoT",
+        "iOS",
+        "ZoomInfo",
+    }
+)
+_BARE_AMPERSAND = re.compile(r"([A-Za-z])&([A-Za-z])")
+
+
+def _space_bare_ampersand(line: str) -> str:
+    def _join(match: re.Match[str]) -> str:
+        before, after = match.group(1), match.group(2)
+        if before.isupper() and after.isupper():
+            return match.group(0)  # e.g. "AT&T" -- both immediate neighbours
+            # uppercase; leave a short brand alone rather than space it out.
+        return f"{before} & {after}"
+
+    return _BARE_AMPERSAND.sub(_join, line)
+
+
+# Matches a recognized glued label immediately after an optional bullet
+# marker -- e.g. a bullet's own lead-in category ("• BI&DataGovernance: ...")
+# as well as a bare skills-section label. Narrower than `_SKILL_LABEL_LINE`
+# on purpose: it only ever rewrites the label substring itself (an exact
+# match from `_GLUED_LABEL_FIXES`), leaving everything else on the line --
+# bulleted prose included -- completely untouched.
+_BULLETED_GLUED_LABEL = re.compile(
+    r"^(?P<prefix>\s*[\-*•]\s*)(?P<label>" + "|".join(re.escape(key) for key in _GLUED_LABEL_FIXES) + r"):"
+)
+
+
+def _repair_glued_skill_words(text: str) -> str:
+    """Repair column-extraction glued words in "Label: item, item" lines.
+
+    Conservative by design: only the curated exact-match tables above are
+    ever rewritten, plus two purely mechanical, vocabulary-free fixes (a
+    missing space after a comma, and a bare "&" spaced out). A false split
+    that mangles a real product name is worse than leaving a glued word, so
+    anything not in the curated tables is left exactly as extracted -- this
+    intentionally does not attempt to fully de-glue a run-on line that has no
+    comma/ampersand boundary to anchor a safe split (e.g. a fully
+    space-stripped bullet); only its recognizable label/item tokens are
+    fixed, and everything else survives unchanged (no fact is lost).
+    """
+    lines = text.split("\n")
+    for index, line in enumerate(lines):
+        bulleted_label = _BULLETED_GLUED_LABEL.match(line)
+        if bulleted_label is not None:
+            fixed = _GLUED_LABEL_FIXES[bulleted_label.group("label")]
+            lines[index] = f"{bulleted_label.group('prefix')}{fixed}:{line[bulleted_label.end() :]}"
+            continue
+
+        match = _SKILL_LABEL_LINE.match(line)
+        if match is None:
+            continue
+        label = match.group("label").strip()
+        items = match.group("items")
+        fixed_label = _GLUED_LABEL_FIXES.get(label, label)
+        fixed_items = ",".join(_GLUED_ITEM_FIXES.get(item.strip(), item) for item in items.split(","))
+        rebuilt = f"{fixed_label}: {fixed_items}"
+        rebuilt = _space_bare_ampersand(rebuilt)
+        rebuilt = re.sub(r",(?=\S)", ", ", rebuilt)
+        lines[index] = rebuilt
+    return "\n".join(lines)
+
+
 def _validate_filename(filename: str | None) -> str:
     if not filename or len(filename) > 255 or "\x00" in filename or "/" in filename or "\\" in filename:
         raise ResumeExtractionError("unsupported_file_type", "Upload a PDF, DOCX, or TXT resume file.")
@@ -213,7 +319,55 @@ def _validate_filename(filename: str | None) -> str:
     return f"{base}.{extension.lower()}"
 
 
-_LINE_BREAK_HYPHEN = re.compile(r"([A-Za-z])-\s*\n\s*([A-Za-z])")
+_LINE_BREAK_HYPHEN = re.compile(r"([A-Za-z]+)-\s*\n\s*([A-Za-z])")
+
+# A curated list of hyphenated-compound lead-in words: when a PDF's line wrap
+# happens to land exactly on one of these words' own hyphen ("non-\ntechnical",
+# "well-\nknown"), the hyphen is part of the word and must be KEPT; every
+# other wrap fragment ("Zoom-\nInfo", "stake-\nholders", "specifi-\ncations",
+# "opera-\ntional") is not a standalone word on its own and the hyphen must be
+# DROPPED. Exact (not prefix) match against this list is the safety property
+# here -- e.g. "co" is listed but "com" (from "Com-\nmerce") is a different
+# string and does not match it.
+_HYPHEN_WRAP_KEEP_PREFIXES = frozenset(
+    {
+        "non",
+        "well",
+        "real",
+        "multi",
+        "self",
+        "co",
+        "e",
+        "re",
+        "pre",
+        "post",
+        "sub",
+        "inter",
+        "cross",
+        "full",
+        "part",
+        "end",
+        "off",
+        "on",
+        "long",
+        "short",
+        "high",
+        "low",
+        "state",
+        "user",
+        "data",
+        "service",
+        "b2b",
+        "b2c",
+    }
+)
+
+
+def _join_hyphen_wrap(match: re.Match[str]) -> str:
+    prefix, next_char = match.group(1), match.group(2)
+    if prefix.casefold() in _HYPHEN_WRAP_KEEP_PREFIXES:
+        return f"{prefix}-{next_char}"
+    return f"{prefix}{next_char}"
 
 
 def _repair_line_break_hyphens(text: str) -> str:
@@ -223,9 +377,36 @@ def _repair_line_break_hyphens(text: str) -> str:
     unambiguous PDF signal for a word-wrap break — so a legitimate mid-line
     hyphenated compound (well-known, end-to-end, multi-language) is never
     touched: those never have a literal newline between the hyphen and the
-    next letter.
+    next letter. When the wrap happens to land on a curated hyphenated-compound
+    lead-in word's own hyphen (e.g. "non-\\ntechnical"), the hyphen is kept
+    ("non-technical") instead of dropped ("nontechnical").
     """
-    return _LINE_BREAK_HYPHEN.sub(r"\1\2", text)
+    return _LINE_BREAK_HYPHEN.sub(_join_hyphen_wrap, text)
+
+
+_SPACE_HYPHEN_COMPOUND = re.compile(
+    r"\b(" + "|".join(sorted(_HYPHEN_WRAP_KEEP_PREFIXES, key=len, reverse=True)) + r")-[ \t]+(?=[a-z])",
+    flags=re.IGNORECASE,
+)
+
+
+def _repair_hyphen_space_wraps(text: str) -> str:
+    """Tighten "prefix- word" to "prefix-word" for a curated compound lead-in.
+
+    Unlike `_repair_line_break_hyphens`, a hyphen followed only by ordinary
+    whitespace (no literal newline) is NOT an unambiguous wrap signal on its
+    own -- `_repair_line_break_hyphens("well- known") == "well- known"` is an
+    intentional, tested invariant of that function. This is therefore a
+    separate, narrower repair: it only ever closes the gap for a prefix
+    already in the same curated keep-list, so it can never join two unrelated
+    words and never drops a hyphen -- it is keep-only, not keep-or-drop.
+    """
+    return _SPACE_HYPHEN_COMPOUND.sub(r"\1-", text)
+
+
+def _repair_hyphen_wraps(text: str) -> str:
+    """Both hyphen-wrap repairs, applied to one per-candidate extraction."""
+    return _repair_hyphen_space_wraps(_repair_line_break_hyphens(text))
 
 
 def _extract_pdf_multi_engine(content: bytes, max_pages: int) -> tuple[str, int, str, ExtractionQualityScore]:
@@ -252,7 +433,7 @@ def _extract_pdf_multi_engine(content: bytes, max_pages: int) -> tuple[str, int,
             raise ResumeExtractionError("malformed_pdf", "The uploaded PDF has no pages.")
         if page_count > max_pages:
             raise ResumeExtractionError("pdf_page_limit", "The uploaded PDF exceeds the 100-page limit.")
-        pypdf_text = _repair_line_break_hyphens("\n\n".join((page.extract_text() or "") for page in reader.pages))
+        pypdf_text = _repair_hyphen_wraps("\n\n".join((page.extract_text() or "") for page in reader.pages))
     except ResumeExtractionError:
         raise
     except Exception:
@@ -261,10 +442,10 @@ def _extract_pdf_multi_engine(content: bytes, max_pages: int) -> tuple[str, int,
     candidates: list[tuple[str, str]] = [("pypdf", pypdf_text)]
     pymupdf_text = _extract_pdf_pymupdf(content, page_count)
     if pymupdf_text is not None:
-        candidates.append(("pymupdf", _repair_line_break_hyphens(pymupdf_text)))
+        candidates.append(("pymupdf", _repair_hyphen_wraps(pymupdf_text)))
     pdfplumber_text = _extract_pdf_pdfplumber(content)
     if pdfplumber_text is not None:
-        candidates.append(("pdfplumber", _repair_line_break_hyphens(pdfplumber_text)))
+        candidates.append(("pdfplumber", _repair_hyphen_wraps(pdfplumber_text)))
 
     method, text, quality = select_best_extraction(candidates)
     return text, page_count, method, quality

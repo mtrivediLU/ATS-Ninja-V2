@@ -5,8 +5,10 @@ import { artifactStatePresentation, type ArtifactPresentationState } from "@/lib
 
 const copy: Record<ArtifactPresentationState, string> = {
   generated: "The generated artifact is available with its server-provided trace.",
+  "generated-with-fallback": "A source-preserving fallback was delivered because no safe evidence-backed improvement was accepted.",
   warning: "The artifact is available with validation notes to review.",
   withheld: "The engine withheld this artifact rather than allow a truth-critical or structural validation failure through.",
+  "needs-input-review": "Review the extracted input before trying again. No substitute content is inferred.",
   "not-requested": "This is an intentional absence from the persisted selection, not a generation failure.",
   unavailable: "This artifact was selected, but the completed response did not include it. No substitute content is inferred.",
   failed: "This artifact could not be generated. The failure is surfaced without internal error detail.",
@@ -19,7 +21,7 @@ const copy: Record<ArtifactPresentationState, string> = {
 export function ArtifactState({ title, state, reason, onRetry }: { title: string; state: ArtifactPresentationState; reason?: string; onRetry?: () => void }) {
   const presentation = artifactStatePresentation[state];
   const Icon = presentation.icon;
-  return <Card className={`mx-auto max-w-[680px] text-center ${state === "unavailable" || state === "empty" ? "border-dashed" : ""}`}><div className={`mx-auto grid size-14 place-items-center rounded-lg border ${presentation.tone === "danger" ? "border-danger-border bg-danger-bg text-danger" : presentation.tone === "unavailable" ? "border-unavailable-border border-dashed bg-unavailable-bg text-unavailable" : "border-border bg-surface-subtle text-ink-muted"}`}><Icon aria-hidden="true" className="size-7" /></div><div className="mt-4"><StatusLabel presentation={presentation} /></div><h2 className="mt-3 text-lg font-semibold">{title}</h2><p className="mt-2 text-sm text-ink-secondary">{reason || copy[state]}</p><div className="mt-5 flex flex-wrap justify-center gap-3">{onRetry && <Button variant="primary" onClick={onRetry}><RefreshCw aria-hidden="true" className="size-4" />Retry retrieval</Button>}<Link href="/history" className="inline-flex min-h-11 items-center gap-2 rounded-control border border-border-strong bg-surface px-4 py-2 font-semibold text-ink hover:bg-surface-subtle"><ArrowLeft aria-hidden="true" className="size-4" />Return to history</Link></div></Card>;
+  return <Card className={`mx-auto max-w-[680px] text-center ${state === "unavailable" || state === "empty" ? "border-dashed" : ""}`}><div className={`mx-auto grid size-14 place-items-center rounded-lg border ${presentation.tone === "danger" ? "border-danger-border bg-danger-bg text-danger" : presentation.tone === "unavailable" ? "border-unavailable-border border-dashed bg-unavailable-bg text-unavailable" : presentation.tone === "warning" ? "border-warning-border bg-warning-bg text-warning" : "border-border bg-surface-subtle text-ink-muted"}`}><Icon aria-hidden="true" className="size-7" /></div><div className="mt-4"><StatusLabel presentation={presentation} /></div><h2 className="mt-3 text-lg font-semibold">{title}</h2><p className="mt-2 text-sm text-ink-secondary">{reason || copy[state]}</p><div className="mt-5 flex flex-wrap justify-center gap-3">{onRetry && <Button variant="primary" onClick={onRetry}><RefreshCw aria-hidden="true" className="size-4" />Retry retrieval</Button>}<Link href="/history" className="inline-flex min-h-11 items-center gap-2 rounded-control border border-border-strong bg-surface px-4 py-2 font-semibold text-ink hover:bg-surface-subtle"><ArrowLeft aria-hidden="true" className="size-4" />Return to history</Link></div></Card>;
 }
 
 export function NotRequestedArtifact({ title }: { title: string }) { return <ArtifactState title={`${title} was not requested`} state="not-requested" />; }

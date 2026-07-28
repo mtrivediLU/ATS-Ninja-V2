@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from ats_engine.models import RequirementTerm
@@ -42,13 +43,16 @@ _PREFERRED_HEADINGS = (
     "an asset",
     "bonus qualifications",
 )
-_RESPONSIBILITY_HEADINGS = (
+_SECTION_RESPONSIBILITY_HEADINGS = (
     "responsibilities",
+    "key responsibilities",
+    "role responsibilities",
     "what you will do",
     "what you'll do",
     "your day to day",
     "day to day",
     "duties",
+    "key duties",
     "key accountabilities",
     "more specifically",
     # A common subheading under "What you will do".  Without the complete
@@ -57,6 +61,16 @@ _RESPONSIBILITY_HEADINGS = (
     # "Perform root-cause analysis ..." that do not themselves contain an
     # action cue.
     "more specifically, you will",
+)
+_SUBSTANTIVE_RESPONSIBILITY_HEADINGS = (
+    *_SECTION_RESPONSIBILITY_HEADINGS,
+    # These headings establish that role content has begun for the JD hygiene
+    # boundary, but their prose is not necessarily a list of scored duties.
+    "the role",
+    "role overview",
+    "role summary",
+    "position overview",
+    "position summary",
 )
 _BOILERPLATE_MARKERS = (
     "salary range",
@@ -186,6 +200,383 @@ _DOMAIN_HEADS = {
     "visualisation",
 }
 
+# JD closing sections are candidate-application logistics, not role
+# requirements.  We intentionally honour them as a terminal boundary only
+# after a substantive role section has begun: a compensation line in a
+# metadata preamble must not hide later legitimate responsibilities or
+# requirements.
+_QUALIFICATION_HEADINGS = (
+    "required qualifications",
+    "required qualification",
+    "requirements",
+    "qualifications",
+    "what you need to succeed",
+    "what we are looking for",
+    "must have",
+    "minimum qualifications",
+    "in addition, you have",
+    "in addition you have",
+    "preferred qualifications",
+    "preferred qualification",
+    "preferred",
+    "nice to have",
+    "nice-to-have",
+    "assets",
+    "an asset",
+    "bonus qualifications",
+)
+_STOP_SECTION_MARKERS = (
+    "application",
+    "apply",
+    "how to apply",
+    "application process",
+    "application instructions",
+    "human resources",
+    "hr contact",
+    "recruitment",
+    "recruiting",
+    "salary",
+    "compensation",
+    "pay range",
+    "benefits",
+    "duration",
+    "contract length",
+    "term of employment",
+    "closing date",
+    "equal opportunity",
+    "equal employment",
+    "employment equity",
+    "eeo",
+    "references",
+    "posted",
+    "categories",
+)
+_STOP_SENTENCE_MARKERS = (
+    "send a cover letter",
+    "send resume",
+    "send a resume",
+    "applications will be accepted",
+    "eligible to work",
+    "only successful candidates",
+    "only successful applicants",
+    "base salary",
+    "salary",
+    "duration:",
+    "references marked confidential",
+    "equal opportunity",
+    "equal employment",
+    "accommodation",
+    "posted",
+    "categories:",
+)
+_EMAIL_RE = re.compile(r"(?<![\w.+-])[A-Za-z0-9._%+-]+@([A-Za-z0-9.-]+\.[A-Za-z]{2,})(?![\w-])")
+_URL_RE = re.compile(r"(?:https?://|www\.)\S+", flags=re.IGNORECASE)
+# Require three numeric groups so a date range such as ``2022 - 2024`` is not
+# mistaken for a phone contact line and removed from an otherwise valid JD.
+_PHONE_RE = re.compile(r"(?<!\w)(?:\+?\d{1,3}[\s.-])?(?:\(?\d{2,4}\)?[\s.-]?)\d{3,4}[\s.-]\d{3,4}(?!\w)")
+_ORG_ROLE_WORDS = frozenset(
+    {
+        "careers",
+        "career",
+        "portal",
+        "platform",
+        "department",
+        "division",
+        "team",
+        "office",
+        "program",
+        "programs",
+        "recruiting",
+        "recruitment",
+        "hiring",
+        "hr",
+        "talent",
+        "people",
+        "position",
+        "role",
+        "employer",
+        "organization",
+        "organisation",
+    }
+)
+_TECHNICAL_NAME_WORDS = frozenset(
+    {
+        "access",
+        "analysis",
+        "analytics",
+        "api",
+        "application",
+        "agency",
+        "association",
+        "authority",
+        "automation",
+        "bank",
+        "business",
+        "college",
+        "cloud",
+        "company",
+        "consulting",
+        "control",
+        "data",
+        "database",
+        "developer",
+        "development",
+        "director",
+        "engineering",
+        "engineer",
+        "governance",
+        "group",
+        "hospital",
+        "industries",
+        "institute",
+        "integration",
+        "management",
+        "manager",
+        "medical",
+        "model",
+        "modelling",
+        "modeling",
+        "power",
+        "platform",
+        "query",
+        "reporting",
+        "security",
+        "service",
+        "services",
+        "software",
+        "source",
+        "system",
+        "systems",
+        "trust",
+        "university",
+        "technical",
+        "technology",
+        "web",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class JDHygiene:
+    """One deterministic, source-preserving view of a job description.
+
+    ``scoring_lines`` are the only lines eligible to form requirements or
+    legacy technical keywords. ``target_lines`` retain non-contact source
+    metadata for title/company resolution. ``context_lines`` retain safe
+    organization/boilerplate context without letting it enter scoring.
+    """
+
+    target_lines: tuple[str, ...]
+    scoring_lines: tuple[str, ...]
+    context_lines: tuple[str, ...]
+    application_domains: tuple[str, ...]
+    organization_names: tuple[str, ...]
+
+
+def sanitize_jd_for_parsing(jd_text: str) -> JDHygiene:
+    """Create the deterministic JD view shared by heuristic and LLM paths.
+
+    Application instructions, HR/EEO, salary, duration, and similar closing
+    sections frequently contain branded portal names or generic process words.
+    Once substantive role content has started, they are a hard extraction
+    boundary.
+    Contact-bearing lines are omitted everywhere, but their email domains are
+    retained as a narrow company-resolution signal.
+    """
+    target_lines: list[str] = []
+    scoring_lines: list[str] = []
+    context_lines: list[str] = []
+    domains: list[str] = []
+    role_content_seen = False
+    stopped = False
+
+    for raw_line in (jd_text or "").splitlines():
+        line = re.sub(r"\s+", " ", raw_line).strip()
+        if not line:
+            continue
+        domains.extend(match.group(1).casefold().strip(".") for match in _EMAIL_RE.finditer(line))
+        if _is_qualification_heading(line) or _is_responsibility_heading(line):
+            role_content_seen = True
+        if role_content_seen and _is_stop_section(line):
+            stopped = True
+        if _is_contact_line(line):
+            continue
+        if stopped:
+            if _is_context_line(line):
+                context_lines.append(line)
+            continue
+        target_lines.append(line)
+        if _is_context_line(line):
+            context_lines.append(line)
+            continue
+        scoring_lines.append(line)
+
+    organization_names = _organization_names_from_lines(target_lines)
+    return JDHygiene(
+        target_lines=tuple(_dedupe_text(target_lines)),
+        scoring_lines=tuple(_dedupe_text(scoring_lines)),
+        context_lines=tuple(_dedupe_text(context_lines)),
+        application_domains=tuple(_dedupe_text(domains)),
+        organization_names=tuple(organization_names),
+    )
+
+
+def filter_hygienic_jd_values(
+    values: Iterable[object],
+    hygiene: JDHygiene,
+    *,
+    company: str = "",
+    require_scoring_source: bool = True,
+) -> list[str]:
+    """Return LLM/heuristic values that survive the same JD hygiene boundary.
+
+    ``require_scoring_source`` prevents model-provided terms from reintroducing
+    application, organization, or fabricated text after deterministic parsing
+    removed it. Title/company callers can set it to ``False`` because their
+    evidence belongs to ``target_lines`` rather than scoring sections.
+    """
+    output: list[str] = []
+    source_text = "\n".join(hygiene.scoring_lines)
+    for value in values:
+        text = _strip_bullet(str(value or "")).strip()
+        if not text or _is_contact_line(text) or _is_stop_section(text):
+            continue
+        if is_person_name(text) or is_org_role_reference(text, hygiene, company=company):
+            continue
+        if require_scoring_source and not _text_is_in_source(text, source_text):
+            continue
+        if text.casefold() not in {item.casefold() for item in output}:
+            output.append(text)
+    return output
+
+
+def _is_contact_line(line: str) -> bool:
+    return bool(_EMAIL_RE.search(line) or _URL_RE.search(line) or _PHONE_RE.search(line))
+
+
+def _heading_text(line: str) -> str:
+    return _strip_bullet(line).casefold().strip(" :.-–—")
+
+
+def _is_qualification_heading(line: str) -> bool:
+    heading = _heading_text(line)
+    return len(heading) <= 90 and any(
+        heading == marker or heading.startswith(f"{marker}:") for marker in _QUALIFICATION_HEADINGS
+    )
+
+
+def _is_responsibility_heading(line: str) -> bool:
+    heading = _heading_text(line)
+    return len(heading) <= 90 and any(
+        heading == marker or heading.startswith(f"{marker}:") for marker in _SUBSTANTIVE_RESPONSIBILITY_HEADINGS
+    )
+
+
+def _is_stop_section(line: str) -> bool:
+    heading = _heading_text(line)
+    if not heading:
+        return False
+    # Salary/EEO wording often appears as a sentence rather than a clean
+    # heading, while generic application/HR terms must be heading-shaped to
+    # avoid treating a legitimate responsibility as a terminal boundary.
+    if any(marker in heading for marker in _STOP_SENTENCE_MARKERS):
+        return True
+    return len(heading) <= 90 and any(
+        heading == marker or heading.startswith(f"{marker}:") for marker in _STOP_SECTION_MARKERS
+    )
+
+
+def _is_context_line(line: str) -> bool:
+    heading = _heading_text(line)
+    if heading.startswith("about ") or heading in {"about", "about us", "about the company", "about the role"}:
+        return True
+    if re.match(
+        r"^the\s+[A-Z][A-Za-z0-9 &'.,-]{1,70}?\s+(?:is|are|has|serves|builds|supports)\b",
+        line,
+        flags=re.IGNORECASE,
+    ):
+        return True
+    lowered = line.casefold()
+    return any(marker in lowered for marker in ("careers portal", "career portal", "our platform", "our products"))
+
+
+def _organization_names_from_lines(lines: Iterable[str]) -> list[str]:
+    names: list[str] = []
+    for line in lines:
+        explicit = re.match(r"^(?:company|organization|organisation|employer)\s*[:\-]\s*(.+)$", line, re.I)
+        about = re.match(r"^about\s+(.+)$", line, re.I)
+        seeking = re.search(
+            r"\bthe\s+([A-Z][A-Za-z0-9 &'.,-]{1,70}?)\s+is\s+seeking\b",
+            line,
+            flags=re.IGNORECASE,
+        )
+        candidate = ""
+        if explicit is not None:
+            candidate = explicit.group(1)
+        elif about is not None and about.group(1).casefold().strip() not in {"us", "the role", "the company"}:
+            candidate = about.group(1)
+        elif seeking is not None:
+            candidate = seeking.group(1)
+        cleaned = _clean_organization_name(candidate)
+        if cleaned and cleaned.casefold() not in {item.casefold() for item in names}:
+            names.append(cleaned)
+    return names
+
+
+def _clean_organization_name(value: str) -> str:
+    cleaned = re.sub(r"\s+", " ", value or "").strip(" -|.,:;")
+    cleaned = re.sub(r"\s+(?:is|are|has|serves|builds|supports|seeking|hiring)\b.*$", "", cleaned)
+    if _is_contact_line(cleaned):
+        return ""
+    return cleaned[:70]
+
+
+def is_person_name(value: str) -> bool:
+    words = re.findall(r"[A-Za-z][A-Za-z'-]*", value)
+    if len(words) not in {2, 3}:
+        return False
+    lowered = {word.casefold() for word in words}
+    if lowered & _TECHNICAL_NAME_WORDS:
+        return False
+    return all(word[:1].isupper() and word[1:].islower() for word in words)
+
+
+def is_org_role_reference(value: str, hygiene: JDHygiene, *, company: str = "") -> bool:
+    normalized = normalize_term(value)
+    words = normalized.split()
+    if not words:
+        return True
+    if normalized in _ORG_ROLE_WORDS or (words and words[-1] in _ORG_ROLE_WORDS):
+        return True
+    organizations = [*hygiene.organization_names, company]
+    for organization in organizations:
+        org_normalized = normalize_term(organization)
+        if not org_normalized:
+            continue
+        if normalized == org_normalized:
+            return True
+        if normalized.startswith(f"{org_normalized} ") and words[-1] in _ORG_ROLE_WORDS:
+            return True
+    return False
+
+
+def _text_is_in_source(value: str, source_text: str) -> bool:
+    needle = normalize_term(value)
+    haystack = normalize_term(source_text)
+    return bool(needle and (needle == haystack or f" {needle} " in f" {haystack} "))
+
+
+def _dedupe_text(values: Iterable[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        text = str(value).strip()
+        key = text.casefold()
+        if text and key not in seen:
+            seen.add(key)
+            result.append(text)
+    return result
+
 
 @dataclass(frozen=True, slots=True)
 class _SectionLine:
@@ -218,21 +609,22 @@ def extract_requirements(jd_text: str) -> list[RequirementTerm]:
     section.
     """
 
-    section_lines = _segment_sections(jd_text)
+    hygiene = sanitize_jd_for_parsing(jd_text)
+    section_lines = _segment_sections(hygiene.scoring_lines)
     product_counts = _capitalized_product_counts(section_lines)
     candidates: list[_Candidate] = []
     for section_line in section_lines:
         if section_line.section not in {"required", "preferred", "responsibility"}:
             continue
         candidates.extend(_vocabulary_candidates(section_line))
-        candidates.extend(_mined_candidates(section_line, product_counts))
+        candidates.extend(_mined_candidates(section_line, product_counts, hygiene))
     return _to_requirements(candidates)
 
 
-def _segment_sections(jd_text: str) -> list[_SectionLine]:
+def _segment_sections(lines: Iterable[str]) -> list[_SectionLine]:
     active_section = "other"
     result: list[_SectionLine] = []
-    for index, raw_line in enumerate(jd_text.splitlines()):
+    for index, raw_line in enumerate(lines):
         line = raw_line.strip()
         if not line:
             continue
@@ -262,7 +654,7 @@ def _heading_section(line: str) -> tuple[str | None, str]:
     for section, headings in (
         ("preferred", _PREFERRED_HEADINGS),
         ("required", _REQUIRED_HEADINGS),
-        ("responsibility", _RESPONSIBILITY_HEADINGS),
+        ("responsibility", _SECTION_RESPONSIBILITY_HEADINGS),
     ):
         for heading in headings:
             if lowered == heading:
@@ -356,7 +748,11 @@ def _capitalized_product_counts(lines: list[_SectionLine]) -> Counter[str]:
     return counts
 
 
-def _mined_candidates(section_line: _SectionLine, product_counts: Counter[str]) -> list[_Candidate]:
+def _mined_candidates(
+    section_line: _SectionLine,
+    product_counts: Counter[str],
+    hygiene: JDHygiene,
+) -> list[_Candidate]:
     values: list[tuple[str, int]] = []
     values.extend(_parenthetical_items(section_line.text))
     values.extend(_cue_phrase_items(section_line.text))
@@ -377,7 +773,7 @@ def _mined_candidates(section_line: _SectionLine, product_counts: Counter[str]) 
         # create a second, lower-quality mined representation of the same term.
         if entry is not None or find_vocabulary_matches(cleaned):
             continue
-        if not _is_admissible_mined_value(cleaned, section_line.text, product_counts):
+        if not _is_admissible_mined_value(cleaned, section_line.text, product_counts, hygiene):
             continue
         candidates.append(
             _Candidate(
@@ -442,10 +838,20 @@ def _clean_mined_value(value: str) -> str:
     return cleaned
 
 
-def _is_admissible_mined_value(value: str, line: str, product_counts: Counter[str]) -> bool:
+def _is_admissible_mined_value(
+    value: str,
+    line: str,
+    product_counts: Counter[str],
+    hygiene: JDHygiene,
+) -> bool:
     normalized = normalize_term(value)
     words = normalized.split()
-    if not words or any(word in _UNLISTED_PRODUCT_BLOCKLIST for word in words):
+    if (
+        not words
+        or any(word in _UNLISTED_PRODUCT_BLOCKLIST for word in words)
+        or is_person_name(value)
+        or is_org_role_reference(value, hygiene)
+    ):
         return False
     if len(words) == 1:
         compact = words[0]
@@ -549,4 +955,11 @@ def _cap_soft_weight(candidates: list[_Candidate]) -> list[_Candidate]:
     )
 
 
-__all__ = ["extract_requirements"]
+__all__ = [
+    "JDHygiene",
+    "extract_requirements",
+    "filter_hygienic_jd_values",
+    "is_org_role_reference",
+    "is_person_name",
+    "sanitize_jd_for_parsing",
+]

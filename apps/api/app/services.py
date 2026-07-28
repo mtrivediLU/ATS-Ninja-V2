@@ -10,6 +10,7 @@ from uuid import UUID
 from ats_engine import (
     ChangeAction,
     ExtractionSuspectError,
+    KitState,
     OutreachAudience,
     OutreachContext,
     OutreachIntent,
@@ -19,6 +20,7 @@ from ats_engine import (
     generate_application_kit,
     is_application_kit_v5,
     is_application_kit_v6,
+    is_application_kit_v7,
     normalize_persisted_result,
     resolve_artifact_selection,
 )
@@ -45,6 +47,15 @@ logger = logging.getLogger(__name__)
 # filesystem path, an environment value, or a secret. Only the exception *type*
 # (a safe, fixed identifier) is surfaced; full detail stays in server logs.
 _CLIENT_ERROR_PREFIX = "Kit generation failed"
+_TERMINAL_STATUSES = frozenset(
+    {
+        KitStatus.COMPLETED,
+        KitStatus.PARTIALLY_COMPLETED,
+        KitStatus.NEEDS_INPUT_REVIEW,
+        KitStatus.FAILED,
+    }
+)
+_ACTIONABLE_STATES = frozenset({KitState.COMPLETED, KitState.PARTIALLY_COMPLETED, KitState.NEEDS_INPUT_REVIEW})
 
 
 def _client_safe_error(exc: Exception) -> str:
@@ -52,6 +63,30 @@ def _client_safe_error(exc: Exception) -> str:
     if isinstance(exc, ExtractionSuspectError):
         return "EXTRACTION_SUSPECT: Resume structure could not be verified; review or re-upload the resume."
     return f"{_CLIENT_ERROR_PREFIX} ({type(exc).__name__})."
+
+
+def _status_for_kit_state(state: KitState) -> KitStatus:
+    """Translate the engine delivery roll-up into the persisted API lifecycle."""
+    return {
+        KitState.COMPLETED: KitStatus.COMPLETED,
+        KitState.PARTIALLY_COMPLETED: KitStatus.PARTIALLY_COMPLETED,
+        KitState.NEEDS_INPUT_REVIEW: KitStatus.NEEDS_INPUT_REVIEW,
+        KitState.FAILED: KitStatus.FAILED,
+    }[state]
+
+
+def _finding_codes(application_kit: Any) -> tuple[str, ...]:
+    """Return bounded detector codes only, never finding facts or source spans."""
+    return tuple(
+        sorted(
+            {
+                finding.code
+                for report in application_kit.delivery_reports.values()
+                for finding in report.findings
+                if finding.code
+            }
+        )
+    )
 
 
 async def create_kit(session: AsyncSession, payload: KitCreate) -> Kit:
@@ -122,7 +157,7 @@ async def process_kit(session: AsyncSession, kit_id: UUID, settings: Settings) -
     if kit is None:
         logger.warning("process_kit: kit %s not found", kit_id)
         return
-    if kit.status in (KitStatus.COMPLETED, KitStatus.FAILED):
+    if kit.status in _TERMINAL_STATUSES:
         # Duplicate/terminal protection: at-least-once delivery may redeliver a
         # kit that already reached a terminal state. Never reprocess it.
         logger.info("process_kit: kit %s already terminal (%s); skipping", kit_id, kit.status)
@@ -155,25 +190,36 @@ async def process_kit(session: AsyncSession, kit_id: UUID, settings: Settings) -
         # content in an exception cannot reach server logs; persist a client-safe
         # message with no content. See the audit-remediation privacy fix (4C).
         elapsed_ms = int((time.monotonic() - started_at) * 1000)
+        lifecycle_status = KitStatus.NEEDS_INPUT_REVIEW if isinstance(exc, ExtractionSuspectError) else KitStatus.FAILED
         logger.error(
-            "process_kit: engine generation failed for kit %s after %sms (type=%s, llm=%s)",
+            "process_kit: engine generation failed for kit %s after %sms "
+            "(type=%s, llm=%s, state=%s, finding_count=0, finding_codes=())",
             kit_id,
             elapsed_ms,
             type(exc).__name__,
             settings.engine_use_llm,
+            lifecycle_status.value,
         )
-        kit.status = KitStatus.FAILED
+        kit.status = lifecycle_status
         kit.error = _client_safe_error(exc)
         await session.commit()
         return
 
     elapsed_ms = int((time.monotonic() - started_at) * 1000)
+    finding_codes = _finding_codes(application_kit)
+    lifecycle_status = _status_for_kit_state(application_kit.state)
     logger.info(
-        "process_kit: kit %s generation completed in %sms (llm=%s)", kit_id, elapsed_ms, settings.engine_use_llm
+        "process_kit: kit %s generation completed in %sms (llm=%s, state=%s, finding_count=%s, finding_codes=%s)",
+        kit_id,
+        elapsed_ms,
+        settings.engine_use_llm,
+        lifecycle_status.value,
+        sum(len(report.findings) for report in application_kit.delivery_reports.values()),
+        finding_codes,
     )
 
     kit.result = application_kit_to_dict(application_kit)
-    kit.status = KitStatus.COMPLETED
+    kit.status = lifecycle_status
     kit.error = None
     await session.commit()
 
@@ -221,7 +267,7 @@ async def apply_kit_change_actions(
     expected_revision: int,
     actions: list[ChangeActionItem],
 ) -> ChangeActionOutcome:
-    """Apply a batch of accept/reject/restore actions to a completed v5 or v6 kit.
+    """Apply a batch of accept/reject/restore actions to a delivered v5-v7 kit.
 
     Deterministic and LLM-free. **Atomic** optimistic concurrency: the JSON
     artifact, revision, and timestamp are written by a single conditional UPDATE
@@ -235,10 +281,12 @@ async def apply_kit_change_actions(
     kit = await session.get(Kit, kit_id)
     if kit is None:
         return ChangeActionOutcome(status="not_found")
-    if kit.status != KitStatus.COMPLETED or kit.result is None:
+    if kit.result is None:
         return ChangeActionOutcome(status="not_completed", kit=kit)
-    if not (is_application_kit_v5(kit.result) or is_application_kit_v6(kit.result)):
-        return ChangeActionOutcome(status="not_completed", kit=kit, errors=["Change actions require a v5 or v6 kit."])
+    if not (
+        is_application_kit_v5(kit.result) or is_application_kit_v6(kit.result) or is_application_kit_v7(kit.result)
+    ):
+        return ChangeActionOutcome(status="not_completed", kit=kit, errors=["Change actions require a v5-v7 kit."])
     if kit.revision != expected_revision:
         return ChangeActionOutcome(status="conflict", kit=kit, errors=["Revision conflict."])
 
@@ -247,6 +295,24 @@ async def apply_kit_change_actions(
         return ChangeActionOutcome(status="not_completed", kit=kit)
     application_kit = application_kit_from_dict(normalized)
     application_kit.revision = expected_revision
+    if application_kit.state not in _ACTIONABLE_STATES:
+        return ChangeActionOutcome(status="not_completed", kit=kit)
+    if application_kit.state is KitState.NEEDS_INPUT_REVIEW:
+        records = {
+            record.id: record
+            for artifact in (application_kit.resume, application_kit.cover_letter)
+            if artifact is not None
+            for record in artifact.change_ledger
+        }
+        delivered = {"generated", "generated_with_fallback"}
+        for action in actions:
+            record = records.get(action.change_id)
+            if record is None or application_kit.delivery_reports[record.artifact].state.value not in delivered:
+                return ChangeActionOutcome(
+                    status="not_completed",
+                    kit=kit,
+                    errors=["Changes are available only for a delivered artifact."],
+                )
 
     result = await asyncio.to_thread(
         apply_change_actions,
@@ -342,7 +408,7 @@ async def mark_kit_failed(session: AsyncSession, kit_id: UUID, error: str) -> No
     if kit is None:
         logger.warning("mark_kit_failed: kit %s not found", kit_id)
         return
-    if kit.status in (KitStatus.COMPLETED, KitStatus.FAILED):
+    if kit.status in _TERMINAL_STATUSES:
         return
     kit.status = KitStatus.FAILED
     kit.error = error

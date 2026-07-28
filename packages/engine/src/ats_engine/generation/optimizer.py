@@ -5,10 +5,13 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 from copy import deepcopy
+from dataclasses import dataclass, field
 
 from ats_engine.generation.integration_planner import plan_placements
+from ats_engine.generation.planning import rewrite_summary
 from ats_engine.generation.resume import generate_resume_text
-from ats_engine.kit.contract import OptimizationRejection, OptimizationTrace
+from ats_engine.kit.contract import ArtifactKind, DocumentState, OptimizationRejection, OptimizationTrace
+from ats_engine.kit.grounding import build_evidence_context, ground_text
 from ats_engine.models import (
     EvidenceLink,
     JDProfile,
@@ -20,11 +23,39 @@ from ats_engine.models import (
 )
 from ats_engine.parsing.vocab import normalize_term
 from ats_engine.scoring.ats_v2 import AtsScoreV2, score_resume_v2
-from ats_engine.validation.fidelity import BulletPair, validate_resume_fidelity
-from ats_engine.validation.stuffing import validate_resume_stuffing
+from ats_engine.validation.calibration import (
+    CalibrationProfile,
+    apply_calibration,
+    calibrate_identity,
+)
+from ats_engine.validation.fidelity import (
+    BulletPair,
+    contains_fact,
+    match_bullet_indices,
+    match_experience_indices,
+    validate_raw_source_findings,
+)
+from ats_engine.validation.findings import ValidationFinding, ValidationSeverity
+from ats_engine.validation.stuffing import (
+    STUFFING_DETECTOR_VERSION,
+    validate_resume_stuffing_findings,
+)
 
 _BATCH_SIZE = 8
 _MAX_ITERATIONS = 4
+
+
+@dataclass(frozen=True, slots=True)
+class ResumeGateContext:
+    """One run's exact identity calibration, retained in memory only.
+
+    The calibration profile contains source spans and fact identities, so it is
+    deliberately excluded from the persisted ApplicationKit. Only codes that
+    were actually calibrated are copied into the public optimization trace.
+    """
+
+    calibration: CalibrationProfile = field(default_factory=CalibrationProfile)
+    identity_findings: tuple[ValidationFinding, ...] = ()
 
 
 def optimize(
@@ -33,44 +64,150 @@ def optimize(
     requirements: list[RequirementTerm],
     links: list[EvidenceLink],
     base_plan: ResumePlan,
+    *,
+    gate_context: ResumeGateContext | None = None,
+    accept_generated_prose: bool = False,
+    delivery_first: bool = True,
 ) -> tuple[ResumePlan, OptimizationTrace]:
-    """Apply source-backed placements only while every score step improves.
+    """Apply safe quality and score actions without ever regressing ATS v2.
 
-    The plan is rebuilt from source-backed content rather than incrementally
-    rewriting candidate bullets. Failed actions are bisected to their safe
-    subset, and the final fallback is the original-content plan whenever a
-    regression cannot be avoided.
+    Candidate-authored content is the delivery floor. Quality-only changes
+    (headline, summary, individually validated provider rewrites) may be
+    accepted at an equal score; keyword-placement actions must strictly improve
+    the authoritative ATS v2 score. Failed placement batches are bisected so one
+    unsafe proposal cannot discard unrelated safe work.
     """
+    if not delivery_first:
+        return _optimize_pr21_compat(
+            profile,
+            jd_profile,
+            requirements,
+            links,
+            base_plan,
+        )
+
     source = profile.raw_markdown
     source_plan = _source_content_plan(base_plan, profile, links)
+    context = gate_context or (
+        build_resume_gate_context(profile, source_plan) if delivery_first else ResumeGateContext()
+    )
     original = score_resume_v2(source, requirements, links, source_resume_text=source)
     trace = OptimizationTrace(
         iterations=0,
         score_path=[original.score],
         unreachable_terms=[link.requirement.canonical for link in links if link.tier == "missing"],
+        delivery_state=DocumentState.GENERATED_WITH_FALLBACK,
     )
-    if not requirements or not links:
-        return source_plan, trace
-
-    actions = plan_placements(links, profile, jd_profile)
-    actions = _dedupe_actions(actions)
-    accepted: list[PlacementAction] = []
-    current_plan = source_plan
-    current_score = _score_plan(current_plan, source, requirements, links, accepted)
-
-    # An incomplete parse should never make the optimizer return the legacy
-    # base plan: it may contain LLM-rewritten prose that has not passed the V2
-    # source-content boundary.  Preserve the safe source projection instead,
-    # and make the score-based refusal visible in the persisted trace.
-    if current_score.score + 0.001 < original.score:
+    source_findings = validate_resume_plan_findings(
+        source_plan,
+        profile,
+        requirements,
+        (),
+        context,
+    )
+    trace.calibration_suppressed = _calibrated_codes(source_findings)
+    source_blockers = _optimization_blockers(source_findings)
+    if any(finding.severity is ValidationSeverity.FATAL for finding in source_blockers):
+        trace.delivery_state = DocumentState.NEEDS_INPUT_REVIEW
+        trace.fallback_reason = "The source projection could not preserve every protected resume fact."
         trace.rejected_actions.append(
             OptimizationRejection(
                 action="source_content_plan",
-                reason="source projection scored below raw resume; retained safe source-content fallback",
+                reason=_finding_reason(source_blockers),
             )
         )
         return source_plan, trace
 
+    accepted: list[PlacementAction] = []
+    current_plan = source_plan
+    current_score = _score_plan(current_plan, source, requirements, links, accepted)
+    source_score = current_score
+    accepted_quality: list[str] = []
+
+    if current_score.score + 0.001 < original.score:
+        trace.delivery_state = DocumentState.NEEDS_INPUT_REVIEW
+        trace.rejected_actions.append(
+            OptimizationRejection(
+                action="source_content_plan",
+                reason="source projection scored below raw resume; input extraction requires review",
+            )
+        )
+        trace.fallback_reason = (
+            "The structured source projection did not preserve the original ATS score; "
+            "review the extracted resume before delivery."
+        )
+        return source_plan, trace
+
+    # Deterministic quality proposals preserve the source summary and use only
+    # direct/certification-backed resolver links. They are accepted even when
+    # ATS presence scoring is unchanged.
+    headline_candidate = deepcopy(current_plan)
+    headline_candidate.headline = base_plan.headline
+    current_plan, current_score = _accept_quality_candidate(
+        label="quality:headline",
+        current=current_plan,
+        candidate=headline_candidate,
+        current_score=current_score,
+        profile=profile,
+        requirements=requirements,
+        links=links,
+        source=source,
+        context=context,
+        trace=trace,
+        accepted_quality=accepted_quality,
+    )
+
+    summary_candidate = deepcopy(current_plan)
+    summary_candidate.summary = rewrite_summary(
+        summary_candidate.role_identity,
+        profile,
+        jd_profile,
+        links,
+    )
+    current_plan, current_score = _accept_quality_candidate(
+        label="quality:summary",
+        current=current_plan,
+        candidate=summary_candidate,
+        current_score=current_score,
+        profile=profile,
+        requirements=requirements,
+        links=links,
+        source=source,
+        context=context,
+        trace=trace,
+        accepted_quality=accepted_quality,
+    )
+
+    if accept_generated_prose:
+        generated_summary = deepcopy(current_plan)
+        generated_summary.summary = base_plan.summary
+        current_plan, current_score = _accept_quality_candidate(
+            label="ai:summary",
+            current=current_plan,
+            candidate=generated_summary,
+            current_score=current_score,
+            profile=profile,
+            requirements=requirements,
+            links=links,
+            source=source,
+            context=context,
+            trace=trace,
+            accepted_quality=accepted_quality,
+        )
+        current_plan, current_score = _accept_generated_bullets(
+            current_plan=current_plan,
+            base_plan=base_plan,
+            current_score=current_score,
+            profile=profile,
+            requirements=requirements,
+            links=links,
+            source=source,
+            context=context,
+            trace=trace,
+            accepted_quality=accepted_quality,
+        )
+
+    actions = _dedupe_actions(plan_placements(links, profile, jd_profile))
     for offset in range(0, len(actions), _BATCH_SIZE):
         if trace.iterations >= _MAX_ITERATIONS:
             break
@@ -84,17 +221,17 @@ def optimize(
             requirements,
             links,
             source,
+            context,
         )
         trace.rejected_actions.extend(rejected)
         candidate_score = _score_plan(candidate_plan, source, requirements, links, candidate_actions)
         if candidate_score.score > current_score.score:
+            newly_accepted = candidate_actions[len(accepted) :]
             current_plan = candidate_plan
             accepted = candidate_actions
             current_score = candidate_score
             trace.score_path.append(current_score.score)
-            trace.accepted_actions.extend(
-                _action_label(action) for action in candidate_actions[len(accepted) - len(batch) :]
-            )
+            trace.accepted_actions.extend(_action_label(action) for action in newly_accepted)
         else:
             for action in batch:
                 trace.rejected_actions.append(
@@ -118,13 +255,160 @@ def optimize(
         trace.rejected_actions.append(
             OptimizationRejection(action="final_plan", reason="would regress below original source score")
         )
+        _record_source_rollback(
+            trace,
+            source_score,
+            reason="No safe evidence-backed improvement was accepted; delivered the source projection.",
+        )
         return source_plan, trace
-    # The trace's action labels are recalculated from the final provenance set
-    # to avoid duplicates introduced by batched bisection.
+
+    final_findings = validate_resume_plan_findings(
+        current_plan,
+        profile,
+        requirements,
+        accepted,
+        context,
+    )
+    final_blockers = _optimization_blockers(final_findings)
+    if final_blockers:
+        trace.rejected_actions.append(
+            OptimizationRejection(action="final_plan", reason=_finding_reason(final_blockers))
+        )
+        _record_source_rollback(
+            trace,
+            source_score,
+            reason="Tailoring proposals failed validation; delivered the protected source projection.",
+        )
+        trace.calibration_suppressed = _calibrated_codes(source_findings)
+        return source_plan, trace
+
+    trace.accepted_actions = [*accepted_quality, *[_action_label(action) for action in accepted]]
+    if not trace.score_path or trace.score_path[-1] != final_score.score:
+        trace.score_path.append(final_score.score)
+    trace.calibration_suppressed = _calibrated_codes(final_findings)
+    if trace.accepted_actions or final_score.score > original.score + 0.001:
+        trace.delivery_state = DocumentState.GENERATED
+        trace.fallback_reason = ""
+    else:
+        trace.delivery_state = DocumentState.GENERATED_WITH_FALLBACK
+        trace.fallback_reason = "No safe evidence-backed improvement was accepted; delivered the source projection."
+    return current_plan, trace
+
+
+def _optimize_pr21_compat(
+    profile: Profile,
+    jd_profile: JDProfile,
+    requirements: list[RequirementTerm],
+    links: list[EvidenceLink],
+    base_plan: ResumePlan,
+) -> tuple[ResumePlan, OptimizationTrace]:
+    """Run the retained PR-21 score-only optimizer behind the kill switch.
+
+    Detector correctness and truth-grounding fixes remain active, but this path
+    deliberately skips identity calibration and the delivery-first quality
+    stage. It exists for one release so ``ENGINE_DELIVERY_FIRST=0`` is a real
+    behavioral rollback rather than a no-op diagnostic setting.
+    """
+    source = profile.raw_markdown
+    source_plan = _source_content_plan(base_plan, profile, links)
+    original = score_resume_v2(source, requirements, links, source_resume_text=source)
+    trace = OptimizationTrace(
+        iterations=0,
+        score_path=[original.score],
+        unreachable_terms=[link.requirement.canonical for link in links if link.tier == "missing"],
+        delivery_state=DocumentState.GENERATED_WITH_FALLBACK,
+        fallback_reason="PR-21 compatibility path delivered the source projection.",
+    )
+    if not requirements or not links:
+        return source_plan, trace
+
+    actions = _dedupe_actions(plan_placements(links, profile, jd_profile))
+    accepted: list[PlacementAction] = []
+    current_plan = source_plan
+    current_score = _score_plan(current_plan, source, requirements, links, accepted)
+    source_score = current_score
+    if current_score.score + 0.001 < original.score:
+        trace.rejected_actions.append(
+            OptimizationRejection(
+                action="source_content_plan",
+                reason="source projection scored below raw resume; retained PR-21 source-content fallback",
+            )
+        )
+        if current_score.score != original.score:
+            trace.score_path.append(current_score.score)
+        return source_plan, trace
+
+    context = ResumeGateContext()
+    for offset in range(0, len(actions), _BATCH_SIZE):
+        if trace.iterations >= _MAX_ITERATIONS:
+            break
+        batch = actions[offset : offset + _BATCH_SIZE]
+        trace.iterations += 1
+        candidate_plan, candidate_actions, rejected = _accept_safe_actions(
+            current_plan,
+            accepted,
+            batch,
+            profile,
+            requirements,
+            links,
+            source,
+            context,
+        )
+        trace.rejected_actions.extend(rejected)
+        candidate_score = _score_plan(candidate_plan, source, requirements, links, candidate_actions)
+        if candidate_score.score > current_score.score:
+            current_plan = candidate_plan
+            accepted = candidate_actions
+            current_score = candidate_score
+            trace.score_path.append(current_score.score)
+        else:
+            for action in batch:
+                trace.rejected_actions.append(
+                    OptimizationRejection(action=_action_label(action), reason="score did not strictly improve")
+                )
+        if len(trace.score_path) >= 2 and trace.score_path[-1] - trace.score_path[-2] < 0.5:
+            break
+
+    current_plan.placement_actions = list(accepted)
+    current_plan.plan_decisions = _v2_plan_decisions(
+        base_plan.plan_decisions,
+        current_plan,
+        profile,
+        accepted,
+    )
+    final_score = _score_plan(current_plan, source, requirements, links, accepted)
+    if final_score.score + 0.001 < original.score:
+        trace.rejected_actions.append(
+            OptimizationRejection(action="final_plan", reason="would regress below original source score")
+        )
+        _record_source_rollback(
+            trace,
+            source_score,
+            reason="PR-21 compatibility path rolled back to the source projection.",
+        )
+        return source_plan, trace
+
     trace.accepted_actions = [_action_label(action) for action in accepted]
     if not trace.score_path or trace.score_path[-1] != final_score.score:
         trace.score_path.append(final_score.score)
+    if accepted or final_score.score > original.score + 0.001:
+        trace.delivery_state = DocumentState.GENERATED
+        trace.fallback_reason = ""
     return current_plan, trace
+
+
+def _record_source_rollback(
+    trace: OptimizationTrace,
+    source_score: AtsScoreV2,
+    *,
+    reason: str,
+) -> None:
+    """Make an optimizer rollback describe the content actually delivered."""
+    trace.accepted_actions = []
+    if not trace.score_path or trace.score_path[-1] != source_score.score:
+        trace.score_path.append(source_score.score)
+    trace.delivery_state = DocumentState.GENERATED_WITH_FALLBACK
+    trace.fallback_reason = reason
 
 
 def _source_content_plan(
@@ -142,18 +426,237 @@ def _source_content_plan(
     # the only safe deterministic seed before v2 placements are applied.
     plan.summary = _with_targeting(profile.source_summary or _source_role_summary(profile), plan.jd_profile)
     plan.headline = plan.role_identity
-    # Keep the planner's instrumented change ledger. V2 placement decisions
-    # are added below, but removing the established summary/bullet records
-    # would make a delivered kit impossible to review or revise through the
-    # existing change-action contract.
     plan.placement_actions = []
+    plan.remaining_sections = deepcopy(profile.remaining_sections)
     if profile.source_skill_groups:
         plan.skill_groups = deepcopy(profile.source_skill_groups)
     else:
         values = _dedupe_text([*profile.tier_a.values(), *profile.tier_b.values(), *profile.tier_c.values()])
         plan.skill_groups = [("Technical Skills", values)] if values else []
     plan.skill_groups = _annotate_tier_c_skills(plan.skill_groups, links)
+    # The planner may contain model proposals that this source projection has
+    # discarded. Rebuild the ledger from delivered content so a fallback never
+    # claims that an absent rewrite or generated skill was accepted.
+    plan.plan_decisions = _v2_plan_decisions([], plan, profile, [])
     return plan
+
+
+def build_resume_gate_context(
+    profile: Profile,
+    source_plan: ResumePlan,
+) -> ResumeGateContext:
+    """Calibrate only exact self-inconsistencies on an identity projection.
+
+    A fidelity finding is eligible only when the shared canonicalizer proves
+    that its fact exists in both the immutable source and the rendered identity.
+    That excludes genuine deletions. Anti-stuffing findings from an unchanged
+    projection are also eligible because source-authored repetition cannot be
+    repaired by deleting candidate evidence.
+    """
+    identity = deepcopy(source_plan)
+    identity.contacts = deepcopy(profile.contact)
+    identity.role_identity = profile.role_identities[0] if profile.role_identities else ""
+    identity.experience = deepcopy(profile.experiences)
+    identity.education = deepcopy(profile.education)
+    identity.certifications = deepcopy(profile.certifications)
+    identity.remaining_sections = deepcopy(profile.remaining_sections)
+    identity.summary = profile.source_summary or _source_role_summary(profile)
+    identity.headline = identity.role_identity
+    identity.skill_groups = (
+        deepcopy(profile.source_skill_groups)
+        if profile.source_skill_groups
+        else (
+            [
+                (
+                    "Technical Skills",
+                    _dedupe_text(
+                        [
+                            *profile.tier_a.values(),
+                            *profile.tier_b.values(),
+                            *profile.tier_c.values(),
+                        ]
+                    ),
+                )
+            ]
+            if profile.tier_a or profile.tier_b or profile.tier_c
+            else []
+        )
+    )
+    identity.placement_actions = []
+    identity.plan_decisions = []
+    rendered = generate_resume_text(identity)
+    fidelity = validate_raw_source_findings(
+        profile.raw_markdown,
+        rendered,
+        profile=profile,
+        candidate_experiences=identity.experience,
+    )
+    stuffing = validate_resume_stuffing_findings(
+        summary=identity.summary,
+        bullets=[bullet for experience in identity.experience for bullet in experience.bullets],
+        skill_groups=identity.skill_groups,
+        requirements=identity.requirements,
+        source_skill_groups=profile.source_skill_groups,
+        source_resume_text=profile.raw_markdown,
+    )
+    findings = (*fidelity, *stuffing)
+    eligible = [
+        finding
+        for finding in findings
+        if finding.detector_version == STUFFING_DETECTOR_VERSION
+        or (contains_fact(profile.raw_markdown, finding.fact) and contains_fact(rendered, finding.fact))
+    ]
+    return ResumeGateContext(
+        calibration=calibrate_identity(eligible),
+        identity_findings=tuple(findings),
+    )
+
+
+def validate_resume_plan_findings(
+    plan: ResumePlan,
+    profile: Profile,
+    requirements: list[RequirementTerm],
+    actions: Iterable[PlacementAction],
+    context: ResumeGateContext,
+    *,
+    rendered_text: str | None = None,
+) -> tuple[ValidationFinding, ...]:
+    """Run the shared calibrated fidelity and anti-stuffing gate for a plan."""
+    action_list = list(actions)
+    rendered = rendered_text if rendered_text is not None else generate_resume_text(plan)
+    bullet_pairs: list[BulletPair] = []
+    experience_matches = match_experience_indices(profile.experiences, plan.experience)
+    for source_experience_index, source_experience in enumerate(profile.experiences):
+        candidate_experience_index = experience_matches[source_experience_index]
+        candidate_bullets = (
+            plan.experience[candidate_experience_index].bullets if candidate_experience_index is not None else []
+        )
+        bullet_matches = match_bullet_indices(source_experience.bullets, candidate_bullets)
+        for source_bullet_index, source_bullet in enumerate(source_experience.bullets):
+            candidate_bullet_index = bullet_matches[source_bullet_index]
+            bullet_pairs.append(
+                BulletPair(
+                    original=source_bullet,
+                    candidate=(candidate_bullets[candidate_bullet_index] if candidate_bullet_index is not None else ""),
+                    location=(f"experience:{source_experience_index}:bullet:{source_bullet_index}"),
+                )
+            )
+    fidelity = validate_raw_source_findings(
+        profile.raw_markdown,
+        rendered,
+        profile=profile,
+        candidate_experiences=plan.experience,
+        bullet_pairs=bullet_pairs,
+        calibrations=context.calibration,
+    )
+    stuffing = apply_calibration(
+        validate_resume_stuffing_findings(
+            actions=action_list,
+            summary=plan.summary,
+            bullets=[bullet for experience in plan.experience for bullet in experience.bullets],
+            skill_groups=plan.skill_groups,
+            requirements=requirements,
+            source_skill_groups=profile.source_skill_groups,
+            source_resume_text=profile.raw_markdown,
+        ),
+        context.calibration,
+    )
+    return _dedupe_findings((*fidelity, *stuffing))
+
+
+def _accept_quality_candidate(
+    *,
+    label: str,
+    current: ResumePlan,
+    candidate: ResumePlan,
+    current_score: AtsScoreV2,
+    profile: Profile,
+    requirements: list[RequirementTerm],
+    links: list[EvidenceLink],
+    source: str,
+    context: ResumeGateContext,
+    trace: OptimizationTrace,
+    accepted_quality: list[str],
+) -> tuple[ResumePlan, AtsScoreV2]:
+    """Accept one independently validated quality proposal at score parity."""
+    if generate_resume_text(candidate) == generate_resume_text(current):
+        return current, current_score
+    if label.endswith(":summary"):
+        outcome = ground_text(
+            candidate.summary,
+            artifact=ArtifactKind.RESUME,
+            context=build_evidence_context(profile, candidate.jd_profile),
+            id_prefix="optimizer-summary",
+        )
+        if outcome.fatal or outcome.repaired or outcome.rejected:
+            trace.rejected_actions.append(
+                OptimizationRejection(
+                    action=label,
+                    reason="truth gate rejected an unsupported candidate-specific summary claim",
+                )
+            )
+            return current, current_score
+    findings = validate_resume_plan_findings(candidate, profile, requirements, (), context)
+    blockers = _optimization_blockers(findings)
+    if blockers:
+        trace.rejected_actions.append(OptimizationRejection(action=label, reason=_finding_reason(blockers)))
+        return current, current_score
+    candidate_score = _score_plan(candidate, source, requirements, links, [])
+    if candidate_score.score + 0.001 < current_score.score:
+        trace.rejected_actions.append(
+            OptimizationRejection(action=label, reason="quality proposal would reduce ATS v2 score")
+        )
+        return current, current_score
+    accepted_quality.append(label)
+    if candidate_score.score != current_score.score:
+        trace.score_path.append(candidate_score.score)
+    return candidate, candidate_score
+
+
+def _accept_generated_bullets(
+    *,
+    current_plan: ResumePlan,
+    base_plan: ResumePlan,
+    current_score: AtsScoreV2,
+    profile: Profile,
+    requirements: list[RequirementTerm],
+    links: list[EvidenceLink],
+    source: str,
+    context: ResumeGateContext,
+    trace: OptimizationTrace,
+    accepted_quality: list[str],
+) -> tuple[ResumePlan, AtsScoreV2]:
+    """Evaluate every provider bullet independently, falling back per item."""
+    current = current_plan
+    score = current_score
+    for exp_index, source_experience in enumerate(profile.experiences):
+        if exp_index >= len(base_plan.experience) or exp_index >= len(current.experience):
+            continue
+        for bullet_index, source_bullet in enumerate(source_experience.bullets):
+            if bullet_index >= len(base_plan.experience[exp_index].bullets) or bullet_index >= len(
+                current.experience[exp_index].bullets
+            ):
+                continue
+            proposed = base_plan.experience[exp_index].bullets[bullet_index]
+            if proposed.strip() == source_bullet.strip():
+                continue
+            candidate = deepcopy(current)
+            candidate.experience[exp_index].bullets[bullet_index] = proposed
+            label = f"ai:experience:{exp_index}:bullet:{bullet_index}"
+            current, score = _accept_quality_candidate(
+                label=label,
+                current=current,
+                candidate=candidate,
+                current_score=score,
+                profile=profile,
+                requirements=requirements,
+                links=links,
+                source=source,
+                context=context,
+                trace=trace,
+                accepted_quality=accepted_quality,
+            )
+    return current, score
 
 
 def _accept_safe_actions(
@@ -164,26 +667,48 @@ def _accept_safe_actions(
     requirements: list[RequirementTerm],
     links: list[EvidenceLink],
     source: str,
+    context: ResumeGateContext,
 ) -> tuple[ResumePlan, list[PlacementAction], list[OptimizationRejection]]:
     """Bisect a failed batch down to individually safe actions."""
     candidate_actions = [*accepted, *pending]
-    candidate = _apply_actions(plan, candidate_actions, profile)
-    errors = _gate_errors(candidate, profile, requirements, candidate_actions, source)
-    if not errors:
+    candidate = _apply_actions(plan, pending, profile)
+    findings = validate_resume_plan_findings(
+        candidate,
+        profile,
+        requirements,
+        candidate_actions,
+        context,
+    )
+    blockers = _optimization_blockers(findings)
+    if not blockers:
         return candidate, candidate_actions, []
     if len(pending) == 1:
         action = pending[0]
         return (
             plan,
             accepted,
-            [OptimizationRejection(action=_action_label(action), reason="; ".join(errors[:2]))],
+            [OptimizationRejection(action=_action_label(action), reason=_finding_reason(blockers))],
         )
     midpoint = len(pending) // 2
     left_plan, left_actions, left_rejected = _accept_safe_actions(
-        plan, accepted, pending[:midpoint], profile, requirements, links, source
+        plan,
+        accepted,
+        pending[:midpoint],
+        profile,
+        requirements,
+        links,
+        source,
+        context,
     )
     right_plan, right_actions, right_rejected = _accept_safe_actions(
-        left_plan, left_actions, pending[midpoint:], profile, requirements, links, source
+        left_plan,
+        left_actions,
+        pending[midpoint:],
+        profile,
+        requirements,
+        links,
+        source,
+        context,
     )
     return right_plan, right_actions, [*left_rejected, *right_rejected]
 
@@ -191,7 +716,7 @@ def _accept_safe_actions(
 def _apply_actions(base: ResumePlan, actions: list[PlacementAction], profile: Profile) -> ResumePlan:
     plan = deepcopy(base)
     summary_links = [action.link for action in actions if action.target == "summary"]
-    _apply_summary(plan, summary_links, profile.source_summary or _source_role_summary(profile))
+    _apply_summary(plan, summary_links)
     _apply_skills(plan, [action for action in actions if action.target == "skills"], profile)
     _apply_headline(plan, [action for action in actions if action.target == "headline"])
     # Bullet actions are source-order annotations only. A direct source bullet
@@ -200,7 +725,7 @@ def _apply_actions(base: ResumePlan, actions: list[PlacementAction], profile: Pr
     return plan
 
 
-def _apply_summary(plan: ResumePlan, links: list[EvidenceLink], source_summary: str) -> None:
+def _apply_summary(plan: ResumePlan, links: list[EvidenceLink]) -> None:
     # A cert name can itself match a parent requirement (for example Power BI
     # in the PL-300 certificate). Four explicit actions plus that certification
     # reference stay within the five-term summary budget while still letting
@@ -212,15 +737,16 @@ def _apply_summary(plan: ResumePlan, links: list[EvidenceLink], source_summary: 
     certified = _dedupe_text(
         [link.surface_to_use or link.requirement.surface for link in links if link.tier == "cert"]
     )[:5]
-    # ``_source_content_plan`` retains the candidate summary, including every
-    # source metric.  V2 targeting prose is additive around that evidence; it
-    # never replaces the candidate's own factual introduction.
-    parts: list[str] = [source_summary.strip()] if source_summary.strip() else []
+    parts: list[str] = [plan.summary.strip()] if plan.summary.strip() else []
     if direct:
-        parts.append(f"{plan.role_identity} with demonstrated experience in {_join(direct)}.")
+        missing = [term for term in direct if not contains_fact(plan.summary, term)]
+        if missing:
+            parts.append(f"Relevant work includes {_join(missing)}.")
     if certified:
         certificate = _certificate_reference(links)
-        parts.append(f"{certificate} supports knowledge of {_join(certified)}.")
+        missing = [term for term in certified if not contains_fact(plan.summary, term)]
+        if missing and not contains_fact(plan.summary, certificate):
+            parts.append(f"{certificate} supports knowledge of {_join(missing)}.")
     plan.summary = _with_targeting(" ".join(parts), plan.jd_profile)
 
 
@@ -257,8 +783,12 @@ def _apply_skills(plan: ResumePlan, actions: list[PlacementAction], profile: Pro
 
 
 def _apply_headline(plan: ResumePlan, actions: list[PlacementAction]) -> None:
-    terms = _dedupe_text(action.term for action in actions)[:3]
-    plan.headline = f"{plan.role_identity} | {_join(terms)}" if terms else plan.role_identity
+    existing = plan.headline.split("|", 1)
+    prior_terms = (
+        [item.strip() for item in re.split(r",| and ", existing[1]) if item.strip()] if len(existing) == 2 else []
+    )
+    terms = _dedupe_text([*prior_terms, *(action.term for action in actions)])[:3]
+    plan.headline = f"{plan.role_identity} | {', '.join(terms)}" if terms else plan.role_identity
 
 
 def _certificate_reference(links: list[EvidenceLink]) -> str:
@@ -305,47 +835,114 @@ def _v2_plan_decisions(
     actions: list[PlacementAction],
 ) -> list[PlanDecision]:
     """Refresh reviewable decisions after source-preserving v2 optimization."""
-    decisions = [decision for decision in prior if decision.kind not in {"summary", "targeting_clause"}]
+    prior_by_location = {decision.location_id: decision for decision in prior}
+    decisions: list[PlanDecision] = []
     source_summary = profile.source_summary
-    decisions.insert(
-        0,
-        PlanDecision(
-            kind="summary",
-            location_id="resume::summary",
-            original_text=source_summary,
-            tailored_text=plan.summary,
-            operation="added" if not source_summary else "rewritten",
-            reason="Added only resolver-backed terms while preserving candidate-authored summary evidence.",
-            matched_keywords=[action.term for action in actions if action.target == "summary"],
-        ),
-    )
-    by_location = {decision.location_id for decision in decisions}
-    for action in actions:
-        if not action.target.startswith("experience:"):
-            continue
-        location = _plan_bullet_location(action.target)
-        if location is None:
-            continue
-        exp_index, bullet_index, location_id = location
-        if location_id in by_location:
-            continue
-        if exp_index >= len(profile.experiences) or bullet_index >= len(profile.experiences[exp_index].bullets):
-            continue
-        if exp_index >= len(plan.experience) or bullet_index >= len(plan.experience[exp_index].bullets):
-            continue
+    if plan.summary.strip() != source_summary.strip():
+        prior_summary = prior_by_location.get("resume::summary")
+        summary_reason = (
+            prior_summary.reason
+            if prior_summary is not None
+            else "Added only resolver-backed terms while preserving candidate-authored summary evidence."
+        )
         decisions.append(
             PlanDecision(
-                kind="bullet",
-                location_id=location_id,
-                original_text=profile.experiences[exp_index].bullets[bullet_index],
-                tailored_text=plan.experience[exp_index].bullets[bullet_index],
-                operation="rewritten",
-                reason="Retained the source bullet after verifying a resolver-backed placement opportunity.",
-                matched_keywords=[action.term],
+                kind="summary",
+                location_id="resume::summary",
+                original_text=source_summary,
+                tailored_text=plan.summary,
+                operation="added" if not source_summary else "rewritten",
+                reason=_reason_with_bridges(summary_reason, actions, target="summary"),
+                matched_keywords=[action.term for action in actions if action.target == "summary"],
             )
         )
-        by_location.add(location_id)
+
+    if plan.headline.strip() != plan.role_identity.strip():
+        decisions.append(
+            PlanDecision(
+                kind="headline",
+                location_id="resume::headline",
+                original_text=plan.role_identity,
+                tailored_text=plan.headline,
+                operation="rewritten",
+                reason="Surfaced only direct or certification-backed terminology in the headline.",
+                matched_keywords=[part.strip() for part in plan.headline.partition("|")[2].split(",") if part.strip()],
+            )
+        )
+
+    for exp_index, source_experience in enumerate(profile.experiences):
+        if exp_index >= len(plan.experience):
+            continue
+        for bullet_index, source_bullet in enumerate(source_experience.bullets):
+            if bullet_index >= len(plan.experience[exp_index].bullets):
+                continue
+            tailored_bullet = plan.experience[exp_index].bullets[bullet_index]
+            target = f"experience:{exp_index}:bullet:{bullet_index}"
+            action_terms = [action.term for action in actions if action.target == target]
+            if tailored_bullet.strip() == source_bullet.strip() and not action_terms:
+                continue
+            location_id = f"resume::exp{exp_index}::bullet{bullet_index}"
+            prior_decision = prior_by_location.get(location_id)
+            bullet_reason = (
+                prior_decision.reason
+                if prior_decision is not None
+                else (
+                    "Reworded the source bullet while retaining its protected facts and provenance."
+                    if tailored_bullet.strip() != source_bullet.strip()
+                    else "Retained the source bullet after verifying a resolver-backed placement."
+                )
+            )
+            decisions.append(
+                PlanDecision(
+                    kind="bullet",
+                    location_id=location_id,
+                    original_text=source_bullet,
+                    tailored_text=tailored_bullet,
+                    operation="rewritten",
+                    reason=_reason_with_bridges(bullet_reason, actions, target=target),
+                    matched_keywords=(
+                        list(prior_decision.matched_keywords) if prior_decision is not None else action_terms
+                    ),
+                )
+            )
+
+    if plan.skill_groups != profile.source_skill_groups:
+        decisions.append(
+            PlanDecision(
+                kind="skill",
+                location_id="resume::skills",
+                original_text="\n".join(
+                    f"{heading}: {', '.join(items)}" for heading, items in profile.source_skill_groups
+                ),
+                tailored_text="\n".join(f"{heading}: {', '.join(items)}" for heading, items in plan.skill_groups),
+                operation="rewritten",
+                reason=_reason_with_bridges(
+                    "Grouped and surfaced only skills already supported by the resume evidence.",
+                    actions,
+                    target="skills",
+                ),
+                matched_keywords=[action.term for action in actions if action.target == "skills"],
+            )
+        )
     return decisions
+
+
+def _reason_with_bridges(
+    base: str,
+    actions: list[PlacementAction],
+    *,
+    target: str,
+) -> str:
+    """Make every accepted curated bridge explicit in the reviewable ledger."""
+    bridged = [action for action in actions if action.target == target and action.link.match_type == "bridged"]
+    if not bridged:
+        return base
+    descriptions: list[str] = []
+    for action in bridged:
+        span_count = len(action.link.supporting_spans) or int(bool(action.link.resume_span))
+        noun = "source span" if span_count == 1 else "source spans"
+        descriptions.append(f"{action.term} ({span_count} candidate {noun})")
+    return f"{base} Conservative evidence bridge: {_join(_dedupe_text(descriptions))}."
 
 
 def _plan_bullet_location(target: str) -> tuple[int, int, str] | None:
@@ -412,25 +1009,60 @@ def _gate_errors(
     actions: list[PlacementAction],
     source: str,
 ) -> list[str]:
-    rendered = generate_resume_text(plan)
-    bullet_pairs = [
-        BulletPair(original=bullet, candidate=bullet, location=f"experience:{exp_index}:bullet:{bullet_index}")
-        for exp_index, experience in enumerate(profile.experiences)
-        for bullet_index, bullet in enumerate(experience.bullets)
-    ]
-    errors = validate_resume_fidelity(source, rendered, profile=profile, bullet_pairs=bullet_pairs)
-    errors.extend(
-        validate_resume_stuffing(
-            actions=actions,
-            summary=plan.summary,
-            bullets=[bullet for experience in plan.experience for bullet in experience.bullets],
-            skill_groups=plan.skill_groups,
-            requirements=requirements,
-            source_skill_groups=profile.source_skill_groups,
-            source_resume_text=source,
+    """Legacy test helper around the shared structured gate."""
+    if not profile.raw_markdown:
+        profile.raw_markdown = source
+    context = build_resume_gate_context(profile, _source_content_plan(plan, profile, plan.evidence_links))
+    return [
+        finding.detail
+        for finding in validate_resume_plan_findings(
+            plan,
+            profile,
+            requirements,
+            actions,
+            context,
         )
+        if finding.severity is not ValidationSeverity.WARN
+    ]
+
+
+def _optimization_blockers(
+    findings: Iterable[ValidationFinding],
+) -> tuple[ValidationFinding, ...]:
+    return tuple(
+        finding for finding in findings if finding.severity in {ValidationSeverity.FATAL, ValidationSeverity.DEGRADE}
     )
-    return errors
+
+
+def _finding_reason(findings: Iterable[ValidationFinding]) -> str:
+    values = list(findings)
+    return "; ".join(f"{finding.code}: {finding.detail}" for finding in values[:2])
+
+
+def _calibrated_codes(findings: Iterable[ValidationFinding]) -> list[str]:
+    return sorted(
+        {
+            finding.original_code
+            for finding in findings
+            if finding.original_code and finding.severity is ValidationSeverity.WARN
+        }
+    )
+
+
+def _dedupe_findings(findings: Iterable[ValidationFinding]) -> tuple[ValidationFinding, ...]:
+    seen: set[tuple[str, str, str, str]] = set()
+    result: list[ValidationFinding] = []
+    for finding in findings:
+        key = (
+            finding.detector_code,
+            finding.normalized_fact,
+            finding.source_span,
+            finding.detector_version,
+        )
+        if key not in seen:
+            seen.add(key)
+            result.append(finding)
+    return tuple(result)
 
 
 def _score_plan(
@@ -485,4 +1117,9 @@ def _action_label(action: PlacementAction) -> str:
     return f"{action.operation}:{action.target}:{action.term}"
 
 
-__all__ = ["optimize"]
+__all__ = [
+    "ResumeGateContext",
+    "build_resume_gate_context",
+    "optimize",
+    "validate_resume_plan_findings",
+]

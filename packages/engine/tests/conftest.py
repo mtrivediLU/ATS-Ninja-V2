@@ -286,6 +286,6 @@ class FabricatingProvider(LLMProvider):
             return self._answer
         if self._cover is not None and "cover letter body" in lowered:
             return self._cover
-        if self._summary is not None and "resume summary" in lowered:
+        if self._summary is not None and ("resume summary" in lowered or "professional-summary rewrite" in lowered):
             return self._summary
         return ""

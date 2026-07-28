@@ -3,13 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+from ats_engine.validation.findings import ValidationFinding
+
 """The versioned ApplicationKit contract.
 
 This module is the engine's *public, persistable* representation of a generated
 application kit. It is deliberately:
 
 - **Versioned.** ``SCHEMA_VERSION`` is an explicit, human-readable string
-  (currently ``application-kit/v6``) so a stored kit always declares which contract it was
+  (currently ``application-kit/v7``) so a stored kit always declares which contract it was
   written under. A bare integer with ambiguous meaning is intentionally avoided.
 - **Truthful by construction.** Every candidate-specific claim the AI produced is
   represented as a :class:`ClaimRecord` with an explicit :class:`ClaimStatus` and
@@ -36,13 +38,14 @@ APPLICATION_KIT_V3 = "application-kit/v3"
 APPLICATION_KIT_V4 = "application-kit/v4"
 APPLICATION_KIT_V5 = "application-kit/v5"
 APPLICATION_KIT_V6 = "application-kit/v6"
-SCHEMA_VERSION = APPLICATION_KIT_V6
+APPLICATION_KIT_V7 = "application-kit/v7"
+SCHEMA_VERSION = APPLICATION_KIT_V7
 
 # The orchestration contract version identifies the grounded-generation behavior
 # (claim extraction + repair/rejection policy). It participates in cache identity
 # (see ADR-0013) so a change in grounding behavior never reuses prose produced by
-# an older contract. The v6 bump invalidates any cached v5 orchestration output.
-ORCHESTRATION_VERSION = "grounded-orchestration/v6"
+# an older contract. The v7 bump invalidates any cached v6 orchestration output.
+ORCHESTRATION_VERSION = "grounded-orchestration/v7"
 
 # Bound every evidence excerpt so the trace never becomes a second copy of the
 # candidate's resume (privacy: see ADR-0008).
@@ -176,6 +179,7 @@ class ChangeType(StrEnum):
     """The category of a single tailoring change recorded in the change ledger."""
 
     SUMMARY = "summary"
+    HEADLINE = "headline"
     TARGETING_CLAUSE = "targeting_clause"
     BULLET = "bullet"
     SKILL = "skill"
@@ -266,6 +270,41 @@ class ArtifactStatus(StrEnum):
     REPAIRED = "repaired"  # produced, but one or more claims were removed
     REJECTED = "rejected"  # withheld: an unsupported claim could not be removed
     ABSENT = "absent"  # not requested for this kit
+
+
+class DocumentState(StrEnum):
+    """Delivery state for one requested or optional artifact.
+
+    ``partially_completed`` is intentionally absent: partial completion is a
+    kit-level roll-up, never an ambiguous state for one document.
+    """
+
+    GENERATED = "generated"
+    GENERATED_WITH_FALLBACK = "generated_with_fallback"
+    NEEDS_INPUT_REVIEW = "needs_input_review"
+    FAILED = "failed"
+    NOT_REQUESTED = "not_requested"
+
+
+class KitState(StrEnum):
+    """Honest delivery roll-up for the complete ApplicationKit."""
+
+    COMPLETED = "completed"
+    PARTIALLY_COMPLETED = "partially_completed"
+    NEEDS_INPUT_REVIEW = "needs_input_review"
+    FAILED = "failed"
+
+
+@dataclass(slots=True)
+class DeliveryReport:
+    """Per-artifact delivery result, including calibrated gate diagnostics."""
+
+    state: DocumentState
+    findings: list[ValidationFinding] = field(default_factory=list)
+    fallback_reason: str | None = None
+    # Persist/log codes only. Exact calibration keys contain source spans and
+    # facts and therefore stay inside the in-memory validation run.
+    calibration_suppressed: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -394,6 +433,10 @@ class OptimizationTrace:
     accepted_actions: list[str] = field(default_factory=list)
     rejected_actions: list[OptimizationRejection] = field(default_factory=list)
     unreachable_terms: list[str] = field(default_factory=list)
+    delivery_state: DocumentState = DocumentState.GENERATED_WITH_FALLBACK
+    fallback_reason: str = ""
+    # Finding codes only; exact calibration identities remain in-memory.
+    calibration_suppressed: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -897,6 +940,17 @@ class ApplicationKit:
     resolved_mode: str
     generation: GenerationMetadata
     validation: ValidationSummary
+    # JD-owned target context, never candidate history. Confidence is the
+    # deterministic parser completeness annotation used by the UI to request
+    # confirmation when role/company extraction is uncertain.
+    target_role: str = ""
+    target_company: str = ""
+    target_confidence: float = 0.0
+    state: KitState = KitState.COMPLETED
+    # Includes all artifact kinds, including explicit ``not_requested``
+    # reports for absent artifacts. This avoids inventing placeholder artifact
+    # payloads merely to carry delivery state.
+    delivery_reports: dict[ArtifactKind, DeliveryReport] = field(default_factory=dict)
     resume: ResumeArtifact | None = None
     cover_letter: CoverLetterArtifact | None = None
     answers: AnswerArtifact | None = None

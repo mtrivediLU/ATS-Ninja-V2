@@ -6,17 +6,17 @@ import { useKit } from "@/components/product/kit-context";
 import { TrustSummary } from "@/components/product/trust-summary";
 import { useArtifactView } from "@/components/product/use-artifact-view";
 import { Banner, Card } from "@/components/ui/primitives";
-import type { JobFitArtifact } from "@/lib/api-types";
+import type { DocumentState, JobFitArtifact } from "@/lib/api-types";
 import { safeFilename } from "@/lib/product";
 
-export function JobFitWorkspace({ artifact, company, role }: { artifact: JobFitArtifact; company: string; role: string }) {
+export function JobFitWorkspace({ artifact, company, role, deliveryState }: { artifact: JobFitArtifact; company: string; role: string; deliveryState?: DocumentState }) {
   const { openEvidence } = useKit();
   const [view, setView] = useArtifactView();
   const exportText = jobFitText(artifact);
   const score = Math.max(0, Math.min(100, artifact.requirement_coverage_score));
   return <div>
-    <ArtifactToolbar title="Job fit" validation={artifact.validation} claims={artifact.claims} text={exportText} filename={safeFilename(company, role, "job-fit")} view={view} onViewChange={setView} />
-    {view === "trust" ? <TrustSummary title="Job fit" claims={artifact.claims} validation={artifact.validation} text={exportText} readinessLabel={`Fit band: ${artifact.fit_band}`} explanation="Fit band, coverage, and ATS keyword values are deterministic engine outputs. The trace and validation counts below are presentation aggregates, not an AI-confidence score." onOpenContent={() => setView("content")} /> : <>
+    <ArtifactToolbar title="Job fit" validation={artifact.validation} claims={artifact.claims} text={exportText} filename={safeFilename(company, role, "job-fit")} view={view} onViewChange={setView} deliveryState={deliveryState} />
+    {view === "trust" ? <TrustSummary title="Job fit" claims={artifact.claims} validation={artifact.validation} text={exportText} deliveryState={deliveryState} readinessLabel={`Fit band: ${artifact.fit_band}`} explanation="Fit band, coverage, and ATS keyword values are deterministic engine outputs. The trace and validation counts below are presentation aggregates, not an AI-confidence score." onOpenContent={() => setView("content")} /> : <>
     {artifact.must_have_gaps.length > 0 && <Banner tone="warning" title="Must-have gap.">{artifact.must_have_gaps.join(" · ")} — the backend classified this as unsupported, so it must be addressed honestly.</Banner>}
     <Card className="mt-5"><div className="grid items-center gap-6 md:grid-cols-[144px_1fr]"><div className="grid size-32 place-items-center rounded-pill" style={{ background: `conic-gradient(var(--accent) ${score}%, var(--surface-raised) 0)` }} aria-label={`Requirement coverage ${artifact.requirement_coverage_score}`}><div className="grid size-24 place-items-center rounded-pill bg-surface text-center"><div><p className="font-mono text-2xl font-semibold leading-none">{artifact.requirement_coverage_score}</p><p className="mt-1 text-[10px] uppercase tracking-[0.06em] text-ink-muted">coverage</p></div></div></div><div><div className="flex flex-wrap items-center gap-2"><span className="inline-flex items-center gap-1.5 rounded-pill border border-positive-border bg-positive-bg px-2.5 py-1 text-xs font-semibold capitalize text-positive"><CheckCircle2 aria-hidden="true" className="size-3.5" />{artifact.fit_band}</span><span className="font-mono text-xs text-ink-muted">Original-resume keyword score {artifact.ats_keyword_score}</span></div><p className="mt-3 text-pretty text-base text-ink-secondary">{artifact.summary}</p><p className="mt-3 text-xs text-ink-muted">Requirement coverage is a reproducible policy index—not AI confidence, a probability, or a guarantee.</p></div></div></Card>
     <div className="mt-5 grid gap-4 md:grid-cols-2"><TagCard title="Strongest matches" values={artifact.strongest_matches} tone="positive" /><TagCard title="Adjacent capabilities" values={artifact.adjacent_capabilities} tone="warning" /><TagCard title="Working knowledge" values={artifact.working_knowledge} tone="warning" /><TagCard title="Genuine gaps" values={artifact.genuine_gaps} tone="danger" /></div>

@@ -4,10 +4,12 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 
 from ats_engine.evidence.matrix import build_evidence_matrix
+from ats_engine.evidence.resolver import resolve_requirements
 from ats_engine.generation.document_render import (
     render_cover_letter_text_from_document,
     render_resume_text_from_document,
 )
+from ats_engine.generation.integration_planner import plan_placements
 from ats_engine.generation.latex_renderer import cover_letter_to_latex, resume_to_latex
 from ats_engine.generation.planning import split_targeting_clause
 from ats_engine.kit.contract import (
@@ -15,6 +17,8 @@ from ats_engine.kit.contract import (
     ArtifactKind,
     ArtifactStatus,
     ArtifactValidation,
+    AtsMatchScore,
+    ChangeOperation,
     ChangeRecord,
     ChangeStatus,
     ChangeType,
@@ -28,11 +32,14 @@ from ats_engine.kit.contract import (
     WeightedKeyword,
 )
 from ats_engine.kit.grounding import EvidenceContext, GroundingOutcome, build_evidence_context, ground_text
-from ats_engine.models import Profile
+from ats_engine.models import EvidenceLink, JDProfile, PlacementAction, Profile
 from ats_engine.parsing.job_description import parse_jd
 from ats_engine.parsing.resume import build_profile
+from ats_engine.parsing.vocab import normalize_term
+from ats_engine.scoring.ats_v2 import AtsScoreV2, score_resume_v2
 from ats_engine.scoring.match_report import build_kit_summary, build_weighted_keywords, score_resume
 from ats_engine.validation.completeness import resume_completeness_errors
+from ats_engine.validation.fidelity import BulletPair, validate_raw_source_findings
 from ats_engine.validation.latex import validate_latex
 from ats_engine.validation.naturalness import (
     detect_jd_echo,
@@ -189,15 +196,27 @@ def apply_change_actions(
     keyword_terms = [keyword.term for keyword in keywords]
 
     rebuild_errors: list[str] = []
+    targeted_artifacts = {original_records[action.change_id].artifact for action in actions}
     new_resume_text: str | None = None
-    if working.resume is not None and working.resume.document is not None:
+    if ArtifactKind.RESUME in targeted_artifacts and working.resume is not None and working.resume.document is not None:
         outcome = _rebuild_resume(
-            working.resume, context, job_description=job_description, profile=profile, keyword_terms=keyword_terms
+            working.resume,
+            context,
+            job_description=job_description,
+            profile=profile,
+            keyword_terms=keyword_terms,
+            # Accept leaves already-delivered content unchanged; only a reject
+            # or restore creates a new source-retention delta to validate.
+            changed_record_ids={action.change_id for action in actions if action.action != ACTION_ACCEPT},
         )
         new_resume_text = outcome.text
         if outcome.fatal:
             rebuild_errors.extend(outcome.errors)
-    if working.cover_letter is not None and working.cover_letter.document is not None:
+    if (
+        ArtifactKind.COVER_LETTER in targeted_artifacts
+        and working.cover_letter is not None
+        and working.cover_letter.document is not None
+    ):
         outcome = _rebuild_cover_letter(
             working.cover_letter, context, job_description=job_description, keyword_terms=keyword_terms
         )
@@ -212,7 +231,18 @@ def apply_change_actions(
         )
 
     if working.match_report is not None and new_resume_text is not None:
-        _recompute_match_report(working.match_report, new_resume_text, keywords, profile, tier_by_keyword)
+        score_errors = _recompute_match_report(
+            working.match_report,
+            new_resume_text,
+            keywords,
+            profile,
+            tier_by_keyword,
+            jd_profile=jd_profile,
+            resume=working.resume,
+            source_resume_text=resume_text,
+        )
+        if score_errors:
+            return ChangeActionResult(kit=kit, errors=score_errors)
 
     # Refresh the kit-wide validation roll-up so global warnings/status can never
     # go stale relative to the artifacts a successful batch just rebuilt.
@@ -309,20 +339,24 @@ def _rebuild_resume(
     job_description: str,
     profile: Profile,
     keyword_terms: list[str],
+    changed_record_ids: set[str],
 ) -> _RebuildOutcome:
     document = resume.document
     assert document is not None
     ledger = {record.id: record for record in resume.change_ledger}
 
-    base = _effective_added(ledger.get("resume::summary"))
-    targeting = _effective_added(ledger.get("resume::summary::targeting"))
+    base = _effective_record(ledger.get("resume::summary"))
+    targeting = _effective_record(ledger.get("resume::summary::targeting"))
     document.summary = " ".join(part for part in (base, targeting) if part).strip()
+
+    headline = ledger.get("resume::headline")
+    if headline is not None:
+        document.professional_headline = _effective_record(headline)
 
     for record in resume.change_ledger:
         if record.change_type is not ChangeType.BULLET:
             continue
-        text = record.original_text if record.status is ChangeStatus.REJECTED else record.tailored_text
-        _set_bullet(document, record.id, text)
+        _set_bullet(document, record.id, _effective_record(record))
 
     # Re-ground every editable unit and refresh the claim trace from scratch, so
     # no revision-zero claims survive a content change.
@@ -360,6 +394,37 @@ def _rebuild_resume(
     # + JD-echo are warnings, matching initial generation's severity.
     errors = _structural_errors(text, latex, job_description)
     errors.extend(resume_completeness_errors(text, profile))
+    # The untouched units were already fully validated on delivery. Revalidate
+    # every unit changed by this atomic action against its immutable ledger
+    # baseline instead of re-running a raw-source heuristic over unrelated,
+    # previously calibrated units (which would turn a reviewed false positive
+    # into a later rejection).
+    changed_pairs = [
+        BulletPair(
+            original=record.original_text,
+            candidate=_effective_record(record),
+            location=record.id,
+        )
+        for record in resume.change_ledger
+        if record.id in changed_record_ids and record.change_type is ChangeType.BULLET
+    ]
+    fidelity_findings = list(validate_raw_source_findings("", "", bullet_pairs=tuple(changed_pairs)))
+    # The delivered summary ("resume::summary") is not itself re-checked here
+    # for "unsupported" entities. `_effective_record` can only ever yield one
+    # of two immutable, already-vetted values for it: the candidate's own
+    # `original_text`, or the `tailored_text` the authoritative optimizer gate
+    # (`validate_resume_plan_findings`) already approved before it ever became
+    # a ledger record -- accept/reject/restore never synthesizes new content.
+    # A narrow "candidate vs this one lead sentence" comparison (the prior
+    # approach) is also the wrong shape for a composed summary: the tailored
+    # text legitimately layers in evidence surfaced from elsewhere in the
+    # resume (a skill, a certification) plus the JD's own title in the
+    # targeting clause -- content that is correct but, by construction, absent
+    # from the bare lead sentence. That mismatch made a same-content restore
+    # fail depending on which unit last changed. Fabrication is still caught
+    # by `ground_text` (already re-run on the reconstructed summary above) and
+    # by the plan-level gate that vetted `tailored_text` in the first place.
+    errors.extend(f"fidelity: {finding.detail}" for finding in fidelity_findings if is_fatal_validation_error(finding))
     units = [document.summary, *(bullet for entry in document.experience for bullet in entry.bullets)]
     warnings = _naturalness_warnings(text, units=units, keyword_terms=keyword_terms, job_description=job_description)
     fatal = rejected > 0 or any(is_fatal_validation_error(error) for error in errors)
@@ -527,10 +592,14 @@ def _apply_validation(
     )
 
 
-def _effective_added(record: ChangeRecord | None) -> str:
+def _effective_record(record: ChangeRecord | None) -> str:
     if record is None:
         return ""
-    return "" if record.status is ChangeStatus.REJECTED else record.tailored_text
+    if record.status is not ChangeStatus.REJECTED:
+        return record.tailored_text
+    if record.operation in {ChangeOperation.REWRITTEN, ChangeOperation.REORDERED, ChangeOperation.OMITTED}:
+        return record.original_text
+    return ""
 
 
 def _set_bullet(document: ResumeDocument, location_id: str, text: str) -> None:
@@ -567,9 +636,36 @@ def _recompute_match_report(
     keywords: list[WeightedKeyword],
     profile: Profile,
     tier_by_keyword: dict[str, str],
-) -> None:
-    tailored = score_resume(resume_text, keywords, profile, tier_by_keyword)
-    report.tailored_ats_match = tailored
+    *,
+    jd_profile: JDProfile,
+    resume: ResumeArtifact | None,
+    source_resume_text: str,
+) -> list[str]:
+    if report.score_basis == "ats_v2":
+        # The v2 score is not interchangeable with legacy weighted keywords:
+        # it validates source-backed requirements plus structured placement
+        # provenance.  Retaining the v2 label after a legacy recomputation
+        # would make a user-facing score dishonest.
+        requirements = getattr(jd_profile, "requirements", [])
+        links = resolve_requirements(requirements, profile, source_resume_text)
+        placements = _accepted_v2_placements(links, profile, jd_profile, resume)
+        original = score_resume_v2(source_resume_text, requirements, links)
+        tailored_v2 = score_resume_v2(
+            resume_text,
+            requirements,
+            links,
+            source_resume_text=source_resume_text,
+            tailored=True,
+            placements=placements,
+        )
+        tailored = _v2_contract_score(tailored_v2)
+        if tailored.score + 0.001 < original.score:
+            return ["The change would reduce the authoritative ATS v2 score below the original resume."]
+        report.original_ats_match = _v2_contract_score(original)
+        report.tailored_ats_match = tailored
+    else:
+        tailored = score_resume(resume_text, keywords, profile, tier_by_keyword)
+        report.tailored_ats_match = tailored
 
     matched_original = set(report.keywords_matched_original)
     matched_tailored = set(tailored.matched_keywords)
@@ -584,6 +680,46 @@ def _recompute_match_report(
         category=report.fit_category,
         confidence=report.confidence,
     )
+    return []
+
+
+def _v2_contract_score(score: AtsScoreV2) -> AtsMatchScore:
+    return AtsMatchScore(
+        score=score.score,
+        matched_keywords=score.matched_keywords,
+        missing_keywords=score.missing_keywords,
+        total_keywords=score.total_keywords,
+        required_matched=score.required_matched,
+        required_total=score.required_total,
+        preferred_matched=score.preferred_matched,
+        preferred_total=score.preferred_total,
+    )
+
+
+def _accepted_v2_placements(
+    links: list[EvidenceLink], profile: Profile, jd_profile: JDProfile, resume: ResumeArtifact | None
+) -> list[PlacementAction]:
+    if resume is None:
+        return []
+    records = {record.id: record for record in resume.change_ledger}
+    accepted: list[PlacementAction] = []
+    targets = {
+        "summary": "resume::summary",
+        "headline": "resume::headline",
+        "skills": "resume::skills",
+    }
+    for action in plan_placements(links, profile, jd_profile):
+        record_id = targets.get(action.target)
+        if action.target.startswith("experience:"):
+            _, exp, _, bullet = action.target.split(":")
+            record_id = f"resume::exp{exp}::bullet{bullet}"
+        record = records.get(record_id or "")
+        if record is None or record.status is ChangeStatus.REJECTED:
+            continue
+        if normalize_term(action.term) not in {normalize_term(term) for term in record.matched_keywords}:
+            continue
+        accepted.append(action)
+    return accepted
 
 
 __all__ = [

@@ -13,7 +13,7 @@ import type { DocumentFormat } from "@/components/product/quick-pdf-download";
 import { ResultsHeader } from "@/components/product/results-header";
 import { ScoreComparison } from "@/components/product/score-comparison";
 import { Banner } from "@/components/ui/primitives";
-import { copyText, kitTarget } from "@/lib/product";
+import { copyText, effectiveKitStatus, kitTarget } from "@/lib/product";
 import { formatAnswersText, recommendedOutreachDraft } from "@/lib/artifact-content";
 
 /**
@@ -33,6 +33,7 @@ export function UnifiedKitWorkspace() {
   const target = kitTarget(kit);
   const result = kit?.result;
   if (!kit || !result) return null;
+  const lifecycle = effectiveKitStatus(kit);
   const completedResult = result;
 
   function openResumePreview() {
@@ -66,7 +67,9 @@ export function UnifiedKitWorkspace() {
   }
 
   const isSupportedSchema =
-    result.schema_version === "application-kit/v5" || result.schema_version === "application-kit/v6";
+    result.schema_version === "application-kit/v5" ||
+    result.schema_version === "application-kit/v6" ||
+    result.schema_version === "application-kit/v7";
   const isV4 = result.schema_version === "application-kit/v4";
 
   return (
@@ -81,7 +84,21 @@ export function UnifiedKitWorkspace() {
 
       <ResultsHeader kit={kit} />
 
-      {result.match_report && <ScoreComparison report={result.match_report} />}
+      {lifecycle === "partially_completed" && (
+        <Banner tone="warning" title="This Kit was partially completed." className="mt-4">
+          Some requested artifacts could not be delivered. Successfully generated documents remain available below.
+        </Banner>
+      )}
+      {lifecycle === "needs_input_review" && (
+        <Banner tone="warning" title="Some input needs review." className="mt-4">
+          At least one requested artifact could not be delivered from the extracted input. Successfully delivered
+          artifacts remain available below; review the source résumé and job description before creating a new Kit.
+        </Banner>
+      )}
+
+      {result.match_report && (
+        <ScoreComparison report={result.match_report} resumeState={result.delivery_reports?.resume?.state} />
+      )}
       {!result.match_report && (
         <Banner tone="neutral" title="Match scores were unavailable for this run." className="mt-6">
           Your documents are still available for download below.
@@ -103,6 +120,7 @@ export function UnifiedKitWorkspace() {
             expanded={previewArtifact === "resume"}
             onExpandedChange={(open) => setPreviewArtifact(open ? "resume" : null)}
             format={format}
+            deliveryReport={result.delivery_reports?.resume}
           />
           <PrimaryDocumentCard
             artifact="cover-letter"
@@ -111,6 +129,7 @@ export function UnifiedKitWorkspace() {
             expanded={previewArtifact === "cover-letter"}
             onExpandedChange={(open) => setPreviewArtifact(open ? "cover-letter" : null)}
             format={format}
+            deliveryReport={result.delivery_reports?.cover_letter}
           />
         </div>
       </section>
