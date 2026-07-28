@@ -133,7 +133,7 @@ def test_a_versioned_standard_does_not_also_appear_bare() -> None:
 
 
 def test_the_ideal_candidate_sentence_is_not_treated_as_company_boilerplate() -> None:
-    """"The ideal candidate is ..." states requirements, not company context.
+    """ "The ideal candidate is ..." states requirements, not company context.
 
     The employer-context filter is case-insensitive, so it used to swallow this
     sentence whole and discard every requirement in it.

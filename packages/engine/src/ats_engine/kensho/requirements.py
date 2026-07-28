@@ -863,10 +863,7 @@ def _mined_candidates(
     values: list[tuple[str, int]] = []
     values.extend((item, start + offset) for item, start in _parenthetical_items(content))
     values.extend((item, start + offset) for item, start in _cue_phrase_items(content))
-    values.extend(
-        (token, match.start() + offset)
-        for token, match in _capitalized_product_tokens_with_matches(content)
-    )
+    values.extend((token, match.start() + offset) for token, match in _capitalized_product_tokens_with_matches(content))
 
     # Standards are admitted from the whole line: a label such as
     # "Accessibility: Section 508" still names a real, checkable standard.

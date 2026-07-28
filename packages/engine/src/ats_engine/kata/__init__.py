@@ -14,10 +14,20 @@ from ats_engine.kata.facts import (
     build_fact_set,
     fact_set_violations,
 )
+from ats_engine.kata.preservation import (
+    TermRegression,
+    count_occurrences,
+    preserves_jd_terms,
+    term_regressions,
+)
 
 __all__ = [
     "FactViolation",
     "ImmutableFactSet",
+    "TermRegression",
     "build_fact_set",
+    "count_occurrences",
     "fact_set_violations",
+    "preserves_jd_terms",
+    "term_regressions",
 ]

@@ -61,12 +61,17 @@ _SPELLING_VARIANTS: Final[tuple[tuple[str, str], ...]] = (
 )
 
 
+@lru_cache(maxsize=65536)
 def normalize_term(text: str) -> str:
     """Return a conservative comparison key for a skill or requirement.
 
     The key is case-insensitive, whitespace/punctuation tolerant, and treats a
     small set of US/Canadian-English spelling variants as identical.  It is
     suitable for exact alias lookup, not for semantic similarity.
+
+    Memoized because it is pure and extremely hot: fidelity validation calls it
+    on the order of a million times for a single kit, and each call runs half a
+    dozen regex substitutions.
     """
 
     normalized = unicodedata.normalize("NFKC", text).casefold()
@@ -335,10 +340,14 @@ VOCABULARY: Final[tuple[VocabularyEntry, ...]] = (
     # entries existed the entire GenAI half of a modern BI posting was invisible
     # to the demand model.
     _entry("generative ai", aliases=("genai", "gen ai"), display="Generative AI", category="platform", kind="domain"),
-    _entry("llms", aliases=("llm", "large language models", "large language model"), display="LLMs", category="platform"),
+    _entry(
+        "llms", aliases=("llm", "large language models", "large language model"), display="LLMs", category="platform"
+    ),
     _entry("chatgpt", aliases=("chat gpt",), display="ChatGPT", category="platform"),
     _entry("claude", display="Claude", category="platform"),
-    _entry("microsoft copilot", aliases=("copilot", "github copilot"), display="Microsoft Copilot", category="platform"),
+    _entry(
+        "microsoft copilot", aliases=("copilot", "github copilot"), display="Microsoft Copilot", category="platform"
+    ),
     _entry("openai", display="OpenAI", category="platform"),
     _entry("gemini", display="Gemini", category="platform"),
     _entry("rag", aliases=("retrieval augmented generation",), display="RAG", category="platform", kind="methodology"),
@@ -375,7 +384,13 @@ VOCABULARY: Final[tuple[VocabularyEntry, ...]] = (
     _entry("business analytics", category="bi_analytics", kind="domain"),
     _entry("information systems", category="business_analysis", kind="domain"),
     _entry("business administration", category="business_analysis", kind="domain"),
-    _entry("agile", aliases=("agile methodology", "scrum"), display="agile", category="business_analysis", kind="methodology"),
+    _entry(
+        "agile",
+        aliases=("agile methodology", "scrum"),
+        display="agile",
+        category="business_analysis",
+        kind="methodology",
+    ),
     # Web scraping / data extraction stack.
     _entry("beautifulsoup", aliases=("beautiful soup", "bs4"), display="BeautifulSoup", category="framework"),
     _entry("scrapy", display="Scrapy", category="framework"),
@@ -456,27 +471,63 @@ def find_vocabulary_matches(text: str) -> list[VocabularyMatch]:
 
     matches: list[VocabularyMatch] = []
     seen: set[tuple[str, int, int]] = set()
-    for entry in VOCABULARY:
-        if not is_admissible_entry(entry):
+    haystack = text.casefold()
+    for entry, alias, anchor in _admissible_alias_pairs():
+        # An alias pattern only tolerates separator variation *between* runs of
+        # characters, so its longest separator-free run must appear literally.
+        # Checking that first turns several hundred regex scans per call into a
+        # handful, without changing which aliases can match.
+        if anchor and anchor not in haystack:
             continue
-        for alias in entry.aliases:
-            if not _is_admissible_alias(alias, entry):
+        for found in _alias_pattern(alias).finditer(text):
+            key = (entry.canonical, found.start(), found.end())
+            if key in seen:
                 continue
-            for found in _alias_pattern(alias).finditer(text):
-                key = (entry.canonical, found.start(), found.end())
-                if key in seen:
-                    continue
-                seen.add(key)
-                matches.append(
-                    VocabularyMatch(
-                        entry=entry,
-                        surface=found.group(0),
-                        start=found.start(),
-                        end=found.end(),
-                        alias=alias,
-                    )
+            seen.add(key)
+            matches.append(
+                VocabularyMatch(
+                    entry=entry,
+                    surface=found.group(0),
+                    start=found.start(),
+                    end=found.end(),
+                    alias=alias,
                 )
+            )
     return sorted(matches, key=lambda match: (match.start, -(match.end - match.start), match.entry.canonical))
+
+
+@lru_cache(maxsize=1)
+def _admissible_alias_pairs() -> tuple[tuple[VocabularyEntry, str, str], ...]:
+    """Every matchable (entry, alias, anchor) triple, resolved once.
+
+    ``VOCABULARY`` is a module-level constant, so admissibility never changes
+    between calls. Recomputing it per call meant re-normalizing every alias of
+    every entry on each of the thousands of matcher invocations a single kit
+    performs.
+
+    ``anchor`` is the alias's longest run of non-separator characters, folded
+    for comparison -- a cheap necessary condition for the alias pattern to
+    match at all.
+    """
+
+    return tuple(
+        (entry, alias, _alias_anchor(alias))
+        for entry in VOCABULARY
+        if is_admissible_entry(entry)
+        for alias in entry.aliases
+        if _is_admissible_alias(alias, entry)
+    )
+
+
+def _alias_anchor(alias: str) -> str:
+    """Longest separator-free run in *alias*, casefolded.
+
+    ``_alias_pattern`` only allows separator characters to vary, so every other
+    character of the alias must appear contiguously in any text it matches.
+    """
+
+    runs = re.split(r"[\s._/-]+", alias.casefold())
+    return max(runs, key=len, default="")
 
 
 # Certification inference is deliberately one-way and narrowly scoped.  It

@@ -5,17 +5,18 @@ from collections import Counter
 from collections.abc import Iterable
 from dataclasses import replace
 
-from ats_engine.models import JDProfile, Profile, RequirementTerm
 from ats_engine.kensho.requirements import (
+    INLINE_TITLE_PATTERNS,
     JDHygiene,
     extract_requirements,
     filter_hygienic_jd_values,
     is_person_name,
     sanitize_jd_for_parsing,
 )
+from ats_engine.models import JDProfile, Profile, RequirementTerm
 from ats_engine.parsing.line_refs import number_lines, render_numbered_lines, resolve_line_numbers
 from ats_engine.parsing.resume import empty_profile
-from ats_engine.parsing.vocab import normalize_term
+from ats_engine.parsing.vocab import normalize_term, vocabulary_entry
 from ats_engine.providers.base import LLMProvider, generate_json
 
 # The JD has already been split into numbered lines. Pointing at line numbers
@@ -344,7 +345,7 @@ def _parse_jd_heuristic(job_description: str, profile: Profile, *, hygiene: JDHy
     target_text = "\n".join(target_lines)
     clean_text = "\n".join(scoring_lines)
     title = _extract_title(target_text, target_lines)
-    company = _extract_company(target_text, target_lines, title, hygiene)
+    company = _extract_company(target_text, target_lines, title, hygiene, source_text=job_description)
     required = _extract_section_items(
         scoring_lines,
         [
@@ -629,6 +630,22 @@ def _extract_title(text: str, lines: list[str]) -> str:
             marker in following for marker in ("responsibil", "qualification", "requirements", "what you will")
         ):
             return candidate
+
+    # Last resort: an inline announcement such as "seeking a forward-thinking
+    # Analytical BI & AI to lead our modern reporting initiatives". For some
+    # postings this sentence is the only statement of the role, and without it
+    # the extractor emitted the placeholder "Target Role".
+    #
+    # It runs last deliberately. A standalone heading is the more complete
+    # statement when one exists -- a posting that heads "IT Specialist -
+    # Economic Development" and then says "is seeking an IT Specialist to
+    # support Economic Development programs" means the fuller heading, and
+    # preferring the sentence would silently truncate the title.
+    for announcement in INLINE_TITLE_PATTERNS:
+        for match in announcement.finditer(text):
+            candidate = _clean_title(match.group("title"))
+            if _is_valid_title_candidate(candidate, announced=True):
+                return candidate
     return ""
 
 
@@ -643,12 +660,35 @@ def _title_candidate_rank(candidate: str) -> tuple[int, int, int]:
     return role_index, part_time_penalty, len(words)
 
 
-def _extract_company(text: str, lines: list[str], title: str, hygiene: JDHygiene) -> str:
-    # 1. Explicit source label always wins.
+def _extract_company(
+    text: str,
+    lines: list[str],
+    title: str,
+    hygiene: JDHygiene,
+    source_text: str = "",
+) -> str:
+    """Resolve the hiring organization, strongest source first.
+
+    ``source_text`` is the unfiltered posting. It is needed because JD hygiene
+    strips the equal-opportunity paragraph as boilerplate -- correctly, for
+    scoring -- but that paragraph is frequently the only place the employer is
+    named outright.
+    """
+
+    # 1. Explicit source label always wins.  ``Client Name:`` is included
+    # because staffing and consultancy postings name the end client that way,
+    # and ignoring it left the extractor to guess -- it picked "APIs and JSON"
+    # out of a requirements bullet on a posting whose first line literally read
+    # "Client Name: CrowdPlat".
     for line in lines:
-        match = re.match(r"^(?:company|organization|organisation|employer)\s*[:\-]\s*(.+)$", line, re.I)
+        match = re.match(
+            r"^(?:company|organization|organisation|employer|client\s*name|client|hiring\s+company)"
+            r"\s*[:\-]\s*(.+)$",
+            line,
+            re.I,
+        )
         if match is not None:
-            candidate = _trim_company(match.group(1))
+            candidate = _trim_company(_strip_company_qualifier(match.group(1)))
             if _is_valid_company_candidate(candidate, title, explicit_label=True):
                 return candidate
 
@@ -658,6 +698,13 @@ def _extract_company(text: str, lines: list[str], title: str, hygiene: JDHygiene
     about_candidate = _company_from_about_heading(lines, title)
     if about_candidate:
         return about_candidate
+
+    # 2b. The equal-opportunity paragraph names the employer in nearly every
+    # posting that has one, and it is the only place many postings state it
+    # outright: "At LatentView Analytics, we value a diverse workforce".
+    equal_opportunity_candidate = _company_from_equal_opportunity_clause(source_text or text, title)
+    if equal_opportunity_candidate:
+        return equal_opportunity_candidate
 
     # 3. An application domain is weaker but deterministic and useful for a
     # minimal posting that provides no company label.  Preserve source casing
@@ -685,6 +732,39 @@ def _extract_company(text: str, lines: list[str], title: str, hygiene: JDHygiene
         candidate = _trim_company(repeated)
         if _is_valid_company_candidate(candidate, title):
             return candidate
+    return ""
+
+
+def _strip_company_qualifier(value: str) -> str:
+    """Drop a trailing bracketed qualifier from a labelled company name.
+
+    ``Client Name: CrowdPlat (Internal Role)`` names CrowdPlat; the bracket is
+    an engagement note, not part of the organization's name.
+    """
+
+    return re.sub(r"\s*[(\[][^)\]]{0,60}[)\]]\s*$", "", value or "").strip()
+
+
+_EQUAL_OPPORTUNITY_COMPANY = (
+    # "At LatentView Analytics, we value ..." / "At Acme Inc. we are an equal ..."
+    re.compile(
+        r"\bAt\s+(?P<company>[A-Z][A-Za-z0-9&'.\- ]{2,70}?)\s*,?\s+"
+        r"(?:we|our)\b"
+    ),
+    # "Acme Corporation is an equal opportunity employer"
+    re.compile(
+        r"\b(?P<company>[A-Z][A-Za-z0-9&'.\- ]{2,70}?)\s+is\s+an\s+equal\s+"
+        r"(?:opportunity|employment)\b"
+    ),
+)
+
+
+def _company_from_equal_opportunity_clause(text: str, title: str) -> str:
+    for pattern in _EQUAL_OPPORTUNITY_COMPANY:
+        for match in pattern.finditer(text):
+            candidate = _trim_company(match.group("company"))
+            if _is_valid_company_candidate(candidate, title):
+                return candidate
     return ""
 
 
@@ -740,14 +820,30 @@ def _company_from_application_domain(hygiene: JDHygiene, lines: list[str], title
     return ""
 
 
-def _is_valid_title_candidate(value: str, *, explicit_label: bool = False) -> bool:
+def _is_valid_title_candidate(
+    value: str,
+    *,
+    explicit_label: bool = False,
+    announced: bool = False,
+) -> bool:
+    """Whether *value* may be used as the job title.
+
+    ``announced`` marks a title the posting states outright ("seeking a
+    forward-thinking Analytical BI & AI to lead"). Such a title is accepted
+    without a recognizable role noun, because the sentence has already
+    identified it as the vacancy -- requiring "engineer"/"analyst"/"manager"
+    would reject real, if awkward, titles and fall back to a placeholder.
+    """
+
     cleaned = _clean_title(value)
     words = re.findall(r"[A-Za-z]+", cleaned.casefold())
     if not cleaned or len(cleaned) > 80 or _looks_like_contact_value(cleaned):
         return False
     if normalize_term(cleaned) in _CONTACT_ROLE_TITLES and not explicit_label:
         return False
-    if not words or not (set(words) & _TITLE_ROLE_WORDS):
+    if not words:
+        return False
+    if not announced and not (set(words) & _TITLE_ROLE_WORDS):
         return False
     if is_person_name(cleaned) or _title_has_unfinished_capture(cleaned):
         return False
@@ -803,10 +899,79 @@ def _company_is_role_sentence(words: list[str]) -> bool:
 
 
 def _is_generic_company_candidate(value: str) -> bool:
-    """Whether an extracted employer phrase is only a boilerplate noun."""
+    """Whether an extracted employer phrase is only a boilerplate noun.
+
+    The observed failures were not exotic: a real posting yielded the employer
+    ``APIs and JSON`` (a fragment of a requirements bullet) and another yielded
+    ``Generative AI``. Nobody is employed by a work mode, an employment type, a
+    city, or a list of technologies, so each of those shapes is rejected
+    outright rather than left to a downstream heuristic.
+    """
 
     normalized = _ARTICLE_PREFIX.sub("", value).casefold().strip(" .,:;-")
-    return normalized in {"company", "organization", "organisation", "employer"}
+    if normalized in {"company", "organization", "organisation", "employer"}:
+        return True
+    if normalized in _WORK_MODES or normalized in _EMPLOYMENT_TYPES:
+        return True
+    if _looks_like_bare_location(value):
+        return True
+    return _is_all_technology_terms(value)
+
+
+# Nobody is employed by "Remote" or by "Contract".
+_WORK_MODES = frozenset({"remote", "hybrid", "on-site", "onsite", "on site", "in-office", "in office"})
+_EMPLOYMENT_TYPES = frozenset(
+    {
+        "full-time",
+        "full time",
+        "part-time",
+        "part time",
+        "contract",
+        "contractor",
+        "temporary",
+        "permanent",
+        "internship",
+        "intern",
+        "freelance",
+        "casual",
+        "seasonal",
+    }
+)
+
+# "Toronto, ON" / "Sudbury, Ontario" / "Remote, Canada".
+_BARE_LOCATION = re.compile(r"^[A-Z][A-Za-z.\- ]{1,40},\s*(?:[A-Z]{2}|[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)$")
+
+
+def _looks_like_bare_location(value: str) -> bool:
+    cleaned = _trim_company(value)
+    if _BARE_LOCATION.match(cleaned) is None:
+        return False
+    # A real employer may legitimately contain a comma ("Acme, Inc."), so keep
+    # anything whose tail is a corporate suffix.
+    tail = cleaned.rsplit(",", 1)[-1].strip().casefold().rstrip(".")
+    return tail not in _CORPORATE_SUFFIXES
+
+
+_CORPORATE_SUFFIXES = frozenset(
+    {"inc", "llc", "ltd", "limited", "corp", "corporation", "co", "plc", "gmbh", "sa", "nv", "ag", "pty", "llp"}
+)
+
+
+def _is_all_technology_terms(value: str) -> bool:
+    """True when every significant word is a known technology term.
+
+    ``APIs and JSON`` and ``Python and SQL`` are requirement fragments that a
+    proper-noun heuristic mistakes for organizations.
+    """
+
+    cleaned = _trim_company(value)
+    parts = [part for part in re.split(r"\s+(?:and|or|&|/)\s+|,\s*|/", cleaned) if part.strip()]
+    if not parts:
+        return False
+    significant = [part.strip() for part in parts if normalize_term(part) not in {"", "the", "a", "an"}]
+    if not significant:
+        return False
+    return all(vocabulary_entry(normalize_term(part)) is not None for part in significant)
 
 
 _HEADING_WORDS = {

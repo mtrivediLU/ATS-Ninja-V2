@@ -177,6 +177,12 @@ class Profile:
     # source-backed targeting prose around it, but must not discard metrics or
     # other facts stated in the original summary.
     source_summary: str = ""
+    # The candidate's own headline: the tagline written directly beneath their
+    # name ("Senior Software Engineer | Full-Stack, Data & AI Solutions").
+    # It is retained separately from `role_identities`, which holds employment
+    # titles -- substituting the most recent title for this line silently
+    # discarded job-relevant terms the candidate had written themselves.
+    source_headline: str = ""
     # The source resume's own skills taxonomy.  Older parsers produced only
     # tiered flat maps; retaining this optional representation lets the v2
     # planner preserve headings and ordering without fabricating a new layout.

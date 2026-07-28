@@ -62,17 +62,13 @@ def test_no_certification_is_created_from_hyperlink_anchor_text(real_profile) ->
 
 def test_every_credential_id_survives_parsing(real_profile) -> None:
     """A credential ID is opaque and unguessable, so losing one is unrecoverable."""
-    parsed = {
-        certification.name: certification.credential_id for certification in real_profile.certifications
-    }
+    parsed = {certification.name: certification.credential_id for certification in real_profile.certifications}
     for name, credential_id, _year in EXPECTED_CERTIFICATIONS:
         assert parsed.get(name) == credential_id
 
 
 def test_certification_names_and_dates_are_exact(real_profile) -> None:
-    parsed = {
-        certification.name: certification.date for certification in real_profile.certifications
-    }
+    parsed = {certification.name: certification.date for certification in real_profile.certifications}
     for name, _credential_id, year in EXPECTED_CERTIFICATIONS:
         assert parsed.get(name) == year
 
