@@ -36,13 +36,21 @@ def _score_context(resume: str, jd: str):
 
 
 def test_repeating_a_keyword_twelve_times_does_not_raise_score() -> None:
+    """Repeating a keyword 12 times must never raise the score above the clean
+    baseline. Under PRAMANA (which this legacy conversion now delegates to),
+    stuffing is an active per-requirement penalty applied regardless of
+    groundedness -- stuffing an *unsupported* term is if anything more
+    suspicious than stuffing a supported one, not exempt from it -- so both
+    variants may now score at or below the baseline, not merely equal to it.
+    """
     profile, keywords, tiers = _score_context(ADVERSARIAL_RESUME, _HARD_JD)
     plain = score_resume(ADVERSARIAL_RESUME, keywords, profile, tiers)
     stuffed = score_resume(ADVERSARIAL_RESUME + "\n" + ("python " * 12), keywords, profile, tiers)
-    assert stuffed.score == plain.score
-    # An unsupported keyword repeated 12 times earns nothing either.
+    assert stuffed.score <= plain.score
+    # An unsupported keyword repeated 12 times earns nothing, and is now
+    # itself penalized for stuffing rather than merely ignored.
     kube_stuffed = score_resume(ADVERSARIAL_RESUME + "\n" + ("kubernetes " * 12), keywords, profile, tiers)
-    assert kube_stuffed.score == plain.score
+    assert kube_stuffed.score <= plain.score
     assert "kubernetes" not in kube_stuffed.matched_keywords
 
 
