@@ -21,7 +21,6 @@ from ats_engine.kit.contract import (
 from ats_engine.kit.grounding import EvidenceContext, GroundingOutcome, ground_text
 from ats_engine.models import EvidenceItem, JDProfile, Profile, ResumePlan
 from ats_engine.providers.base import LLMProvider, generate_text
-from ats_engine.scoring import calculate_ats_score
 from ats_engine.scoring.ats_v2 import score_resume_v2
 
 _UNSUITABLE_STANDALONE_REQUIREMENTS = frozenset(
@@ -206,16 +205,20 @@ def build_job_fit_artifact(
     assessments = [_assessment(item, index, profile) for index, item in enumerate(fit_evidence, start=1)]
     score = requirement_coverage_score(fit_evidence)
     band = fit_band_for_score(score)
-    if plan.requirements and plan.evidence_links:
-        ats_score = score_resume_v2(
-            resume_text,
-            plan.requirements,
-            plan.evidence_links,
-            source_resume_text=resume_text,
-        ).score
-    else:
-        ats = calculate_ats_score(resume_text, job_description)
-        ats_score = float(ats["score"]) if isinstance(ats["score"], (int, float)) else 0.0
+    # Single entry point: PRAMANA scores this unconditionally. A JD that
+    # produced zero typed requirements is handled by its own empty-guard (an
+    # honest 0.0), not a second, independent formula -- unlike a resume with
+    # no recognizable structure at all (a different failure mode, see
+    # scoring/ats.py's calculate_ats_score docstring), plan.requirements being
+    # empty here says nothing was asked for, and 0.0 is the accurate answer.
+    ats_score = score_resume_v2(
+        resume_text,
+        plan.requirements,
+        plan.evidence_links,
+        source_resume_text=resume_text,
+        jd_title=jd_profile.title,
+        parse_confidence=jd_profile.parse_confidence,
+    ).score
     fallback = _deterministic_summary(score, band.value, assessments)
     candidate = generate_text(provider, _prompt(score, band.value, assessments, fallback))
     raw_summary = candidate or fallback

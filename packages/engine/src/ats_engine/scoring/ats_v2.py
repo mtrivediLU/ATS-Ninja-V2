@@ -45,13 +45,18 @@ def score_resume_v2(
     source_resume_text: str = "",
     tailored: bool = False,
     placements: Iterable[PlacementAction] = (),
+    jd_title: str = "",
+    parse_confidence: float = 1.0,
 ) -> AtsScoreV2:
     """Score a resume only for JD requirements with source-backed evidence.
 
     Delegates to PRAMANA (``pramana.scoring.score_resume``) and projects the
     result onto the stable ``AtsScoreV2`` shape. See that module for the
     formula and the provenance gate that prevents a trailing pasted JD from
-    raising a tailored score.
+    raising a tailored score. ``jd_title``/``parse_confidence`` are optional,
+    additive kwargs (added after ``AtsScoreV2``'s original four positional-
+    shape fields were fixed): a caller without JD metadata gets no title-
+    alignment bonus and no confidence penalty, not a forced default.
     """
     result = score_resume(
         resume_text,
@@ -60,6 +65,8 @@ def score_resume_v2(
         source_resume_text=source_resume_text,
         tailored=tailored,
         placements=placements,
+        jd_title=jd_title,
+        parse_confidence=parse_confidence,
     )
     return _project(result)
 
