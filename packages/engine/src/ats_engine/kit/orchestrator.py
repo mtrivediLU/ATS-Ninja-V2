@@ -24,6 +24,8 @@ from ats_engine.job_fit import build_job_fit_artifact
 from ats_engine.kit.change_ledger import build_cover_letter_change_ledger, build_resume_change_ledger
 from ats_engine.kit.contract import (
     ORCHESTRATION_VERSION,
+    PRAMANA_VERSION,
+    RACHANA_VERSION,
     SCHEMA_VERSION,
     AnswerArtifact,
     AnswerItem,
@@ -351,6 +353,8 @@ def generate_application_kit(
         resolved_mode=selection.code,
         generation=generation,
         validation=validation,
+        pramana_version=PRAMANA_VERSION,
+        rachana_version=RACHANA_VERSION,
         target_role=(result.jd_profile.title if result.jd_profile.title != "Target Role" else ""),
         target_company=(result.jd_profile.company if result.jd_profile.company != "Target Company" else ""),
         target_confidence=result.jd_profile.parse_confidence,

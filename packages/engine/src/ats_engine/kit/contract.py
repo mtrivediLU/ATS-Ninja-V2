@@ -47,6 +47,13 @@ SCHEMA_VERSION = APPLICATION_KIT_V7
 # an older contract. The v7 bump invalidates any cached v6 orchestration output.
 ORCHESTRATION_VERSION = "grounded-orchestration/v7"
 
+# PRAMANA (scoring) and RACHANA (tailoring) are each iterated on independently
+# of the kit schema itself -- stamped on every kit so a specific score or
+# tailoring result can always be traced to the algorithm version that produced
+# it, the same rationale as ORCHESTRATION_VERSION above.
+PRAMANA_VERSION = "1.0"
+RACHANA_VERSION = "1.0"
+
 # Bound every evidence excerpt so the trace never becomes a second copy of the
 # candidate's resume (privacy: see ADR-0008).
 EVIDENCE_EXCERPT_MAX_CHARS = 160
@@ -945,6 +952,12 @@ class ApplicationKit:
     resolved_mode: str
     generation: GenerationMetadata
     validation: ValidationSummary
+    # Defaulted (unlike engine_version/orchestration_version above, which
+    # every construction site already supplies explicitly): these two fields
+    # are new, and a default lets every kit persisted before they existed keep
+    # reading back without a migration.
+    pramana_version: str = ""
+    rachana_version: str = ""
     # JD-owned target context, never candidate history. Confidence is the
     # deterministic parser completeness annotation used by the UI to request
     # confirmation when role/company extraction is uncertain.
