@@ -469,7 +469,12 @@ class MatchReport:
     kit_summary: str = ""
     quality_report: AtsQualityReportPayload = field(default_factory=AtsQualityReportPayload)
     disclaimer: str = ""
-    score_basis: str = "ats_v2"
+    # "pramana" going forward -- see scoring/match_report.py's SCORE_BASIS.
+    # Old persisted records may still read back "ats_v2" or "legacy_v1"; that
+    # is historically accurate for kits genuinely scored before this field's
+    # current meaning, and kit/serialization.py's backward-compat defaults for
+    # those specific old shapes are deliberately left untouched.
+    score_basis: str = "pramana"
     optimization_trace: OptimizationTrace = field(default_factory=OptimizationTrace)
 
 

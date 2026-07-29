@@ -160,7 +160,7 @@ def test_rejecting_a_coo_summary_rewrite_restores_source_and_keeps_v2_floor(
     assert result.kit.resume is not None and result.kit.match_report is not None
     assert summary.original_text in result.kit.resume.document.summary
     assert result.kit.resume.validation.fatal is False
-    assert result.kit.match_report.score_basis == "ats_v2"
+    assert result.kit.match_report.score_basis == "pramana"
     assert result.kit.match_report.tailored_ats_match is not None
     assert result.kit.match_report.tailored_ats_match.score >= result.kit.match_report.original_ats_match.score
 
@@ -199,7 +199,7 @@ def test_fixture_end_to_end_optimizes_without_losing_source_facts(
     assert coo_kit.resume is not None
     assert not coo_kit.resume.validation.fatal
     assert coo_kit.match_report is not None
-    assert coo_kit.match_report.score_basis == "ats_v2"
+    assert coo_kit.match_report.score_basis == "pramana"
     assert coo_kit.match_report.tailored_ats_match is not None
 
     report = coo_kit.match_report

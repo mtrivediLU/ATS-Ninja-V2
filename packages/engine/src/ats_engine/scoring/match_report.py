@@ -36,13 +36,18 @@ Truth-safety guarantees (see also ADR-0019):
 
 - The unified vocabulary is built **only** from the job description. No
   candidate-derived term is ever added to it.
-- A keyword earns match credit only when the candidate's *parsed evidence*
-  independently supports it (tier A/B/C via the same evidence gate that resists
-  fabrication) **and** it is genuinely present in the measured resume. Appending
-  the job description to the resume cannot raise the score, because raw appended
-  text is not parsed into affirmative tier-A/B/C candidate evidence.
-- Presence, not frequency, determines credit: a keyword counts at most once, so
-  repeated occurrences and keyword stuffing never increase a score.
+- Both keyword-match scores are computed by PRAMANA (``ats_engine.pramana.scoring``,
+  via the ``ats_v2`` compatibility shim) — the single scoring implementation in
+  this engine, never a second formula. A term earns credit only when the
+  candidate's parsed evidence genuinely supports it; appending the job
+  description to the resume cannot raise the score, because raw appended text
+  is not parsed into affirmative candidate evidence, and a tailored score
+  additionally requires the phrase to resolve inside its declared placement
+  target, not merely appear anywhere in the rendered text.
+- Credit is fractional and saturating, not boolean: a term earns full credit
+  once it appears as often as the job description itself asks for it (capped
+  at 3 mentions), and supply far beyond that is penalized as stuffing rather
+  than rewarded.
 - Every score is a deterministic estimate, never an employer decision.
 """
 
@@ -50,6 +55,10 @@ Truth-safety guarantees (see also ADR-0019):
 DISCLAIMER = (
     "These are estimates from deterministic keyword and evidence analysis, not a prediction of any employer's decision."
 )
+
+# The single scoring implementation behind every MatchReport score, past the
+# point where a second, degenerate-JD formula used to exist.
+SCORE_BASIS = "pramana"
 
 
 # --------------------------------------------------------------------------- #
@@ -416,40 +425,34 @@ def build_match_report(
     """
     evidence = resume_plan.evidence
     keywords = build_weighted_keywords(evidence, jd_profile)
-    tier_by_keyword = {item.keyword.casefold().strip(): item.evidence_tier for item in evidence}
 
-    if resume_plan.requirements and resume_plan.evidence_links:
-        original = _v2_contract_score(
+    # Single entry point: PRAMANA (via the ats_v2 shim) scores every kit, with
+    # no second formula for a degenerate or empty-requirements JD -- its own
+    # empty-requirements guard already returns an honest zero score rather
+    # than needing a fallback. `keywords` above still feeds
+    # keywords_still_missing/keyword_count below regardless.
+    original = _v2_contract_score(
+        score_resume_v2(
+            original_resume_text,
+            resume_plan.requirements,
+            resume_plan.evidence_links,
+            source_resume_text=original_resume_text,
+        )
+    )
+    tailored = (
+        _v2_contract_score(
             score_resume_v2(
-                original_resume_text,
+                tailored_resume_text,
                 resume_plan.requirements,
                 resume_plan.evidence_links,
                 source_resume_text=original_resume_text,
+                tailored=True,
+                placements=resume_plan.placement_actions,
             )
         )
-        tailored = (
-            _v2_contract_score(
-                score_resume_v2(
-                    tailored_resume_text,
-                    resume_plan.requirements,
-                    resume_plan.evidence_links,
-                    source_resume_text=original_resume_text,
-                    tailored=True,
-                    placements=resume_plan.placement_actions,
-                )
-            )
-            if tailored_resume_text is not None
-            else None
-        )
-    else:
-        # Retained solely for the ENGINE_TAILORING_V2=0 path and historical
-        # direct consumers. All default pipeline scoring uses ats_v2 above.
-        original = score_resume(original_resume_text, keywords, profile, tier_by_keyword)
-        tailored = (
-            score_resume(tailored_resume_text, keywords, profile, tier_by_keyword)
-            if tailored_resume_text is not None
-            else None
-        )
+        if tailored_resume_text is not None
+        else None
+    )
 
     if job_fit is not None:
         alignment = job_fit.requirement_coverage_score
@@ -530,7 +533,7 @@ def build_match_report(
         kit_summary=kit_summary,
         quality_report=payload,
         disclaimer=DISCLAIMER,
-        score_basis="ats_v2" if resume_plan.requirements else "legacy_v1",
+        score_basis=SCORE_BASIS,
         optimization_trace=optimization_trace or OptimizationTrace(),
     )
 

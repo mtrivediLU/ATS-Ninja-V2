@@ -269,7 +269,7 @@ def test_synthetic_shapes_deliver_both_documents_with_monotone_ats_v2_scores(cas
     assert kit.delivery_reports[ArtifactKind.RESUME].state in DELIVERED_STATES
     assert kit.delivery_reports[ArtifactKind.COVER_LETTER].state in DELIVERED_STATES
     assert kit.match_report is not None
-    assert kit.match_report.score_basis == "ats_v2"
+    assert kit.match_report.score_basis == "pramana"
     assert kit.match_report.tailored_ats_match is not None
     assert kit.match_report.tailored_ats_match.score >= kit.match_report.original_ats_match.score
     assert kit.match_report.optimization_trace.delivery_state in DELIVERED_STATES

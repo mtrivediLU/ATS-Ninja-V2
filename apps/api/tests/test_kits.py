@@ -838,7 +838,7 @@ async def test_new_kit_is_v7_with_delivery_reports_match_report_and_revision(cli
     assert 0 <= report["alignment_score"] <= 100
     assert report["fit_category"] in {"strong_fit", "good_fit", "partial_fit", "stretch_role", "low_alignment"}
     assert report["disclaimer"]
-    assert report["score_basis"] == "ats_v2"
+    assert report["score_basis"] == "pramana"
     assert isinstance(report["optimization_trace"]["score_path"], list)
     assert body["revision"] == 0
     assert body["parent_kit_id"] is None
