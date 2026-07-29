@@ -49,10 +49,10 @@ function AppShellContent({ children }: { children: ReactNode }) {
       kitId
         ? {
             title: `${target.role} — ${target.company}`,
-            meta: `${kitId} · ${kit?.result?.schema_version ?? kit?.status ?? "loading"}`,
+            meta: `${kitId} · ${kit?.result?.schema_version ?? kit?.status ?? "loading"}${kit?.result?.pramana_version ? ` · PRAMANA v${kit.result.pramana_version}` : ""}`,
           }
         : screenMeta[pathname] ?? { title: "ATS-Ninja", meta: "Private local workspace" },
-    [kit?.result?.schema_version, kit?.status, kitId, pathname, target.company, target.role],
+    [kit?.result?.schema_version, kit?.result?.pramana_version, kit?.status, kitId, pathname, target.company, target.role],
   );
 
   return (

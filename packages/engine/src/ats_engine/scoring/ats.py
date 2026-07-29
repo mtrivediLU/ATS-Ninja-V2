@@ -82,25 +82,40 @@ def extract_keywords(text: str, limit: int = 30) -> list[str]:
 
 
 def calculate_ats_score(resume_text: str, job_description: str) -> dict[str, float | int | list[str]]:
-    """Compatibility wrapper over the authoritative v2 scorer when possible.
+    """Compatibility wrapper over PRAMANA, the single scoring implementation,
+    for a real posting -- plus one narrow, explicitly separate degradation
+    path this function's public contract has always covered.
 
     ``extract_keywords`` remains available for legacy diagnostics, but new
     score callers should use :func:`ats_engine.scoring.ats_v2.score_resume_v2`
-    with typed requirements and evidence links. A thin fallback preserves the
-    historical behavior for heading-less/free-form text that has no v2
-    requirement section to resolve.
+    (or, directly, :func:`ats_engine.pramana.scoring.score_resume`) with typed
+    requirements and evidence links.
+
+    The fallback below is not a second scoring *formula* for the same
+    well-formed input -- PRAMANA is that, unconditionally, whenever the JD has
+    real requirement structure. It exists because
+    ``evidence.resolver.resolve_requirements`` deliberately never scans raw
+    resume text for evidence (``raw_resume_text`` is explicitly discarded
+    there, by design, so unstructured trailing text such as a pasted JD can
+    never fabricate evidence): a genuinely heading-less, unstructured resume
+    -- this function's own documented "free-form text" case, still exercised
+    directly by test_scoring.py -- resolves to zero evidence regardless of
+    which formula computes the score, not because nothing matched, but
+    because there is no structure for the resolver to attribute evidence to
+    at all. Falling back to simple presence counting here is an explicit,
+    narrow degradation for that structural gap, not a competing formula for
+    ordinary, well-formed input.
     """
     from ats_engine.evidence.resolver import resolve_requirements
-    from ats_engine.parsing.jd_requirements import extract_requirements
     from ats_engine.parsing.resume import build_profile
+    from ats_engine.pramana.requirements import extract_requirements
     from ats_engine.scoring.ats_v2 import score_resume_v2
 
     requirements = extract_requirements(job_description or "")
-    # Preserve the public wrapper's historical free-form behavior. The v2
-    # scorer is authoritative for an actual posting with requirement sections;
-    # a one-sentence diagnostic string still uses the documented legacy
-    # frequency calculation rather than pretending it has structured resume
-    # provenance.
+    # A JD without requirement-section structure is unlikely to be a real
+    # posting (more likely a short diagnostic string), and is the case most
+    # likely to be paired with resume text too unstructured for the resolver
+    # to attribute any evidence to -- see the docstring above.
     structured_jd = bool(
         re.search(
             r"\b(?:required\s+qualifications?|preferred\s+qualifications?|responsibilities|must[-\s]have|"

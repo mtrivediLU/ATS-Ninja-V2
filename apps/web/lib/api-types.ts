@@ -505,6 +505,8 @@ export interface ApplicationKit {
   schema_version: string;
   engine_version: string;
   orchestration_version: string;
+  pramana_version: string;
+  rachana_version: string;
   requested_mode: string;
   resolved_mode: string;
   /** Added in v7; absent on an unnormalized legacy response. */

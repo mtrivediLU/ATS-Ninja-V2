@@ -15,8 +15,7 @@ from ats_engine.kit.contract import (
     ScoreConfidence,
     WeightedKeyword,
 )
-from ats_engine.models import EvidenceItem, JDProfile, Profile, ResumePlan
-from ats_engine.scoring.ats import keyword_in_text
+from ats_engine.models import EvidenceItem, EvidenceLink, JDProfile, Profile, RequirementTerm, ResumePlan
 from ats_engine.scoring.ats_v2 import AtsScoreV2, score_resume_v2
 from ats_engine.scoring.job_priorities import build_job_priorities
 from ats_engine.validation.style import validate_style
@@ -37,13 +36,18 @@ Truth-safety guarantees (see also ADR-0019):
 
 - The unified vocabulary is built **only** from the job description. No
   candidate-derived term is ever added to it.
-- A keyword earns match credit only when the candidate's *parsed evidence*
-  independently supports it (tier A/B/C via the same evidence gate that resists
-  fabrication) **and** it is genuinely present in the measured resume. Appending
-  the job description to the resume cannot raise the score, because raw appended
-  text is not parsed into affirmative tier-A/B/C candidate evidence.
-- Presence, not frequency, determines credit: a keyword counts at most once, so
-  repeated occurrences and keyword stuffing never increase a score.
+- Both keyword-match scores are computed by PRAMANA (``ats_engine.pramana.scoring``,
+  via the ``ats_v2`` compatibility shim) — the single scoring implementation in
+  this engine, never a second formula. A term earns credit only when the
+  candidate's parsed evidence genuinely supports it; appending the job
+  description to the resume cannot raise the score, because raw appended text
+  is not parsed into affirmative candidate evidence, and a tailored score
+  additionally requires the phrase to resolve inside its declared placement
+  target, not merely appear anywhere in the rendered text.
+- Credit is fractional and saturating, not boolean: a term earns full credit
+  once it appears as often as the job description itself asks for it (capped
+  at 3 mentions), and supply far beyond that is penalized as stuffing rather
+  than rewarded.
 - Every score is a deterministic estimate, never an employer decision.
 """
 
@@ -52,11 +56,9 @@ DISCLAIMER = (
     "These are estimates from deterministic keyword and evidence analysis, not a prediction of any employer's decision."
 )
 
-# Evidence tiers that mean the keyword itself is genuinely present in the
-# candidate's own resume structure (proven, stated, or listed). ``adjacency``
-# and ``missing`` are deliberately excluded: an adjacency means a *related* tool
-# is present, not the keyword, and missing means no evidence at all.
-_CREDIT_TIERS = frozenset({"A", "B", "C"})
+# The single scoring implementation behind every MatchReport score, past the
+# point where a second, degenerate-JD formula used to exist.
+SCORE_BASIS = "pramana"
 
 
 # --------------------------------------------------------------------------- #
@@ -98,21 +100,34 @@ def build_weighted_keywords(evidence: list[EvidenceItem], jd_profile: JDProfile)
 
 
 # --------------------------------------------------------------------------- #
-# Keyword-match scoring (evidence-gated, presence-not-frequency)
+# Keyword-match scoring -- retained solely for the ENGINE_TAILORING_V2=0 path
+# and historical direct consumers whose only typed input is a WeightedKeyword
+# list rather than resolved RequirementTerm/EvidenceLink pairs.
 # --------------------------------------------------------------------------- #
-def _evidence_supported(term: str, profile: Profile, tier_by_keyword: dict[str, str]) -> bool:
-    """True when the candidate's parsed evidence genuinely supports ``term``.
+def _weighted_keyword_requirement(
+    keyword: WeightedKeyword, profile: Profile, tier_by_keyword: dict[str, str]
+) -> tuple[RequirementTerm, EvidenceLink]:
+    """Build the minimal typed inputs PRAMANA needs from one legacy keyword.
 
-    Reuses the evidence matrix's classification (tier A/B/C) — the same gate that
-    resists fabrication. This is what makes an appended copy of the job
-    description unable to inflate the score: raw trailing text is not parsed into
-    an affirmative tier-A bullet or a genuine skills-tier entry.
+    ``jd_occurrences`` is left at its dataclass default of 1: the legacy
+    WeightedKeyword vocabulary never tracked how many times the JD stated a
+    term, so a target of 1 -- credit saturates at the first occurrence -- is
+    the closest analog to the old boolean present-or-absent formula.
     """
-    normalized = term.casefold().strip()
-    tier = tier_by_keyword.get(normalized)
-    if tier is None:
-        tier = classify_keyword(term, "required", profile).evidence_tier
-    return tier in _CREDIT_TIERS
+    normalized = keyword.term.casefold().strip()
+    tier = tier_by_keyword.get(normalized) or classify_keyword(keyword.term, "required", profile).evidence_tier
+    requirement = RequirementTerm(
+        canonical=normalized,
+        surface=keyword.term,
+        aliases=(),
+        kind="legacy_keyword",
+        section="required" if keyword.required else "preferred",
+        weight=keyword.weight,
+        ngram=len(keyword.term.split()),
+        category="other",
+        jd_evidence_line="",
+    )
+    return requirement, EvidenceLink(requirement=requirement, tier=tier)
 
 
 def score_resume(
@@ -121,58 +136,23 @@ def score_resume(
     profile: Profile,
     tier_by_keyword: dict[str, str],
 ) -> AtsMatchScore:
-    """Score one resume (0-100) against the unified vocabulary, evidence-gated.
+    """Score one resume against the unified legacy vocabulary via PRAMANA.
 
-    The score is *weighted*:
-
-        100 * (sum of weights of credited keywords) / (sum of all keyword weights)
-
-    Required keywords (weight 2.0) therefore contribute more than preferred/other
-    keywords (weight 1.0). A keyword is credited only when it is present in
-    ``resume_text`` (word-boundary, case-insensitive) *and* the candidate's
-    parsed evidence supports it at tier A/B/C. Credit is boolean per unique
-    keyword, so repetition never changes the score.
+    A thin conversion, not a second scoring formula: each ``WeightedKeyword``
+    becomes a synthetic ``RequirementTerm``/``EvidenceLink`` pair and the one
+    true formula (``pramana.scoring.score_resume``) does the rest.
     """
     if not keywords:
         return AtsMatchScore(score=0.0, total_keywords=0)
 
-    matched: list[str] = []
-    missing: list[str] = []
-    required_matched = required_total = 0
-    preferred_matched = preferred_total = 0
-    credited_weight = 0.0
-    total_weight = 0.0
-    for weighted in keywords:
-        is_required = weighted.required
-        total_weight += weighted.weight
-        if is_required:
-            required_total += 1
-        else:
-            preferred_total += 1
-        credited = keyword_in_text(resume_text or "", weighted.term) and _evidence_supported(
-            weighted.term, profile, tier_by_keyword
-        )
-        if credited:
-            matched.append(weighted.term)
-            credited_weight += weighted.weight
-            if is_required:
-                required_matched += 1
-            else:
-                preferred_matched += 1
-        else:
-            missing.append(weighted.term)
+    requirements: list[RequirementTerm] = []
+    links: list[EvidenceLink] = []
+    for keyword in keywords:
+        requirement, link = _weighted_keyword_requirement(keyword, profile, tier_by_keyword)
+        requirements.append(requirement)
+        links.append(link)
 
-    score = round(credited_weight / total_weight * 100, 2) if total_weight else 0.0
-    return AtsMatchScore(
-        score=score,
-        matched_keywords=matched,
-        missing_keywords=missing,
-        total_keywords=len(keywords),
-        required_matched=required_matched,
-        required_total=required_total,
-        preferred_matched=preferred_matched,
-        preferred_total=preferred_total,
-    )
+    return _v2_contract_score(score_resume_v2(resume_text or "", requirements, links))
 
 
 # --------------------------------------------------------------------------- #
@@ -445,40 +425,34 @@ def build_match_report(
     """
     evidence = resume_plan.evidence
     keywords = build_weighted_keywords(evidence, jd_profile)
-    tier_by_keyword = {item.keyword.casefold().strip(): item.evidence_tier for item in evidence}
 
-    if resume_plan.requirements and resume_plan.evidence_links:
-        original = _v2_contract_score(
+    # Single entry point: PRAMANA (via the ats_v2 shim) scores every kit, with
+    # no second formula for a degenerate or empty-requirements JD -- its own
+    # empty-requirements guard already returns an honest zero score rather
+    # than needing a fallback. `keywords` above still feeds
+    # keywords_still_missing/keyword_count below regardless.
+    original = _v2_contract_score(
+        score_resume_v2(
+            original_resume_text,
+            resume_plan.requirements,
+            resume_plan.evidence_links,
+            source_resume_text=original_resume_text,
+        )
+    )
+    tailored = (
+        _v2_contract_score(
             score_resume_v2(
-                original_resume_text,
+                tailored_resume_text,
                 resume_plan.requirements,
                 resume_plan.evidence_links,
                 source_resume_text=original_resume_text,
+                tailored=True,
+                placements=resume_plan.placement_actions,
             )
         )
-        tailored = (
-            _v2_contract_score(
-                score_resume_v2(
-                    tailored_resume_text,
-                    resume_plan.requirements,
-                    resume_plan.evidence_links,
-                    source_resume_text=original_resume_text,
-                    tailored=True,
-                    placements=resume_plan.placement_actions,
-                )
-            )
-            if tailored_resume_text is not None
-            else None
-        )
-    else:
-        # Retained solely for the ENGINE_TAILORING_V2=0 path and historical
-        # direct consumers. All default pipeline scoring uses ats_v2 above.
-        original = score_resume(original_resume_text, keywords, profile, tier_by_keyword)
-        tailored = (
-            score_resume(tailored_resume_text, keywords, profile, tier_by_keyword)
-            if tailored_resume_text is not None
-            else None
-        )
+        if tailored_resume_text is not None
+        else None
+    )
 
     if job_fit is not None:
         alignment = job_fit.requirement_coverage_score
@@ -559,7 +533,7 @@ def build_match_report(
         kit_summary=kit_summary,
         quality_report=payload,
         disclaimer=DISCLAIMER,
-        score_basis="ats_v2" if resume_plan.requirements else "legacy_v1",
+        score_basis=SCORE_BASIS,
         optimization_trace=optimization_trace or OptimizationTrace(),
     )
 

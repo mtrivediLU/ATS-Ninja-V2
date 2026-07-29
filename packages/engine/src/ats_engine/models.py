@@ -113,6 +113,14 @@ class RequirementTerm:
     ngram: int
     category: str
     jd_evidence_line: str
+    # How many times the JD itself states this requirement (canonical/surface/
+    # alias, case-insensitive). PRAMANA's target(r) = clamp(jd_occurrences, 1, 3)
+    # uses this so a term the posting names nine times never demands nine
+    # resume mentions to earn full credit. Defaulted to 1 (one honest mention
+    # expected) rather than made required: synthetic RequirementTerm instances
+    # built outside real JD extraction (tests, the legacy-keyword conversion
+    # in match_report.py) have no JD text to count against.
+    jd_occurrences: int = 1
 
 
 @dataclass(frozen=True, slots=True)

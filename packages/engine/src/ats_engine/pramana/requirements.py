@@ -698,7 +698,7 @@ def extract_requirements(jd_text: str) -> list[RequirementTerm]:
             continue
         candidates.extend(_vocabulary_candidates(section_line))
         candidates.extend(_mined_candidates(section_line, product_counts, hygiene))
-    return _to_requirements(candidates)
+    return _to_requirements(candidates, jd_text)
 
 
 def _segment_sections(lines: Iterable[str]) -> list[_SectionLine]:
@@ -1056,7 +1056,7 @@ def _mined_category(normalized: str) -> str:
     return "platform"
 
 
-def _to_requirements(candidates: list[_Candidate]) -> list[RequirementTerm]:
+def _to_requirements(candidates: list[_Candidate], jd_text: str) -> list[RequirementTerm]:
     selected: dict[str, _Candidate] = {}
     for candidate in candidates:
         existing = selected.get(candidate.canonical)
@@ -1080,9 +1080,42 @@ def _to_requirements(candidates: list[_Candidate]) -> list[RequirementTerm]:
             ngram=candidate.ngram,
             category=candidate.category,
             jd_evidence_line=candidate.jd_evidence_line,
+            jd_occurrences=_count_jd_occurrences(jd_text, candidate),
         )
         for candidate in capped
     ]
+
+
+def _count_jd_occurrences(jd_text: str, candidate: _Candidate) -> int:
+    """How many times the JD itself states this requirement.
+
+    Counted over ``surface`` only -- the literal text this candidate was
+    actually extracted from, guaranteed to appear at least once. ``canonical``
+    is a normalized comparison key, not always literal source text (a
+    "standard"-kind candidate's canonical turns "WCAG 2.1" into "wcag 2 1",
+    which never appears in the JD at all). ``aliases`` can be a much broader,
+    unrelated abbreviation (the entry for "business intelligence" carries the
+    alias "bi", whose bare occurrences have nothing to do with how often the
+    full phrase was stated). Surface avoids both failure modes: for a mined
+    candidate matched through an alias ("natural language data querying"
+    rather than the canonical "natural language querying"), surface is
+    whichever literal phrasing the JD actually used.
+
+    PRAMANA's target(r) = clamp(jd_occurrences, 1, 3) consumes this so a term
+    the posting names nine times never demands nine resume mentions to earn
+    full credit.
+    """
+
+    return _word_boundary_count(jd_text, candidate.surface)
+
+
+def _word_boundary_count(text: str, term: str) -> int:
+    """Case-insensitive word-boundary count -- the exact method used to
+    hand-measure ``hand_labels.toml``'s ground truth, so production counting
+    and the committed expected values can never quietly diverge."""
+    if not term or not text:
+        return 0
+    return len(re.findall(rf"(?<!\w){re.escape(term)}(?!\w)", text, flags=re.IGNORECASE))
 
 
 def _drop_standard_prefixes(candidates: list[_Candidate]) -> list[_Candidate]:

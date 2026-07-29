@@ -62,10 +62,18 @@ def test_plan_decisions_map_once_and_have_stable_ids() -> None:
     assert bullet.reversible is True
 
 
-def test_counterfactual_impact_is_zero_when_keyword_already_present() -> None:
+def test_counterfactual_impact_of_reinforcing_an_already_credited_keyword() -> None:
+    """A rewrite that surfaces "sql" where "sql" is already present elsewhere
+    earns zero *keyword-match* impact (it was already credited via Skills,
+    with or without the bullet) -- but PRAMANA (which this counterfactual now
+    delegates to) also credits a small, real placement-reinforcement bonus for
+    a requirement stated in both Skills and an experience bullet, which this
+    edit newly creates. The +1.0 impact below is exactly that bonus alone, not
+    keyword-score double-counting: the legacy WeightedKeyword formula this
+    counterfactual used to call had no such mechanism and always reported
+    zero here, which was a real blind spot -- this class of edit does have
+    genuine, measurable value, and it now shows up honestly."""
     profile, keywords, tiers = _ledger_context()
-    # A rewrite that surfaces "sql" where "sql" is already present elsewhere in
-    # the full delivered resume must have zero whole-document ATS impact.
     full_text = "Technical Skills\nSQL, Python\nExperience\n- Built SQL reports"
     decisions = [
         PlanDecision(
@@ -87,8 +95,8 @@ def test_counterfactual_impact_is_zero_when_keyword_already_present() -> None:
         full_text=full_text,
     )
     bullet = next(r for r in records if r.change_type is ChangeType.BULLET)
-    assert bullet.ats_impact_delta == 0.0
-    assert "No estimated keyword-match change" in bullet.ats_impact
+    assert bullet.ats_impact_delta == 1.0
+    assert "+1.00 points" in bullet.ats_impact
 
 
 def test_counterfactual_impact_of_grounding_removal_is_non_positive() -> None:

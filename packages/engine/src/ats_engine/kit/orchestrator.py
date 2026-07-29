@@ -24,6 +24,8 @@ from ats_engine.job_fit import build_job_fit_artifact
 from ats_engine.kit.change_ledger import build_cover_letter_change_ledger, build_resume_change_ledger
 from ats_engine.kit.contract import (
     ORCHESTRATION_VERSION,
+    PRAMANA_VERSION,
+    RACHANA_VERSION,
     SCHEMA_VERSION,
     AnswerArtifact,
     AnswerItem,
@@ -351,6 +353,8 @@ def generate_application_kit(
         resolved_mode=selection.code,
         generation=generation,
         validation=validation,
+        pramana_version=PRAMANA_VERSION,
+        rachana_version=RACHANA_VERSION,
         target_role=(result.jd_profile.title if result.jd_profile.title != "Target Role" else ""),
         target_company=(result.jd_profile.company if result.jd_profile.company != "Target Company" else ""),
         target_confidence=result.jd_profile.parse_confidence,
@@ -985,6 +989,12 @@ def _attach_change_ledgers(
                 profile=profile,
                 tier_by_keyword=tier_by_keyword,
                 full_text=resume_artifact.text,
+                # Typed inputs, preferred: each change's impact then uses the
+                # same PRAMANA-backed formula as the headline MatchReport
+                # score, not a coarser WeightedKeyword conversion that could
+                # silently disagree with it.
+                requirements=result.resume_plan.requirements,
+                links=result.resume_plan.evidence_links,
             )
         if cover_artifact is not None:
             cover_artifact.change_ledger = build_cover_letter_change_ledger(
@@ -994,6 +1004,8 @@ def _attach_change_ledgers(
                 profile=profile,
                 tier_by_keyword=tier_by_keyword,
                 full_text=cover_artifact.text,
+                requirements=result.resume_plan.requirements,
+                links=result.resume_plan.evidence_links,
             )
     except Exception:  # noqa: BLE001 - a ledger failure must not fail a safe kit.
         logger.warning("change ledger construction failed; delivering kit without a ledger")

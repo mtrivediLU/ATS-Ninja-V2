@@ -15,7 +15,8 @@ from ats_engine.kit.contract import (
     ScoreConfidence,
     WeightedKeyword,
 )
-from ats_engine.models import PlanDecision, Profile
+from ats_engine.models import EvidenceLink, PlanDecision, Profile, RequirementTerm
+from ats_engine.scoring.ats_v2 import score_resume_v2
 from ats_engine.scoring.match_report import score_resume
 
 """The transparent, evidence-linked change ledger (ApplicationKit v5).
@@ -70,6 +71,8 @@ def _counterfactual_impact(
     keywords: list[WeightedKeyword],
     profile: Profile,
     tier_by_keyword: dict[str, str],
+    requirements: list[RequirementTerm] | None = None,
+    links: list[EvidenceLink] | None = None,
 ) -> float:
     """Deterministic whole-document keyword-match impact of one change.
 
@@ -86,9 +89,19 @@ def _counterfactual_impact(
     removal the fabricated ``original`` is *absent* from the delivered document,
     so the counterfactual re-adds it — and, being unsupported, it never raises
     the evidence-gated score, yielding an honest ~0 impact.
+
+    ``requirements``/``links`` are the typed v2 inputs, preferred whenever the
+    caller has them (the real pipeline always does): the per-change delta
+    then uses the exact same PRAMANA-backed formula as the headline
+    MatchReport score, instead of a coarser WeightedKeyword conversion that
+    could silently disagree with it. Falls back to the WeightedKeyword path
+    only when typed inputs are unavailable (direct callers with no
+    ResumePlan, e.g. this module's own tests).
     """
 
     def _score(text: str) -> float:
+        if requirements:
+            return score_resume_v2(text, requirements, links or []).score
         return score_resume(text, keywords, profile, tier_by_keyword).score
 
     with_change = full_text
@@ -146,6 +159,8 @@ def build_resume_change_ledger(
     profile: Profile,
     tier_by_keyword: dict[str, str],
     full_text: str = "",
+    requirements: list[RequirementTerm] | None = None,
+    links: list[EvidenceLink] | None = None,
 ) -> list[ChangeRecord]:
     """Build the resume change ledger from plan decisions and grounding claims."""
     records: list[ChangeRecord] = []
@@ -168,6 +183,8 @@ def build_resume_change_ledger(
             keywords=keywords,
             profile=profile,
             tier_by_keyword=tier_by_keyword,
+            requirements=requirements,
+            links=links,
         )
         operation = _operation(decision.operation)
         evidence = (
@@ -201,7 +218,16 @@ def build_resume_change_ledger(
         )
 
     records.extend(
-        _grounding_records(claims, ArtifactKind.RESUME, keywords, profile, tier_by_keyword, full_text=full_text)
+        _grounding_records(
+            claims,
+            ArtifactKind.RESUME,
+            keywords,
+            profile,
+            tier_by_keyword,
+            full_text=full_text,
+            requirements=requirements,
+            links=links,
+        )
     )
     return records
 
@@ -214,6 +240,8 @@ def build_cover_letter_change_ledger(
     profile: Profile,
     tier_by_keyword: dict[str, str],
     full_text: str = "",
+    requirements: list[RequirementTerm] | None = None,
+    links: list[EvidenceLink] | None = None,
 ) -> list[ChangeRecord]:
     """Build the cover-letter change ledger.
 
@@ -234,6 +262,8 @@ def build_cover_letter_change_ledger(
             keywords=keywords,
             profile=profile,
             tier_by_keyword=tier_by_keyword,
+            requirements=requirements,
+            links=links,
         )
         records.append(
             ChangeRecord(
@@ -252,7 +282,16 @@ def build_cover_letter_change_ledger(
             )
         )
     records.extend(
-        _grounding_records(claims, ArtifactKind.COVER_LETTER, keywords, profile, tier_by_keyword, full_text=full_text)
+        _grounding_records(
+            claims,
+            ArtifactKind.COVER_LETTER,
+            keywords,
+            profile,
+            tier_by_keyword,
+            full_text=full_text,
+            requirements=requirements,
+            links=links,
+        )
     )
     return records
 
@@ -265,6 +304,8 @@ def _grounding_records(
     tier_by_keyword: dict[str, str],
     *,
     full_text: str = "",
+    requirements: list[RequirementTerm] | None = None,
+    links: list[EvidenceLink] | None = None,
 ) -> list[ChangeRecord]:
     """Convert repaired/rejected grounding claims into irreversible ledger records.
 
@@ -288,6 +329,8 @@ def _grounding_records(
             is_grounding=True,
             keywords=keywords,
             profile=profile,
+            requirements=requirements,
+            links=links,
             tier_by_keyword=tier_by_keyword,
         )
         records.append(

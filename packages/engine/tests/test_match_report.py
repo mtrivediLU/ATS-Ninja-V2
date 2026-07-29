@@ -74,17 +74,33 @@ def test_java_does_not_match_javascript() -> None:
 
 
 def test_presence_not_frequency() -> None:
+    """Repeating a keyword must not raise the score.
+
+    Under PRAMANA (which this legacy conversion now delegates to), stuffing is
+    an active penalty, not merely a no-op -- so the guarantee is now stronger
+    than "unchanged": repetition may lower the score, and must never raise it.
+    """
     profile, jd_profile, evidence = _profile_and_jd()
     keywords = build_weighted_keywords(evidence, jd_profile)
     tiers = {item.keyword.casefold().strip(): item.evidence_tier for item in evidence}
     once = score_resume(SYNTHETIC_RESUME, keywords, profile, tiers)
     stuffed = score_resume(SYNTHETIC_RESUME + "\nSQL SQL SQL SQL SQL SQL", keywords, profile, tiers)
-    assert stuffed.score == once.score, "repeating a keyword must not raise the score"
+    assert stuffed.score <= once.score
+
+
+_SINGLE_MENTION_TEXT = (
+    "Experienced backend engineer with a strong track record over several years. "
+    "Built services in Python for internal enterprise clients daily."
+)
 
 
 def test_required_keyword_outweighs_preferred_in_score() -> None:
     # One required (weight 2.0) + one preferred (weight 1.0). Matching only the
     # required keyword must yield 2/3 = 66.67%, not the count-based 50%.
+    # (The scored text is padded to 20 words so a single "Python" mention sits
+    # under PRAMANA's 6%-of-document stuffing-density threshold -- this test is
+    # about weighted proportion, not stuffing, and would otherwise trip that
+    # unrelated check purely from being an unrealistically short document.)
     jd_profile = JDProfile(
         title="Engineer",
         required_qualifications=["python"],
@@ -98,12 +114,15 @@ def test_required_keyword_outweighs_preferred_in_score() -> None:
     evidence = build_evidence_matrix(jd_profile, profile)
     keywords = build_weighted_keywords(evidence, jd_profile)
     tiers = {item.keyword.casefold().strip(): item.evidence_tier for item in evidence}
-    score = score_resume("Built services in Python", keywords, profile, tiers)
+    score = score_resume(_SINGLE_MENTION_TEXT, keywords, profile, tiers)
     assert score.matched_keywords == ["python"]
     assert score.score == 66.67
 
 
 def test_weighted_score_repetition_does_not_help() -> None:
+    """Repetition must never help -- and, now that PRAMANA's stuffing penalty
+    covers this legacy conversion too, crowding four mentions into one short
+    sentence may actively hurt rather than merely fail to help."""
     jd_profile = JDProfile(
         title="Engineer",
         required_qualifications=["python"],
@@ -117,9 +136,10 @@ def test_weighted_score_repetition_does_not_help() -> None:
     evidence = build_evidence_matrix(jd_profile, profile)
     keywords = build_weighted_keywords(evidence, jd_profile)
     tiers = {item.keyword.casefold().strip(): item.evidence_tier for item in evidence}
-    once = score_resume("Built services in Python", keywords, profile, tiers)
+    once = score_resume(_SINGLE_MENTION_TEXT, keywords, profile, tiers)
     many = score_resume("Python Python Python built services in Python", keywords, profile, tiers)
-    assert once.score == many.score == 66.67
+    assert once.score == 66.67
+    assert many.score <= once.score
 
 
 def test_required_and_preferred_counts() -> None:

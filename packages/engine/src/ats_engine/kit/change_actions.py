@@ -641,12 +641,15 @@ def _recompute_match_report(
     resume: ResumeArtifact | None,
     source_resume_text: str,
 ) -> list[str]:
-    if report.score_basis == "ats_v2":
-        # The v2 score is not interchangeable with legacy weighted keywords:
-        # it validates source-backed requirements plus structured placement
-        # provenance.  Retaining the v2 label after a legacy recomputation
-        # would make a user-facing score dishonest.
-        requirements = getattr(jd_profile, "requirements", [])
+    # Branch on whether this JD actually has typed requirements to re-resolve,
+    # not on the persisted score_basis string: score_basis is now always
+    # "pramana" for a freshly generated report (build_match_report no longer
+    # ever produces "legacy_v1"), so a string check here would silently take
+    # the coarser fallback for every current kit. A record with no typed
+    # requirements -- a genuinely old persisted kit, or a JD that produced
+    # none -- has nothing to re-resolve either way.
+    requirements = getattr(jd_profile, "requirements", [])
+    if requirements:
         links = resolve_requirements(requirements, profile, source_resume_text)
         placements = _accepted_v2_placements(links, profile, jd_profile, resume)
         original = score_resume_v2(source_resume_text, requirements, links)
@@ -660,10 +663,13 @@ def _recompute_match_report(
         )
         tailored = _v2_contract_score(tailored_v2)
         if tailored.score + 0.001 < original.score:
-            return ["The change would reduce the authoritative ATS v2 score below the original resume."]
+            return ["The change would reduce the authoritative PRAMANA score below the original resume."]
         report.original_ats_match = _v2_contract_score(original)
         report.tailored_ats_match = tailored
     else:
+        # No typed requirements to re-resolve. Still PRAMANA-backed (via the
+        # legacy WeightedKeyword conversion in match_report.score_resume), just
+        # fed a coarser vocabulary -- not a second scoring formula.
         tailored = score_resume(resume_text, keywords, profile, tier_by_keyword)
         report.tailored_ats_match = tailored
 
