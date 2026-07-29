@@ -633,6 +633,8 @@ class ApplicationKitResponse(BaseModel):
     schema_version: str
     engine_version: str = ""
     orchestration_version: str = ""
+    pramana_version: str = ""
+    rachana_version: str = ""
     requested_mode: str = ""
     resolved_mode: str = ""
     generation: GenerationMetadataResponse = Field(default_factory=GenerationMetadataResponse)
