@@ -1,0 +1,130 @@
+CANDIDATE NAME
+Senior Software Engineer | Full-Stack, Data & AI Solutions
+candidate@example.com · 000-000-0000 · Sudbury, Ontario, Canada · linkedin.com/in/example-candidate · example.com
+PROFESSIONAL SUMMARY
+Senior Software Engineer with 8+ years of end-to-end experience designing, building, and deploying production-grade 
+systems across healthcare, mining, e-commerce, and public sector. Full-stack expertise spanning backend architecture 
+(Java Spring, Python, REST APIs, microservices), modern frontend (React, React Native, Next.js), data engineering 
+(PostgreSQL, SQL Server, dbt, ETL/ELT pipelines), and cloud-native deployment (Azure, AWS, GCP, Docker, 
+Kubernetes, CI/CD). Proven record embedding AI/ML capabilities (OpenAI, Gemini, predictive modeling) into real-
+world applications, leading cross-functional teams through the full SDLC, and translating complex requirements into 
+scalable, reliable software. Strong communicator across technical and non-technical audiences, with a track record of 
+end-to-end ownership and shipping measurable business impact. Targeting Senior Full Stack Developer (Java + Angular) 
+opportunities.
+TECHNICAL SKILLS
+Languages: Python, Java, JavaScript, SQL, C, C++, PHP, HTML5, CSS3
+Frontend: React, React Native, Next.js, Angular (Working Knowledge), Vue.js, Streamlit, Bootstrap, Tailwind, 
+WordPress
+Backend & APIs: Java Spring MVC, Hibernate, Node.js, RESTful APIs, Microservices, SaaS, WAMP
+Databases & Data Engineering: PostgreSQL, MS SQL Server, SSIS, SSRS, dbt, ETL/ELT Pipelines, Data 
+Warehousing, Data Modeling, Data Governance
+BI & Analytics: Tableau, Power BI, Power Apps, Power Automate, ArcGIS, QGIS
+Cloud & DevOps: Microsoft Azure, AWS, Google Cloud, Linux, Docker, Kubernetes, CI/CD, Git
+AI & Machine Learning: OpenAI & Gemini APIs, LLM Integration, Predictive Modeling, ML Pipelines, Random 
+Forest, Cursor, Claude, ChatGPT, Perplexity, NVIDIA models
+Enterprise Platforms: Salesforce, HubSpot, SAP Hybris / SAP Commerce Cloud
+Methodologies & Tools: Agile/Scrum, Waterfall, SDLC, Requirements Gathering, System Integration, Technical 
+Documentation, Jira, Confluence, Visio, Lucidchart
+
+PROFESSIONAL EXPERIENCE
+Flosonics Medical · Toronto, ON (Remote)
+Oct 2024 - Apr 2026
+Business Intelligence Developer
+Enterprise Data Warehouse: Architected and built a centralized data warehouse using PostgreSQL and dbt, creating a
+unified source of truth that improved data accuracy and reliability across Finance, QA, Production, and HR.
+ETL/ELT Pipelines: Designed and maintained pipelines ingesting medical device logs alongside Salesforce, HubSpot,
+ZoomInfo, and Lead Forensics, unifying heterogeneous data sources into a single reliable analytics layer.
+Generative AI Integration: Engineered an enterprise AI assistant using OpenAI and Gemini APIs enabling non-
+technical stakeholders to query device logs, sales operations, and HR documents through natural language.
+Predictive Analytics & Reporting: Developed predictive inventory models and automated Tableau dashboards,
+reducing manual reporting overhead by 40% and strengthening regulatory compliance.
+Stakeholder Collaboration: Partnered with cross-functional teams to translate business requirements into functional
+specifications and a unified data strategy aligned with SDLC best practices.
+LoopX · Sudbury, ON
+Jun 2024 - Jul 2025
+Software Development Consultant
+End-to-End Ownership: Designed, built, and deployed the LoopX Safe and Smart Mining Data Platform (Safety
+Dashboard) end-to-end, full-stack backend and frontend. Demo video
+Real-Time Architecture: Developed AI-assisted dashboards and automated reporting systems to enhance safety and
+operational efficiency in mining environments.
+UI/UX Optimization: Delivered high-performance, low-latency data visualizations that improved situational
+awareness for equipment operators in the field.
+City of Greater Sudbury · Sudbury, ON
+May 2024 - Aug 2024
+Business Intelligence Analyst
+Systems Integration: Integrated third-party vendor applications (PreHos) with SQL Server using SSIS, Python, and
+Google Cloud SQL Auth Proxy, configuring secure communication between services.
+Mission-Critical Reporting: Streamlined data flows for 911 calls and Opioid Response Ministry reporting, directly
+supporting community-safety operations.
+BI & Data Governance: Built Service-Based Budgeting systems using SQL and Power BI; trained end-users on data-
+governance standards and new reporting workflows.
+Minax Inc. · Sudbury, ON
+Oct 2023 - May 2024
+Lead Software Developer
+Offline-First Mobile Architecture: Architected a React Native application for Vale (Tier-1 mining client) enabling data
+collection and automated reporting in offline, underground environments without network connectivity.
+Production Deployment & UAT: Deployed and validated the system across underground mining sites, coordinating
+user acceptance testing and ensuring data integrity under harsh industrial conditions.
+Process Automation: Automated Workplace Safety North forms using Power Automate, reducing engineer reporting
+time from 5 hours to minutes and streamlining compliance workflows.
+Mineral Exploration Research Centre · Sudbury, ON
+Mar 2022 - Jul 2023
+Research Associate (Data & ML)
+Applied Machine Learning: Developed ML models (Random Forest) for gold prospectivity mapping, achieving a
+99.5% F1 score on geological classification tasks.
+Spatial Data Analysis: Processed complex geospatial datasets using ArcGIS and QGIS to assess mineralization
+probabilities across large-scale survey regions.
+• 
+• 
+• 
+• 
+• 
+• 
+• 
+• 
+• 
+• 
+• 
+• 
+• 
+• 
+• 
+• 
+
+Tata Consultancy Services (TCS) · Mumbai, India
+Nov 2017 - Oct 2021
+Lead Software Engineer
+Technical Leadership: Led a team of four engineers maintaining and evolving Edgepark, a high-traffic B2C e-
+commerce platform serving millions of users, owning requirements, solution design, and backlog management.
+Backend Architecture: Implemented secure user management and complex business logic using Java Spring MVC
+and Hibernate, integrated with RESTful APIs and microservices.
+Global Deployments: Launched 13 B2B e-commerce platforms across Europe and North America on SAP Hybris /
+SAP Commerce Cloud, handling multi-language, multi-region, and transactional complexity.
+CI/CD & Reliability: Optimized deployment workflows and application performance through DevOps practices,
+maintaining 100% uptime for critical production services.
+EDUCATION
+Laurentian University · Sudbury, ON
+2021 - 2023
+Master of Computational Science (Thesis: ML for Geological Discovery)
+AICMSE 2023 Boston - Presented “Machine Learning for Predictive Modeling of Mineral Deposits” at Harvard Faculty 
+Club, Harvard University (Oral presentation).
+Publication (Co-author): A study of faults in the Superior province of Ontario and Quebec using the random forest 
+machine learning algorithm. Ore Geology Reviews, 157 (Jun 2023), 105403.
+Gujarat Technological University India
+2013 - 2017
+Bachelor of Computer Engineering (GPA: 3.3/4.0)
+CERTIFICATIONS
+Salesforce Certified Agentforce Specialist (AI-201) · 2025 · Credential ID: TEST-CRED-001 Verify
+Microsoft Certified: Azure Fundamentals (AZ-900) · 2024 · Credential ID: TEST-CRED-002 Verify
+Microsoft Certified: Power BI Data Analyst Associate (PL-300) · 2024 · Credential ID: TEST-CRED-003
+Verify
+Microsoft Certified: Power Platform Developer Associate (PL-400) · 2024 · Credential ID: TEST-CRED-004
+Verify
+• 
+• 
+• 
+• 
+• 
+• 
+• 
+• 

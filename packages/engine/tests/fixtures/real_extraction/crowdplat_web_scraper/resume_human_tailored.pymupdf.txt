@@ -1,0 +1,90 @@
+Candidate Name
+Python Developer | Data Extraction & Integration
+000-000-0000 | candidate@example.com | linkedin.com/in/example-candidate | example.com
+Sudbury, Ontario, Canada | Canadian Permanent Resident | Open to Remote, Task-Based, or Contract Work
+PROFESSIONAL SUMMARY
+Python developer with 8+ years building data pipelines, API integrations, and structured reporting across medical device, municipal
+government, mining, and enterprise environments. Experience pulling and joining data from Salesforce, HubSpot, ZoomInfo, and
+Lead Forensics APIs into governed analytics layers, plus SSIS and Python integrations against SQL Server for public-sector systems.
+Comfortable working from JSON and REST responses, turning messy source data into clean, delivery-ready CSV and Excel output on
+tight timelines. Microsoft certified in Power BI (PL-300) and Power Platform development (PL-400).
+TECHNICAL SKILLS
+Languages & Data Extraction: Python, SQL, JSON, REST APIs, data parsing, data cleaning, CSV/Excel export
+Data Integration: SSIS, ETL/ELT pipelines, API integration (Salesforce, HubSpot, ZoomInfo, Lead Forensics), data validation
+Databases: PostgreSQL, SQL Server, MySQL, MongoDB, dbt
+Reporting & Output: Power BI, Tableau, Excel, structured dataset delivery, KPI dashboards
+Cloud & DevOps: Azure, Docker, Git, CI/CD, Linux
+Methodologies: Agile, requirements gathering, UAT, data governance, SDLC
+Working knowledge: BeautifulSoup, Scrapy, Selenium, WCAG 2.1 accessibility standards
+PROFESSIONAL EXPERIENCE
+Flosonics Medical
+Toronto, ON (Remote)
+Business Intelligence Developer
+Oct 2024 to Apr 2026
+• WrotePythonpipelinespullingcontactandaccountdatafromSalesforce, HubSpot, ZoomInfo, andLeadForensicsAPIs, parsing
+JSON responses into a single governed dataset for Finance, QA, Production, and HR.
+• Built the company’s first centralized data warehouse in PostgreSQL and dbt, turning raw pulled data into clean, structured
+tables ready for reporting with no manual cleanup.
+• Validated data quality across every source feed before it reached downstream reports, catching mismatches and formatting
+issues before delivery.
+• Turned ad hoc data requests from Finance, QA, and Production leads into fast, structured deliverables on short timelines.
+City of Greater Sudbury
+Sudbury, ON
+Business Intelligence Analyst
+May 2024 to Aug 2024
+• IntegratedthePreHosemergency-responseplatformwithSQLServerusingSSISandPython,extractingandstructuringrecords
+for downstream reporting.
+• Owned the data flows behind 911 call reporting and Opioid Response Ministry submissions, where accuracy and format com-
+pliance were non-negotiable.
+• Built Service-Based Budgeting reporting in SQL and Power BI, delivering clean output to municipal staff on recurring deadlines.
+LoopX
+Sudbury, ON
+Software Development Consultant
+Jun 2024 to Jul 2025
+• Designed, built, and shipped the LoopX Safe and Smart Mining Data Platform solo, backend through frontend (demo video),
+including REST API data ingestion from field sensors.
+• Built real-time dashboards and automated reporting pipelines for autonomous mining equipment operating underground.
+
+Minax Inc.
+Sudbury, ON
+Lead Software Developer
+Oct 2023 to May 2024
+• Built an offline-first React Native app for Vale that structured and synced inspection data from underground sites once connec-
+tivity returned.
+• Automated Workplace Safety North compliance forms with PowerAutomate, taking engineer reporting from 5hours to minutes.
+Mineral Exploration Research Centre
+Sudbury, ON
+Research Associate (Data & ML)
+Mar 2022 to Jul 2023
+• Processed large geospatial survey datasets in Python, extracting and structuring fields from multiple source formats for gold
+prospectivity modeling.
+• Developed Random Forest models on cleaned datasets, reaching a 99.5% F1 score on geological classification.
+Tata Consultancy Services (TCS)
+Mumbai, India
+Lead Software Engineer
+Nov 2017 to Oct 2021
+• Led four engineers on Edgepark, a high-traffic B2C commerce platform, building REST APIs consumed by downstream services.
+• Built secure user management and order business logic in Java Spring MVC and Hibernate behind REST APIs and microservices.
+• Launched 13 B2B commerce platforms across Europe and North America on SAP Hybris / SAP Commerce Cloud, handling
+multi-language and multi-currency data builds.
+EDUCATION
+Laurentian University
+Sudbury, ON
+Master of Computational Science
+2021 to 2023
+• Thesis: ML for Geological Discovery. Oral presentation at AICMSE 2023, Harvard Faculty Club, Boston.
+• Co-author: AstudyoffaultsintheSuperiorprovinceofOntarioandQuebecusingtherandomforestmachinelearningalgorithm.
+Ore Geology Reviews, 157 (Jun 2023), 105403.
+Gujarat Technological University
+India
+Bachelor of Computer Engineering
+2013 to 2017
+CERTIFICATIONS
+Microsoft Certified: Power BI Data Analyst Associate (PL-300)
+2024 Verify
+Microsoft Certified: Power Platform Developer Associate (PL-400)
+2024 Verify
+Salesforce Certified Agentforce Specialist (AI-201)
+2025 Verify
+Microsoft Certified: Azure Fundamentals (AZ-900)
+2024 Verify

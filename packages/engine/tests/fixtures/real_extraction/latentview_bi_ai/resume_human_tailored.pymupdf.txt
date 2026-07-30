@@ -1,0 +1,116 @@
+Candidate Name
+Business Intelligence Engineer | Enterprise BI, SQL & Generative AI
+000-000-0000 | candidate@example.com | linkedin.com/in/example-candidate | example.com
+Sudbury, Ontario, Canada | Canadian Permanent Resident | Open to Remote Work, PST Hours, or Toronto/GTA Relocation
+PROFESSIONAL SUMMARY
+Business Intelligence Engineer with 8+ years across software, data, and analytics, including 4+ years delivering enterprise BI, ad-
+vanced SQL solutions, data platforms, and AI-enabled reporting. Built a centralized PostgreSQL and dbt data warehouse, reduced
+manual reporting effort by 40%, and developed LLM-powered assistants using OpenAI and Gemini APIs for natural-language access
+to operational data. Led a four-person engineering team and collaborated with business and technical stakeholders across North
+America, Europe, and India. Microsoft-certified in Power BI, Power Platform, and Azure, with Salesforce Agentforce certification.
+TECHNICAL SKILLS
+Business Intelligence & Data Storytelling: Power BI, Tableau, DAX, Power Query, semantic models, KPI dashboards, executive
+reporting, dashboard optimization, data visualization, decision intelligence
+SQL & Data Engineering: Advanced SQL, PostgreSQL, SQL Server, dbt, SSIS, ETL/ELT, dimensional modeling, data warehousing,
+data quality validation, query optimization
+Generative AI & LLMs: OpenAI API, Gemini API, ChatGPT, Claude, LLM integration, natural-language querying, prompt engineer-
+ing, AI assistants, narrative generation, RAG patterns
+AI & Workflow Automation: Power Automate, Power Apps, Dataverse, Salesforce Agentforce, low-code workflows, automated
+reporting, AI-assisted data preparation
+Programming, Integration & Cloud: Python, SQL, Java, JavaScript, TypeScript, REST APIs, microservices, Azure, Docker, Git,
+CI/CD, GitHub Actions, Linux
+Leadership & Delivery: Team leadership, sprint planning, backlog management, stakeholder management, requirements gath-
+ering, Agile, Scrum, Jira, Confluence, UAT, distributed-team coordination
+BI Platform Transferability: Advanced Power BI and Tableau experience with semantic modeling and governed-metrics concepts
+transferable to Looker and LookML
+PROFESSIONAL EXPERIENCE
+Flosonics Medical
+Toronto, ON (Remote)
+Business Intelligence Developer
+Oct 2024 to Apr 2026
+• Built the company’s first centralized PostgreSQL and dbt data warehouse, creating governed data models and a trusted report-
+ing layer for Finance, QA, Production, and commercial operations.
+• Designed advanced SQL-based ETL/ELT pipelines integrating medical-device logs, Salesforce, HubSpot, ZoomInfo, and Lead
+Forensics data into a unified enterprise analytics layer.
+• Developed an internal AI analytics assistant using OpenAI and Gemini APIs, enabling non-technical users to query approved
+device, commercial, and operational data using natural language.
+• Automated Tableau reporting and inventory analytics, reducing manual report preparation by 40% while maintaining reliable
+outputs in a regulated medical-device environment.
+• Translated requirements from Finance, QA, and Production leaders into functional specifications, prioritized BI deliverables,
+and contributed to the company-wide data strategy.
+LoopX
+Sudbury, ON
+Data & Software Consultant (Part-Time/Contract)
+Jun 2024 to Jul 2025
+• Independently designed and delivered the LoopX Safe and Smart Mining Data Platform, integrating operational data, analytics
+dashboards, and application components (demo video).
+• Built real-time safety dashboards and automated reporting for autonomous underground mining operations, helping stake-
+holders monitor equipment performance and operational risks.
+• Optimized dashboard performance and visualization latency to support timely operational decision-making in underground
+environments.
+
+City of Greater Sudbury
+Sudbury, ON
+Business Intelligence Analyst
+May 2024 to Aug 2024
+• Built Service-Based Budgeting dashboards using advanced SQL and Power BI and trained municipal staff on reporting pro-
+cesses and data-governance standards.
+• Integrated the PreHos emergency-response platform with SQL Server using SSIS, Python, and Cloud SQL Auth Proxy, configur-
+ing secure and reliable data movement for public-safety reporting.
+• Managed data pipelines supporting 911 call reporting and Opioid Response Ministry submissions, validating data accuracy for
+operational and regulatory reporting.
+Minax Inc.
+Sudbury, ON
+Lead Software Developer
+Oct 2023 to May 2024
+• Automated Workplace Safety North compliance reporting using Power Automate, reducing engineer preparation time from
+approximately five hours to minutes.
+• Built an offline-first React Native application for Vale that captured underground inspection data and synchronized validated
+records when connectivity became available.
+• Led UAT and production rollout activities across active mining sites, validating data integrity, resolving defects, and coordinat-
+ing delivery with operational stakeholders.
+Mineral Exploration Research Centre
+Sudbury, ON
+Research Associate (Data & ML)
+Mar 2022 to Jul 2023
+• Developed and evaluated Random Forest models for geological classification and gold prospectivity mapping, achieving a
+99.5% F1 score on the evaluated dataset.
+• Cleaned, integrated, and analyzed large geospatial datasets using Python, ArcGIS, and QGIS, translating model outputs into
+visual probability maps for research and industry stakeholders.
+Tata Consultancy Services (TCS)
+Mumbai, India
+Lead Software Engineer
+Nov 2017 to Oct 2021
+• Led a four-person engineering team supporting Edgepark, managing requirements, solution design, backlog priorities, sprint
+delivery, and technical blockers for a high-traffic North American platform.
+• Developed secure REST APIs, backend services, and order-management logic using Java Spring MVC and Hibernate, integrating
+transactional data across enterprise systems.
+• Delivered 13 enterprise B2B platforms across Europe and North America using SAP Hybris / SAP Commerce Cloud, coordinat-
+ing distributed stakeholders, multilingual requirements, and production releases.
+• Managed production support for critical services, investigated application and data issues, and improved CI/CD reliability and
+system performance across successive releases.
+EDUCATION
+Laurentian University
+Sudbury, ON
+Master of Computational Science
+2021 to 2023
+• Thesis: Machine Learning for Geological Discovery; presented at AICMSE 2023 at the Harvard Faculty Club in Boston.
+• Co-author: AstudyoffaultsintheSuperiorprovinceofOntarioandQuebecusingtherandomforestmachinelearningalgorithm.
+Ore Geology Reviews, 157 (Jun 2023), 105403.
+Gujarat Technological University
+India
+Bachelor of Computer Engineering
+2013 to 2017
+CERTIFICATIONS
+Microsoft Certified: Power BI Data Analyst Associate (PL-300)
+2024
+Credential
+Microsoft Certified: Power Platform Developer Associate (PL-400)
+2024
+Credential
+Salesforce Certified Agentforce Specialist (AI-201)
+2025
+Credential
+Microsoft Certified: Azure Fundamentals (AZ-900)
+2024
+Credential
