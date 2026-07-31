@@ -13,6 +13,7 @@ from ats_engine.generation.cover_letter import (
     generate_cover_letter_text,
 )
 from ats_engine.generation.document_normalization import normalize_generated_prose
+from ats_engine.generation.document_render import render_delivered_resume_text
 from ats_engine.generation.pipeline import resolve_artifact_selection, run_pipeline, validate_pipeline_result
 from ats_engine.generation.resume import (
     format_resume_output,
@@ -945,7 +946,20 @@ def _safe_match_report(
         return None
     tailored_text: str | None = None
     if resume_artifact is not None and not resume_artifact.validation.fatal and resume_artifact.text:
-        tailored_text = resume_artifact.text
+        # Score the document the candidate actually receives, not the plan.
+        # ``resume_artifact.text`` is a labelled wire format for the LaTeX
+        # renderer ("Company: X | Location: Y | Title: Z") that nothing
+        # delivered ever looks like, so scoring it made the tailored number a
+        # projection of our intent rather than a measurement of the artifact.
+        # ``render_delivered_resume_text`` reproduces the delivered layout
+        # field for field, and (since the previous commit) that text parses
+        # cleanly, so the score is now computed on exactly the text an
+        # external ATS would read.
+        tailored_text = (
+            render_delivered_resume_text(resume_artifact.document)
+            if resume_artifact.document is not None
+            else resume_artifact.text
+        )
     try:
         trace = result.metadata.get("optimization_trace")
         return build_match_report(
