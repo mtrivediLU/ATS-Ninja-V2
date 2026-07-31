@@ -1,0 +1,47 @@
+# CGI - Senior Full Stack Developer (Java + Angular)
+#
+# Written BEFORE the demand-model fixes in PR B-1 items 3-7, so recall and
+# precision cannot be fitted to the result. The [meta] block below is complete
+# and externally sourced; the [[requirements]] ground truth is added in the
+# same "before the fix" discipline and must be finished before any extraction
+# change lands.
+#
+# Jobscan's own tables for this posting (verbatim from the three supplied
+# reports, not re-derived):
+#   hard skills  - Spring Boot JD=4 base=0 ninja=0 manual=2
+#                  Angular    JD=5 base=1 ninja=2 manual=3
+#                  Java       JD=5 base=5 ninja=6 manual=6
+#   soft skills  - Collaboration JD=3 base=1 ninja=1 manual=4
+#                  Communication JD=1 base=2 ninja=2 manual=4
+#                  Leadership    JD=1 base=1
+#                  Mentoring     JD=2 base=0 ninja=0 manual=3
+#                  Committed     JD=2 base=0 ninja=0 manual=2
+#                  Teamwork      JD=1 base=0 ninja=0 manual=2
+#                  Build relationships JD=1 base=0 ninja=0 manual=0
+# Jobscan reports the base resume at 923 words; our own tokenizer counts 936.
+
+[meta]
+case = "cgi_fullstack_java_angular"
+company = "CGI"
+title = "Senior Full Stack Developer (Java + Angular)"
+# The posting's body states the role as "Senior Full Stack Engineer", which is
+# also the title Jobscan matched against. Both spellings are correct; the
+# header form is the extraction target, the body form is what a title-alignment
+# bonus should be able to credit.
+title_in_body = "Senior Full Stack Engineer"
+jobscan_base_score = 59
+jobscan_tailored_score = 63
+jobscan_human_tailored_score = 93
+source = "Supplied verbatim by the repository owner, 2026-07-29."
+
+# ---------------------------------------------------------------- TODO ----
+# [[requirements]] entries still to be written, before items 3-7 land.
+# From a first read of the posting the expected set includes, at minimum:
+#   java, j2ee, spring boot, microservices, rest api, angular, oracle,
+#   sql, pl/sql, stored procedures, performance tuning, hibernate, jpa,
+#   aws, eks, s3, lambda, docker, kubernetes, ci/cd, github, jenkins,
+#   udeploy, git, github copilot, distributed systems, financial services,
+#   communication, collaboration, stakeholder management, mentoring, teamwork
+# and must NOT include: cgi (the employer's own name), or any preposition
+# fragment such as "including eks" / "including github" / "such as github
+# copilot".
