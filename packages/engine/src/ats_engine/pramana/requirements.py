@@ -234,6 +234,9 @@ _GENERIC_TOKENS = _GENERIC_HEADS | {
     "you",
 }
 _UNLISTED_PRODUCT_BLOCKLIST = {"coo", "fnbd", "hr", "it", "pm", "ceo", "cfo", "cto"}
+# A single leading preposition that introduces a tool/enumeration rather than
+# naming one. "such as" is handled separately below (it is two words).
+_PREPOSITION_PREFIXES = {"including", "using", "with", "like"}
 _DOMAIN_HEADS = {
     "administration",
     "analysis",
@@ -1056,6 +1059,15 @@ def _is_admissible_mined_value(
         or any(word in _UNLISTED_PRODUCT_BLOCKLIST for word in words)
         or is_person_name(value)
         or is_org_role_reference(value, hygiene)
+        # "including EKS", "such as GitHub Copilot", "using Terraform" -- a
+        # preposition swept up in the same mined span as the tool it
+        # introduces is a sentence fragment, not the tool's own name. Checked
+        # on the raw leading words (before generic-token/domain-head
+        # filtering below runs on the whole phrase) so a real requirement
+        # that merely follows one of these words elsewhere in the line is
+        # never affected -- only a candidate that itself STARTS with one is.
+        or (words[0] in _PREPOSITION_PREFIXES)
+        or (len(words) > 1 and words[0] == "such" and words[1] == "as")
     ):
         return False
     if len(words) == 1:

@@ -218,6 +218,36 @@ def _extract_company(
         if _is_valid_company_candidate(candidate, title):
             return candidate
 
+    # 4b. The same statement without a leading "The" -- "CGI is seeking...",
+    # "Acme Technologies is looking for...", "Join Acme Technologies". A real
+    # posting stated its employer this way and, without this, fell through to
+    # mechanism 5 below (a repeated-proper-noun heuristic weak enough to
+    # mis-fire on any other frequently-repeated capitalized word in the
+    # posting) even though the JD names its own employer outright.
+    #
+    # The cue words ("is", "seeking", "join", ...) match case-insensitively,
+    # but the candidate itself is checked for real capitalization with a
+    # plain Python `.isupper()`-style test, not `[A-Z]` inside the
+    # IGNORECASE-flagged pattern -- under IGNORECASE, `[A-Z]` matches a
+    # lowercase letter too, which is how an early version of this matched
+    # "us" out of "Join us in building the future."
+    for match in re.finditer(
+        r"\b([A-Za-z][A-Za-z0-9 &'.,-]{1,70}?)\s+is\s+(?:seeking|looking\s+for)\b",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        candidate = _trim_company(match.group(1))
+        if candidate[:1].isupper() and _is_valid_company_candidate(candidate, title):
+            return candidate
+    for match in re.finditer(
+        r"\bjoin\s+(?:our\s+team\s+at\s+)?([A-Za-z][A-Za-z0-9 &'.,-]{1,70}?)(?:[.,!]|\s+as\b|\s+today\b|$)",
+        text,
+        flags=re.IGNORECASE | re.MULTILINE,
+    ):
+        candidate = _trim_company(match.group(1))
+        if candidate[:1].isupper() and _is_valid_company_candidate(candidate, title):
+            return candidate
+
     # 5. Last resort: a repeated proper name in source text.
     title_words = {word.lower() for word in re.findall(r"[A-Za-z]+", title)}
     repeated = _extract_repeated_proper_noun(text, title_words)
