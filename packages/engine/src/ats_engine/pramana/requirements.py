@@ -1209,16 +1209,37 @@ def _candidate_precedes(candidate: _Candidate, existing: _Candidate) -> bool:
 
 
 def _cap_soft_weight(candidates: list[_Candidate]) -> list[_Candidate]:
+    """Cap soft-skill weight at ``max(25%, this JD's own observed soft share)``.
+
+    Raised from a flat 15% (written to stop soft-skill padding) after the CGI
+    case showed soft skills carrying most of a real posting's available
+    Jobscan movement -- a fixed 15% ceiling systematically under-credits
+    exactly the JD that leans on them most.
+
+    NOTE, disclosed rather than silently worked around: implemented exactly
+    as specified, this makes the cap a no-op. ``observed_share`` is this same
+    candidate pool's own soft fraction, so by the time every soft candidate
+    has been added the running ratio EQUALS ``observed_share`` -- and since
+    ``cap >= observed_share`` always, every soft candidate's prospective
+    ratio (monotonically increasing toward that same final value) is
+    guaranteed to clear the cap. The 15% version was a real ceiling because
+    it was an independent constant; a self-referential ceiling measured from
+    the thing it caps is not. See PR description for the measured before/
+    after on all three fixtures and the same conclusion stated plainly.
+    """
     hard = [candidate for candidate in candidates if candidate.kind != "soft"]
     soft = [candidate for candidate in candidates if candidate.kind == "soft"]
     if not hard:
         return []
-    accepted_soft: list[_Candidate] = []
     hard_weight = sum(candidate.weight for candidate in hard)
+    soft_total = sum(candidate.weight for candidate in soft)
+    observed_share = soft_total / (hard_weight + soft_total) if (hard_weight + soft_total) else 0.0
+    cap = max(0.25, observed_share)
+    accepted_soft: list[_Candidate] = []
     soft_weight = 0.0
     for candidate in soft:
         prospective = soft_weight + candidate.weight
-        if prospective / (hard_weight + prospective) <= 0.15:
+        if prospective / (hard_weight + prospective) <= cap:
             accepted_soft.append(candidate)
             soft_weight = prospective
     return sorted(
