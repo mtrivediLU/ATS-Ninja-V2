@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from html import escape
 
+from ats_engine.generation.delivered_layout import bullet_line, join_fields
 from ats_engine.kit.contract import CoverLetterDocument, ResumeDocument
 
 """Deterministic rendering of structured Resume/Cover Letter documents into
@@ -48,8 +49,12 @@ body {{ color: {_INK_CLASSIC}; }}
 .entry-heading .entry-employer {{ font-weight: 700; }}
 .entry-heading .entry-dates {{ flex: 0 0 auto; text-align: right; white-space: nowrap; }}
 .entry-title {{ margin: 2px 0 4px; font-style: italic; }}
-.entry ul {{ margin: 4px 0 0; padding-left: 18px; }}
-.entry li {{ margin-bottom: 3px; }}
+/* The bullet glyph is written into the list item's own text (see
+   generation/delivered_layout.py) so it survives PDF text extraction; the CSS
+   marker is therefore switched off to avoid rendering it twice. Hanging indent
+   reproduces the list appearance exactly. */
+.entry ul {{ margin: 4px 0 0; padding-left: 18px; list-style: none; }}
+.entry li {{ margin-bottom: 3px; text-indent: -12px; }}
 .skill-groups p {{ margin: 0 0 4px; }}
 .letter-sender {{ border-bottom: 2px solid {_ACCENT}; margin-bottom: 18px; padding-bottom: 10px; }}
 .classic .letter-sender {{ border-bottom-color: {_INK_CLASSIC}; text-align: center; }}
@@ -84,7 +89,7 @@ def render_resume_html(document: ResumeDocument, template: str) -> str:
     if document.professional_headline:
         header_bits.append(f'<p class="doc-headline">{_e(document.professional_headline)}</p>')
     if document.contact_lines:
-        header_bits.append(f'<p class="doc-contact">{_e(" · ".join(document.contact_lines))}</p>')
+        header_bits.append(f'<p class="doc-contact">{_e(join_fields(*document.contact_lines))}</p>')
     if header_bits:
         parts.append(f'<header class="doc-header">{"".join(header_bits)}</header>')
 
@@ -105,8 +110,8 @@ def render_resume_html(document: ResumeDocument, template: str) -> str:
     if document.experience:
         entries = []
         for entry in document.experience:
-            heading_left = _e(" · ".join(part for part in (entry.employer, entry.location) if part))
-            bullets = "".join(f"<li>{_e(bullet)}</li>" for bullet in entry.bullets if bullet)
+            heading_left = _e(join_fields(entry.employer, entry.location))
+            bullets = "".join(f"<li>{_e(bullet_line(bullet))}</li>" for bullet in entry.bullets if bullet)
             title_html = f'<p class="entry-title">{_e(entry.title)}</p>' if entry.title else ""
             entries.append(
                 '<div class="entry">'
@@ -121,7 +126,7 @@ def render_resume_html(document: ResumeDocument, template: str) -> str:
     if document.education:
         education_entries = []
         for edu_entry in document.education:
-            heading_left = _e(" · ".join(part for part in (edu_entry.institution, edu_entry.location) if part))
+            heading_left = _e(join_fields(edu_entry.institution, edu_entry.location))
             degree_html = f'<p class="entry-title">{_e(edu_entry.degree)}</p>' if edu_entry.degree else ""
             details = "".join(f"<p>{_e(detail)}</p>" for detail in edu_entry.details if detail)
             education_entries.append(
@@ -135,7 +140,7 @@ def render_resume_html(document: ResumeDocument, template: str) -> str:
 
     if document.certifications:
         items = "".join(
-            f"<li>{_e(' · '.join(part for part in (item.name, item.date, item.link, _credential_id_text(item.credential_id)) if part))}</li>"
+            f"<li>{_e(join_fields(item.name, item.date, item.link, _credential_id_text(item.credential_id)))}</li>"
             for item in document.certifications
             if item.name
         )
@@ -164,7 +169,7 @@ def render_cover_letter_html(document: CoverLetterDocument, template: str) -> st
     if document.sender_name:
         sender_bits.append(f'<h1 class="doc-name">{_e(document.sender_name)}</h1>')
     if document.sender_contact_lines:
-        sender_bits.append(f'<p class="doc-contact">{_e(" · ".join(document.sender_contact_lines))}</p>')
+        sender_bits.append(f'<p class="doc-contact">{_e(join_fields(*document.sender_contact_lines))}</p>')
     if sender_bits:
         parts.append(f'<header class="letter-sender">{"".join(sender_bits)}</header>')
 

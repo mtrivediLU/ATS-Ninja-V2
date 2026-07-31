@@ -14,7 +14,7 @@ from ats_engine.providers.base import LLMProvider, generate_json
 # location/company splitting, etc.) MUST bump this constant -- otherwise a
 # resume already cached under the old logic keeps being served unchanged
 # after the fix ships.
-PROFILE_CACHE_VERSION = "profile-v10-certification-blocks-and-source-headline"
+PROFILE_CACHE_VERSION = "profile-v11-separator-delimited-employer-location"
 
 
 class ExtractionSuspectError(RuntimeError):
@@ -1343,6 +1343,24 @@ def _heuristic_entries(lines: list[str], *, kind: str) -> list[dict[str, Any]]:
         ):
             separator = "" if current["bullets"][-1].rstrip().endswith("-") else " "
             current["bullets"][-1] = f"{current['bullets'][-1]}{separator}{line}"
+        elif (
+            current is not None
+            and not current[secondary]
+            and not current["bullets"]
+            and not header_buffer
+            and _classify_header_line(line)[0] == "title"
+        ):
+            # A role stated *below* its date line. Layouts that right-align the
+            # date against the employer -- including this engine's own delivered
+            # DOCX/HTML -- extract as Employer / Dates / Title, so the role
+            # arrives after `apply_header` has already run for this entry and
+            # would otherwise be carried forward into the *next* entry's header
+            # buffer, shifting every title down by one role.
+            #
+            # Deliberately narrow: only the line immediately after the date
+            # line, only when this entry still has no title and no bullets, and
+            # only when the line independently classifies as a title.
+            current[secondary] = _classify_header_line(line)[1]
         else:
             header_buffer.append(line)
 
@@ -1546,12 +1564,26 @@ def _split_location_tail(value: str) -> tuple[str, str]:
     repeated as an actual location suffix.
     """
     text = value.strip()
-    # A pipe is an explicit column boundary in common resume layouts. Honor it
-    # before the capitalized-tail heuristic so a multi-word city such as
-    # ``Harbor City, ON`` is not truncated to ``City, ON`` and left attached to
-    # the employer as ``Northstar Medical Systems | Harbor``.
-    if "|" in text:
-        remainder, candidate = (part.strip() for part in text.rsplit("|", 1))
+    # An explicit column separator in common resume layouts. Honor it before the
+    # capitalized-tail heuristic so a multi-word city such as ``Harbor City, ON``
+    # is not truncated to ``City, ON`` and left attached to the employer as
+    # ``Northstar Medical Systems | Harbor``.
+    #
+    # The middot is the separator every modern template family uses (and the one
+    # this engine's own DOCX/HTML renderers emit), so a resume laid out as
+    # ``Flosonics Medical · Toronto, ON`` previously had its employer read as
+    # ``Flosonics Medical ·`` -- which then pushed the title, dates and bullets
+    # of every subsequent entry one slot out of alignment and left a wrapped
+    # bullet's trailing prose sitting in the employer field. The dashes are the
+    # same convention with different punctuation.
+    #
+    # This is a recognition rule, not a permissive one: the split is accepted
+    # only when the right-hand side is *itself* a well-formed ``City, Region``
+    # tail, so a company name that merely contains a separator is left intact.
+    for separator in ("|", "·", "–", "—"):
+        if separator not in text:
+            continue
+        remainder, candidate = (part.strip() for part in text.rsplit(separator, 1))
         match = _LOCATION_TAIL.fullmatch(candidate)
         if remainder and match is not None:
             return match.group("location").strip(), remainder
