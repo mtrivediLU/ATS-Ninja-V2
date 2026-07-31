@@ -44,6 +44,13 @@ _REQUIRED_HEADINGS = (
     "minimum qualifications",
     "in addition, you have",
     "in addition you have",
+    # A real CGI posting's exact heading; without this it hits the same
+    # unknown-heading reset the comment above documents, and every
+    # requirement under "Required qualifications to be successful in this
+    # role:" -- including the only "communication, collaboration, and
+    # stakeholder management" bullet -- vanished from the demand model
+    # entirely.
+    "required qualifications to be successful in this role",
 )
 _PREFERRED_HEADINGS = (
     "preferred qualifications",
@@ -73,6 +80,9 @@ _SECTION_RESPONSIBILITY_HEADINGS = (
     # "Perform root-cause analysis ..." that do not themselves contain an
     # action cue.
     "more specifically, you will",
+    # A real CGI posting's exact heading, for the same reason as
+    # "required qualifications to be successful in this role" above.
+    "your future duties and responsibilities",
 )
 _SUBSTANTIVE_RESPONSIBILITY_HEADINGS = (
     *_SECTION_RESPONSIBILITY_HEADINGS,
@@ -171,6 +181,40 @@ _GENERIC_HEADS = {
     "team",
     "teams",
     "work",
+}
+# A common bullet-leading action verb. It is capitalized only because it opens
+# the sentence, not because it names a product -- "Leverage AI-assisted
+# development tools" is not a two-word tool called "Leverage AI". Checked
+# against the FIRST word of a multi-word mined candidate, and only rejects
+# when that candidate itself opens the bullet (see the sentence-initial check
+# in `_is_admissible_mined_value`), so a genuine mid-sentence product name
+# beginning with one of these words in a different grammatical role is never
+# affected.
+_SENTENCE_INITIAL_VERBS = {
+    "architect",
+    "automate",
+    "build",
+    "collaborate",
+    "create",
+    "deliver",
+    "deploy",
+    "design",
+    "develop",
+    "drive",
+    "ensure",
+    "implement",
+    "lead",
+    "leverage",
+    "maintain",
+    "manage",
+    "mentor",
+    "optimize",
+    "perform",
+    "promote",
+    "provide",
+    "resolve",
+    "solve",
+    "troubleshoot",
 }
 _GENERIC_TOKENS = _GENERIC_HEADS | {
     "and",
@@ -1028,6 +1072,8 @@ def _is_admissible_mined_value(
     if len(words) > 4 or words[-1] in _GENERIC_HEADS:
         return False
     if all(word in _GENERIC_TOKENS for word in words):
+        return False
+    if words[0] in _SENTENCE_INITIAL_VERBS and _strip_bullet(line).strip().casefold().startswith(normalized):
         return False
     has_domain_head = any(word in _DOMAIN_HEADS for word in words)
     has_product_shape = any(character.isupper() for character in value[1:]) or "-" in value
