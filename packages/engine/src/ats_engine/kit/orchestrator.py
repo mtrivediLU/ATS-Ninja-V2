@@ -291,7 +291,32 @@ def generate_application_kit(
         and match_report.tailored_ats_match is not None
         and match_report.tailored_ats_match.score + 0.001 < match_report.original_ats_match.score
     ):
-        raise AssertionError("Tailoring Engine v2 invariant failed: tailored score regressed below the original score.")
+        # Reported, never suppressed -- but not fatal.
+        #
+        # This was an assertion that crashed kit generation. It could not fire
+        # while the "tailored" score was computed from the plan, because that
+        # rendering included labels ("Candidate Header", "Headline:",
+        # "Company:", "Title:", "Dates:") that inflated it with text no
+        # candidate ever received. Now that the score is measured on the
+        # delivered document, the comparison is real, and it fails whenever
+        # tailoring genuinely fails to improve the artifact -- which is the
+        # deficiency the operation catalogue exists to fix, not a bug in the
+        # pipeline. Jobscan independently scores one of our real cases 73
+        # against a base of 75, so this is a true measurement, not a false
+        # alarm.
+        #
+        # Per AGENTS.md a finding is blocked only when it is truth-critical or
+        # structural; a quality shortfall is neither, and crashing means the
+        # candidate receives nothing at all. So it is surfaced honestly on the
+        # kit and delivery continues.
+        delta = match_report.original_ats_match.score - match_report.tailored_ats_match.score
+        logger.warning("tailored ATS score did not improve on the original (-%.2f points)", delta)
+        kit_warnings.append(
+            f"Tailoring did not improve the ATS score for this posting "
+            f"({match_report.original_ats_match.score:.1f} to "
+            f"{match_report.tailored_ats_match.score:.1f}); the original wording already "
+            "matched it at least as well."
+        )
     _attach_change_ledgers(
         resume_artifact=resume_artifact,
         cover_artifact=cover_artifact,
