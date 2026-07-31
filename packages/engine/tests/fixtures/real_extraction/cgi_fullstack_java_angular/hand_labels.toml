@@ -1,0 +1,320 @@
+# Hand-labelled ground truth for the CGI "Senior Full Stack Developer
+# (Java + Angular)" posting.
+#
+# WHY THIS FILE EXISTS
+# --------------------
+# Demand-model recall and precision are meaningless if the goalposts are drawn
+# from the extractor's own output. These labels were written and committed
+# BEFORE any B-1 demand-model fix, by reading job_description.txt directly --
+# same discipline as the CrowdPlat/LatentView files from PR A-1.
+#
+# `jd_occurrences` is MEASURED, not estimated: a case-insensitive
+# word-boundary count over job_description.txt, the identical method
+# production uses. Three independently corroborate Jobscan's own published
+# per-skill JD column exactly: Java 5, Angular 5, Spring Boot 4.
+#
+# A DELIBERATE DISAGREEMENT WITH JOBSCAN -- read before "fixing" this file
+# ------------------------------------------------------------------------
+# Jobscan's skill table also lists Teamwork (JD=1), Committed (JD=2), Build
+# relationships (JD=1), and Leadership (JD=1). All four are EXCLUDED here.
+# Every occurrence of "teamwork" / "committed" / "build relationships" is in
+# the generic "What you can expect from us" company-culture boilerplate at
+# the bottom of the posting -- not in "Your future duties and
+# responsibilities" or "Required qualifications". "leadership" occurs once,
+# in "You will provide technical leadership", inside the unheaded intro
+# paragraph before the first recognised section heading.
+#
+# Jobscan is a naive keyword scanner with no section awareness; this engine's
+# demand model is deliberately section-gated (`extract_requirements` mines
+# only `required`/`preferred`/`responsibility` sections) specifically so
+# marketing copy is never rendered to a candidate as a skill gap -- the exact
+# failure class documented in test_pramana_demand.py's own module docstring
+# ("modern low-code", "BI Frameworks"). Labelling boilerplate-only terms as
+# ground truth here would reward the extractor for mining the wrong text.
+# `communication` / `collaboration` / `stakeholder management` are kept
+# because they appear in the "Required qualifications" bullet itself
+# ("Excellent communication, collaboration, and stakeholder management
+# skills"); `mentoring` is kept because "Mentor junior engineers..." is a
+# bullet in the responsibilities section.
+#
+# JUDGEMENT CALLS
+# ----------------
+# - "REST API" / "RESTful APIs" / "RESTful (Rest-APIs)" are three spellings
+#   of one skill; existing vocabulary already canonicalises this family as
+#   "rest apis" (aliases: rest api, restful api, restful apis). Ground truth
+#   uses that canonical, surface "RESTful APIs" (the fullest literal form),
+#   counted as that literal string only -- 1 occurrence -- matching how
+#   production counts a candidate's own surface, not every synonym.
+# - "distributed system(s)" appears in three different inflections
+#   ("distributed system challenges", "across distributed systems", "in
+#   distributed environments"); ground truth picks the plural noun form,
+#   "distributed systems", as the representative surface (1 occurrence of
+#   that exact string).
+# - "SQL/PL SQL" in the source has no slash before "PL": ground truth's
+#   surface for PL/SQL is the literal "PL SQL" as written.
+#
+# Deliberately NOT labelled: "CGI" (the employer's own name; must never be
+# mined as a requirement -- §4's documented defect), and no requirement here
+# is ever a preposition-prefixed fragment ("including EKS", "including
+# GitHub") -- those fragments must not appear in extraction output either.
+
+[meta]
+case = "cgi_fullstack_java_angular"
+company = "CGI"
+title = "Senior Full Stack Developer (Java + Angular)"
+title_in_body = "Senior Full Stack Engineer"
+jobscan_base_score = 59
+jobscan_tailored_score = 63
+jobscan_human_tailored_score = 93
+source = "Supplied verbatim by the repository owner, 2026-07-29."
+
+# ---------------------------------------------------------------- tools ----
+[[requirements]]
+canonical = "java"
+surface = "Java"
+kind = "tool"
+section = "required"
+jd_occurrences = 5
+
+[[requirements]]
+canonical = "j2ee"
+surface = "J2EE"
+kind = "tool"
+section = "required"
+jd_occurrences = 2
+
+[[requirements]]
+canonical = "spring boot"
+surface = "Spring Boot"
+kind = "tool"
+section = "required"
+jd_occurrences = 4
+
+[[requirements]]
+canonical = "microservices"
+surface = "Microservices"
+kind = "methodology"
+section = "required"
+jd_occurrences = 4
+
+[[requirements]]
+canonical = "rest apis"
+surface = "RESTful APIs"
+kind = "tool"
+section = "required"
+jd_occurrences = 1
+
+[[requirements]]
+canonical = "angular"
+surface = "Angular"
+kind = "tool"
+section = "required"
+jd_occurrences = 5
+
+[[requirements]]
+canonical = "aws"
+surface = "AWS"
+kind = "tool"
+section = "required"
+jd_occurrences = 3
+
+[[requirements]]
+canonical = "eks"
+surface = "EKS"
+kind = "tool"
+section = "required"
+jd_occurrences = 2
+
+[[requirements]]
+canonical = "s3"
+surface = "S3"
+kind = "tool"
+section = "required"
+jd_occurrences = 2
+
+[[requirements]]
+canonical = "lambda"
+surface = "Lambda"
+kind = "tool"
+section = "required"
+jd_occurrences = 2
+
+[[requirements]]
+canonical = "docker"
+surface = "Docker"
+kind = "tool"
+section = "required"
+jd_occurrences = 2
+
+[[requirements]]
+canonical = "kubernetes"
+surface = "Kubernetes"
+kind = "tool"
+section = "required"
+jd_occurrences = 2
+
+[[requirements]]
+canonical = "ci/cd"
+surface = "CI/CD"
+kind = "methodology"
+section = "required"
+jd_occurrences = 2
+
+[[requirements]]
+canonical = "github"
+surface = "GitHub"
+kind = "tool"
+section = "required"
+jd_occurrences = 4
+
+[[requirements]]
+canonical = "jenkins"
+surface = "Jenkins"
+kind = "tool"
+section = "required"
+jd_occurrences = 2
+
+[[requirements]]
+canonical = "udeploy"
+surface = "uDeploy"
+kind = "tool"
+section = "required"
+jd_occurrences = 2
+
+[[requirements]]
+canonical = "git"
+surface = "Git"
+kind = "tool"
+section = "required"
+jd_occurrences = 1
+
+[[requirements]]
+canonical = "github copilot"
+surface = "GitHub Copilot"
+kind = "tool"
+section = "required"
+jd_occurrences = 2
+
+[[requirements]]
+canonical = "oracle"
+surface = "Oracle"
+kind = "tool"
+section = "required"
+jd_occurrences = 2
+
+[[requirements]]
+canonical = "sql"
+surface = "SQL"
+kind = "tool"
+section = "required"
+jd_occurrences = 4
+
+[[requirements]]
+canonical = "pl/sql"
+surface = "PL SQL"
+kind = "tool"
+section = "required"
+jd_occurrences = 2
+
+[[requirements]]
+canonical = "stored procedures"
+surface = "stored procedures"
+kind = "methodology"
+section = "required"
+jd_occurrences = 2
+
+[[requirements]]
+canonical = "performance tuning"
+surface = "performance tuning"
+kind = "methodology"
+section = "required"
+jd_occurrences = 1
+
+[[requirements]]
+canonical = "hibernate"
+surface = "Hibernate"
+kind = "tool"
+section = "required"
+jd_occurrences = 2
+
+[[requirements]]
+canonical = "jpa"
+surface = "JPA"
+kind = "tool"
+section = "required"
+jd_occurrences = 2
+
+[[requirements]]
+canonical = "distributed systems"
+surface = "distributed systems"
+kind = "domain"
+section = "required"
+jd_occurrences = 1
+
+# -------------------------------------------------------------- domain ----
+[[requirements]]
+canonical = "financial services"
+surface = "Financial Services"
+kind = "domain"
+section = "preferred"
+jd_occurrences = 1
+
+# ---------------------------------------------------------------- soft ----
+[[requirements]]
+canonical = "communication"
+surface = "communication"
+kind = "soft"
+section = "required"
+jd_occurrences = 1
+
+[[requirements]]
+canonical = "collaboration"
+surface = "collaboration"
+kind = "soft"
+section = "required"
+jd_occurrences = 1
+
+[[requirements]]
+canonical = "stakeholder management"
+surface = "stakeholder management"
+kind = "soft"
+section = "required"
+jd_occurrences = 1
+
+[[requirements]]
+canonical = "mentoring"
+surface = "mentoring"
+kind = "soft"
+section = "responsibility"
+jd_occurrences = 1
+
+[not_requirements]
+labels = [
+    "Category",
+    "Main location",
+    "Alternate Location(s)",
+    "Position ID",
+    "Employment Type",
+    "Position Description",
+    "Your future duties and responsibilities",
+    "Required qualifications to be successful in this role",
+    "Nice to Have",
+    "Skills",
+    "What you can expect from us",
+]
+non_skills = [
+    "CGI",
+    "Halifax",
+    "Moncton",
+    "Stratford",
+    "Nova Scotia",
+    "New Brunswick",
+    "P. E. I.",
+    "Full Time",
+    "cloud-native",
+    "hybrid",
+    "teamwork",
+    "committed",
+    "build relationships",
+    "leadership",
+]

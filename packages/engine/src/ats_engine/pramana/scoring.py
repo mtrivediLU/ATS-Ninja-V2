@@ -330,6 +330,7 @@ def _parse_structured_resume(text: str) -> _StructuredResume:
     section_lines: dict[str, list[str]] = {}
     current_section: str | None = None
     saw_section = False
+    masthead_index = 0
 
     for line in (text or "").splitlines():
         section = _section_for_heading(line)
@@ -352,6 +353,21 @@ def _parse_structured_resume(text: str) -> _StructuredResume:
             headline = _HEADLINE.match(line)
             if headline is not None:
                 headline_lines.append(headline.group("text"))
+            elif masthead_index > 0 and line.strip() and not _looks_like_contact_line(line):
+                # The delivered document states its headline as a bare line
+                # under the candidate's name -- there is no "Headline:" label
+                # on anything a candidate actually receives, only on the LaTeX
+                # wire format. Without this, a headline placement earned no
+                # credit the moment scoring moved onto the delivered text.
+                #
+                # This does not loosen the provenance gate. The region is
+                # already bounded by ``not saw_section``: it is the masthead
+                # above the first recognised heading, which the "paste the JD
+                # at the bottom" attack this function exists to stop can never
+                # reach. Line 0 (the candidate's name) and contact lines are
+                # excluded so only the role statement itself is scoreable.
+                headline_lines.append(line.strip())
+            masthead_index += 1
 
     sections = {name: "\n".join(lines) for name, lines in section_lines.items()}
     return _StructuredResume(
@@ -367,6 +383,22 @@ def _section_for_heading(line: str) -> str | None:
     if not stripped or stripped.startswith(("-", "*", "•")) or "|" in stripped:
         return None
     return _SECTION_ALIASES.get(normalize_term(stripped.rstrip(":")))
+
+
+def _looks_like_contact_line(line: str) -> bool:
+    """True for the masthead's contact row, which is never a role statement.
+
+    Deliberately narrow and local to scoring: it only has to separate a
+    headline from a contact line inside the masthead, not classify arbitrary
+    resume text.
+    """
+    lowered = line.casefold()
+    if "@" in line or "linkedin.com" in lowered or "github.com" in lowered:
+        return True
+    if re.search(r"\d{3}[.\-\s]?\d{3}[.\-\s]?\d{4}", line):
+        return True
+    # A bare domain such as "example.com" with no sentence-like content.
+    return re.fullmatch(r"[\w.\-]+\.[a-z]{2,}", line.strip(), flags=re.IGNORECASE) is not None
 
 
 def _looks_like_unknown_heading(line: str) -> bool:

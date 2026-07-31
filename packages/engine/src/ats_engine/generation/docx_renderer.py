@@ -10,6 +10,7 @@ from docx.oxml.ns import qn
 from docx.shared import Pt, RGBColor
 from docx.text.paragraph import Paragraph
 
+from ats_engine.generation.delivered_layout import BULLET_MARKER, join_fields
 from ats_engine.generation.html_renderer import freeform_line_blocks, parse_freeform_document
 from ats_engine.kit.contract import CoverLetterDocument, ResumeDocument
 
@@ -65,7 +66,7 @@ def render_resume_docx(document: ResumeDocument, template: str) -> bytes:
     if document.experience:
         _add_section_heading(doc, "Professional Experience", modern)
         for entry in document.experience:
-            heading = " · ".join(part for part in (entry.employer, entry.location) if part)
+            heading = join_fields(entry.employer, entry.location)
             _add_entry_heading(doc, heading, entry.date_range)
             if entry.title:
                 _add_paragraph(doc, entry.title, italic=True)
@@ -76,7 +77,7 @@ def render_resume_docx(document: ResumeDocument, template: str) -> bytes:
     if document.education:
         _add_section_heading(doc, "Education", modern)
         for edu_entry in document.education:
-            heading = " · ".join(part for part in (edu_entry.institution, edu_entry.location) if part)
+            heading = join_fields(edu_entry.institution, edu_entry.location)
             _add_entry_heading(doc, heading, edu_entry.date_range)
             if edu_entry.degree:
                 _add_paragraph(doc, edu_entry.degree, italic=True)
@@ -86,9 +87,7 @@ def render_resume_docx(document: ResumeDocument, template: str) -> bytes:
 
     if document.certifications:
         certification_items = [
-            " · ".join(
-                part for part in (item.name, item.date, item.link, _credential_id_text(item.credential_id)) if part
-            )
+            join_fields(item.name, item.date, item.link, _credential_id_text(item.credential_id))
             for item in document.certifications
             if item.name
         ]
@@ -262,9 +261,22 @@ def _add_entry_heading(doc: DocxDocument, heading_left: str, date_range: str) ->
 
 
 def _add_bullet(doc: DocxDocument, text: str) -> None:
-    paragraph = doc.add_paragraph(style="List Bullet")
+    """Emit a bullet whose marker is real text, not list styling.
+
+    ``style="List Bullet"`` draws its marker from numbering definitions rather
+    than from the paragraph's text run, so the glyph exists visually but not in
+    the extracted text layer. Every resume this engine delivered came back from
+    PyMuPDF as unmarked prose, which is indistinguishable from an employer
+    header -- our own parser read a wrapped bullet's tail as the next employer,
+    and an external ATS has no better information to work with. Writing the
+    marker as a literal character keeps the same appearance (hanging indent
+    reproduces the list layout) while making the bullet survive extraction.
+    """
+    paragraph = doc.add_paragraph()
     paragraph.paragraph_format.space_after = Pt(2)
-    run = paragraph.add_run(text)
+    paragraph.paragraph_format.left_indent = Pt(18)
+    paragraph.paragraph_format.first_line_indent = Pt(-12)
+    run = paragraph.add_run(f"{BULLET_MARKER} {text}")
     run.font.size = Pt(10.5)
 
 

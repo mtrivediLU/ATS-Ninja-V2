@@ -1,0 +1,98 @@
+Candidate Name
+Senior Full Stack Engineer | Java & Angular
+000-000-0000 | candidate@example.com | linkedin.com/in/example-candidate | example.com
+Sudbury, Ontario, Canada | Canadian Permanent Resident | Open to Relocation to Halifax, Moncton, or Stratford
+PROFESSIONAL SUMMARY
+Senior Full Stack Engineer with 8+ years of hands-on Java and J2EE development, building Spring Boot microservices, RESTful APIs,
+and Angular front ends across enterprise, startup, and public-sector delivery. Led four engineers on a high-traffic B2C commerce
+platform in Java Spring MVC and Hibernate at TCS, providing technical leadership, solution design, and mentoring while collaborat-
+ing closely with architects, QA, and business stakeholders. Built and deployed containerized services with Docker and Kubernetes,
+tightened CI/CD pipelines, and used GitHub Copilot to accelerate development and testing. Committed to strong communication,
+teamwork, and building lasting relationships with cross-functional partners, with hands-on AWS exposure including EKS, S3, and
+Lambda, and Azure Fundamentals (AZ-900) certified.
+TECHNICAL SKILLS
+Backend & APIs: Java, J2EE, Spring Boot, Spring MVC, Hibernate, JPA, Microservices, REST APIs, System Integration
+Frontend: Angular, React, JavaScript, TypeScript, HTML5, CSS3
+Databases: SQL, SQL Server, PostgreSQL, MySQL, Stored Procedures, Data Modeling
+Cloud & DevOps: AWS (EKS, S3, Lambda), Docker, Kubernetes, Azure, Git, CI/CD, GitHub Actions, GitHub, Jenkins, Linux
+AI-Assisted Development: GitHub Copilot, Cursor, Claude, ChatGPT, Prompt Engineering
+Methodologies: Agile, Scrum, Jira, Confluence, Requirements Gathering, UAT, SDLC, Mentoring, Stakeholder Collaboration
+Working knowledge: Oracle SQL/PL-SQL, uDeploy
+PROFESSIONAL EXPERIENCE
+Flosonics Medical
+Toronto, ON (Remote)
+Business Intelligence Developer
+Oct 2024 to Apr 2026
+• Designed ETL/ELT pipelines and REST-integrated data services joining medical device logs with Salesforce, HubSpot, ZoomInfo,
+and Lead Forensics into a single analytics layer.
+• Built the company’s first centralized data warehouse in PostgreSQL, giving Finance, QA, Production, and HR one governed
+source of truth.
+• Wrote an internal AI assistant on the OpenAI and Gemini APIs so non-technical staff could query device logs and documents in
+plain language.
+• Automated reporting and predictive inventory models, cutting manual reporting overhead by 40% in a regulated environment
+while collaborating daily with Finance, QA, and Production stakeholders.
+LoopX
+Sudbury, ON
+Software Development Consultant
+Jun 2024 to Jul 2025
+• Designed, built, and shipped the LoopX Safe and Smart Mining Data Platform solo, backend through frontend in React and
+Node.js (demo video).
+• Built real-time safety dashboards and REST APIs for autonomous mining equipment operating underground.
+• Containerized services with Docker and tuned the visualization layer for low-latency display.
+City of Greater Sudbury
+Sudbury, ON
+Business Intelligence Analyst
+May 2024 to Aug 2024
+• Integrated the PreHos emergency-response platform with SQL Server using SSIS, Python, and Cloud SQL Auth Proxy, configur-
+ing secure service-to-service communication.
+• Owned the data flows behind 911 call reporting and Opioid Response Ministry submissions for community-safety operations.
+• Built Service-Based Budgeting reporting in SQL and trained municipal staff on data-governance standards, communicating
+status clearly to non-technical stakeholders.
+
+Minax Inc.
+Sudbury, ON
+Lead Software Developer
+Oct 2023 to May 2024
+• Built an offline-first React Native app for Vale that collects inspection data underground with no network and syncs when con-
+nectivity returns.
+• Ran UAT and the production rollout across active mining sites, validating data integrity in harsh industrial conditions.
+• Automated Workplace Safety North compliance forms with PowerAutomate, taking engineer reporting from 5hours to minutes.
+Mineral Exploration Research Centre
+Sudbury, ON
+Research Associate (Data & ML)
+Mar 2022 to Jul 2023
+• Developed Random Forest models for gold prospectivity mapping, reaching a 99.5% F1 score on geological classification.
+• Processed large geospatial survey datasets in Python across the Superior province.
+Tata Consultancy Services (TCS)
+Mumbai, India
+Lead Software Engineer
+Nov 2017 to Oct 2021
+• LedfourengineersonEdgepark, ahigh-trafficB2Ccommerceplatform, providingtechnicalleadership, mentoring, andbacklog
+ownership while committed to on-time delivery.
+• Built secure user management and order business logic in Java Spring MVC and Hibernate behind REST APIs and microservices,
+collaborating with architects and QA to resolve complex distributed system issues.
+• Launched 13 B2B commerce platforms across Europe and North America on SAP Hybris / SAP Commerce Cloud, handling
+multi-language and multi-currency builds through strong teamwork across distributed squads.
+• Owned production support for critical services, tightened the CI/CD pipeline and application performance release over release,
+and built relationships with business stakeholders through clear, ongoing communication.
+EDUCATION
+Laurentian University
+Sudbury, ON
+Master of Computational Science
+2021 to 2023
+• Thesis: ML for Geological Discovery. Oral presentation at AICMSE 2023, Harvard Faculty Club, Boston.
+• Co-author: AstudyoffaultsintheSuperiorprovinceofOntarioandQuebecusingtherandomforestmachinelearningalgorithm.
+Ore Geology Reviews, 157 (Jun 2023), 105403.
+Gujarat Technological University
+India
+Bachelor of Computer Engineering
+2013 to 2017
+CERTIFICATIONS
+Microsoft Certified: Azure Fundamentals (AZ-900)
+2024 Verify
+Microsoft Certified: Power BI Data Analyst Associate (PL-300)
+2024 Verify
+Microsoft Certified: Power Platform Developer Associate (PL-400)
+2024 Verify
+Salesforce Certified Agentforce Specialist (AI-201)
+2025 Verify

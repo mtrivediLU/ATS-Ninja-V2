@@ -168,7 +168,19 @@ VOCABULARY: Final[tuple[VocabularyEntry, ...]] = (
     _entry("sql", aliases=("structured query language",), display="SQL", category="database"),
     _entry("postgresql", aliases=("postgres",), display="PostgreSQL", category="database"),
     _entry("mongodb", aliases=("mongo db", "mongo"), display="MongoDB", category="database"),
+    _entry("oracle", aliases=("oracle database", "oracle db"), display="Oracle", category="database"),
+    _entry("pl/sql", aliases=("pl-sql", "plsql", "pl sql"), display="PL/SQL", category="database"),
+    _entry(
+        "sql server",
+        aliases=("mssql", "ms sql server", "ms sql", "microsoft sql server"),
+        display="SQL Server",
+        category="database",
+    ),
+    _entry("stored procedures", aliases=("stored procedure",), category="database", kind="methodology"),
     _entry("machine learning", category="domain", kind="domain"),
+    _entry("distributed systems", aliases=("distributed system",), category="domain", kind="domain"),
+    _entry("financial services", aliases=("financial service",), category="domain", kind="domain"),
+    _entry("performance tuning", category="operations_support", kind="methodology"),
     _entry("scikit-learn", aliases=("scikit learn",), display="scikit-learn", category="framework"),
     _entry("d3.js", aliases=("d3", "d3 js"), display="D3.js", category="framework"),
     # Geospatial and document-management terms from the COO case.
@@ -193,6 +205,14 @@ VOCABULARY: Final[tuple[VocabularyEntry, ...]] = (
     _entry("azure api management", aliases=("api management",), display="Azure API Management", category="cloud"),
     _entry("aws", aliases=("amazon web services",), display="AWS", category="cloud"),
     _entry("gcp", aliases=("google cloud platform", "google cloud"), display="GCP", category="cloud"),
+    _entry(
+        "eks",
+        aliases=("elastic kubernetes service", "amazon eks", "aws eks"),
+        display="EKS",
+        category="cloud",
+    ),
+    _entry("s3", aliases=("amazon s3", "aws s3"), display="S3", category="cloud", allow_short=True),
+    _entry("lambda", aliases=("aws lambda",), display="Lambda", category="cloud"),
     _entry("docker", category="platform"),
     _entry("kubernetes", aliases=("k8s",), category="platform"),
     _entry("microservices", aliases=("microservice",), category="platform", kind="methodology"),
@@ -230,6 +250,16 @@ VOCABULARY: Final[tuple[VocabularyEntry, ...]] = (
         display="CI/CD",
         category="testing_quality",
     ),
+    _entry("jenkins", category="source_control"),
+    _entry(
+        "github actions",
+        aliases=("github action",),
+        display="GitHub Actions",
+        category="source_control",
+    ),
+    _entry("udeploy", aliases=("u-deploy", "u deploy"), display="uDeploy", category="source_control"),
+    _entry("github", category="source_control"),
+    _entry("git", category="source_control", allow_short=True),
     _entry("troubleshooting", aliases=("trouble shooting",), category="operations_support", kind="skill"),
     _entry(
         "it support",
@@ -295,6 +325,12 @@ VOCABULARY: Final[tuple[VocabularyEntry, ...]] = (
     _entry("python", category="programming_language"),
     _entry("rust", category="programming_language"),
     _entry("java", category="programming_language"),
+    _entry(
+        "j2ee",
+        aliases=("java ee", "java enterprise edition", "javaee"),
+        display="J2EE",
+        category="programming_language",
+    ),
     _entry("javascript", category="programming_language"),
     _entry("typescript", category="programming_language"),
     _entry("c#", aliases=("c sharp",), display="C#", category="programming_language", allow_short=True),
@@ -310,7 +346,10 @@ VOCABULARY: Final[tuple[VocabularyEntry, ...]] = (
     _entry("angular", category="framework"),
     _entry("vue", aliases=("vue.js", "vue js"), display="Vue", category="framework"),
     _entry("spring", aliases=("spring framework",), category="framework"),
+    _entry("spring boot", aliases=("springboot",), display="Spring Boot", category="framework"),
+    _entry("spring mvc", aliases=("springmvc",), display="Spring MVC", category="framework"),
     _entry("hibernate", category="framework"),
+    _entry("jpa", aliases=("java persistence api",), display="JPA", category="framework"),
     _entry("fastapi", aliases=("fast api",), display="FastAPI", category="framework"),
     _entry("html5", aliases=("html",), display="HTML5", category="web_development"),
     _entry("css", aliases=("css3",), display="CSS", category="web_development"),
@@ -335,6 +374,14 @@ VOCABULARY: Final[tuple[VocabularyEntry, ...]] = (
     _entry("stakeholder communication", category="communication", kind="soft"),
     _entry("collaboration", aliases=("cross-functional collaboration",), category="communication", kind="soft"),
     _entry("attention to detail", category="communication", kind="soft"),
+    _entry("mentoring", aliases=("mentorship", "mentor"), category="communication", kind="soft"),
+    _entry(
+        "stakeholder management",
+        aliases=("stakeholder engagement",),
+        category="communication",
+        kind="soft",
+    ),
+    _entry("teamwork", aliases=("team work",), category="communication", kind="soft"),
     # Generative AI / LLM stack.  A JD that names ChatGPT, Claude, or Copilot is
     # naming a tool the candidate either has used or has not; before these
     # entries existed the entire GenAI half of a modern BI posting was invisible
@@ -345,9 +392,12 @@ VOCABULARY: Final[tuple[VocabularyEntry, ...]] = (
     ),
     _entry("chatgpt", aliases=("chat gpt",), display="ChatGPT", category="platform"),
     _entry("claude", display="Claude", category="platform"),
-    _entry(
-        "microsoft copilot", aliases=("copilot", "github copilot"), display="Microsoft Copilot", category="platform"
-    ),
+    _entry("microsoft copilot", aliases=("copilot",), display="Microsoft Copilot", category="platform"),
+    # A distinct product from Microsoft Copilot -- a different company's tool,
+    # not a spelling variant -- so it needs its own canonical, not an alias.
+    # Previously merged into "microsoft copilot", which meant a JD naming
+    # GitHub Copilot specifically was silently credited under the wrong tool.
+    _entry("github copilot", category="platform"),
     _entry("openai", display="OpenAI", category="platform"),
     _entry("gemini", display="Gemini", category="platform"),
     _entry("rag", aliases=("retrieval augmented generation",), display="RAG", category="platform", kind="methodology"),
