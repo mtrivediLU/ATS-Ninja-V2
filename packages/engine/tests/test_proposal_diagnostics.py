@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from ats_engine.generation.diagnostics import GateCode, ProposalStatus
-from ats_engine.generation.integration_planner import plan_placements_with_inventory
+from ats_engine.generation.integration_planner import _proposal_record, plan_placements_with_inventory
 from ats_engine.generation.pipeline import run_pipeline
 from ats_engine.kit import application_kit_from_dict, application_kit_to_dict, generate_application_kit
-from ats_engine.models import Mode
+from ats_engine.models import EvidenceLink, Mode, PlacementAction, RequirementTerm
 from ats_engine.parsing.job_description import parse_jd
 from ats_engine.parsing.resume import build_profile
 
@@ -92,6 +92,36 @@ def test_diagnostics_round_trip_and_old_trace_default() -> None:
     old_restored = application_kit_from_dict(old_data)
     assert old_restored is not None and old_restored.match_report is not None
     assert old_restored.match_report.optimization_trace.diagnostics.proposals == ()
+
+
+def test_surface_variant_word_delta_is_a_real_substitution_delta() -> None:
+    requirement = RequirementTerm(
+        canonical="react",
+        surface="ReactJS",
+        aliases=("react",),
+        kind="framework",
+        section="required",
+        weight=2.0,
+        ngram=1,
+        category="frontend",
+        jd_evidence_line="- ReactJS",
+    )
+    action = PlacementAction(
+        term="ReactJS",
+        link=EvidenceLink(
+            requirement=requirement,
+            tier="A",
+            resume_span="React",
+            resume_location="experience:0:bullet:0",
+            surface_to_use="ReactJS",
+        ),
+        target="headline",
+        operation="surface_variant",
+        rendered_text="ReactJS",
+        grounded_by="experience:0:bullet:0",
+    )
+
+    assert _proposal_record(action).word_delta == 0
 
 
 def _trace_plan_links():

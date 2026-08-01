@@ -7,10 +7,16 @@ count per 100 words; it is never an optimizer acceptance input.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from types import MappingProxyType
+
+
+def _word_count(text: str) -> int:
+    """Count words consistently across proposal and run-level diagnostics."""
+    return len(re.findall(r"\b\w+\b", text))
 
 
 class ProposalStatus(StrEnum):

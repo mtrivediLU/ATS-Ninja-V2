@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from ats_engine.generation.diagnostics import ProposalRecord, ProposalStatus
+from ats_engine.generation.diagnostics import ProposalRecord, ProposalStatus, _word_count
 from ats_engine.models import EvidenceLink, JDProfile, PlacementAction, Profile
 
 _PLACEABLE_TIERS = frozenset({"A", "B", "C", "cert", "variant"})
@@ -80,8 +80,8 @@ def plan_placements_with_inventory(
     actions = plan_placements(links, profile, jd_profile)
     records: list[ProposalRecord] = []
     seen_ids: set[str] = set()
-    for index, action in enumerate(actions):
-        record = _proposal_record(action, index)
+    for action in actions:
+        record = _proposal_record(action)
         if record.id in seen_ids:
             raise AssertionError(f"planner emitted a duplicate proposal id: {record.id}")
         seen_ids.add(record.id)
@@ -109,7 +109,7 @@ def _headline_eligible(link: EvidenceLink) -> bool:
     return requirement.kind in {"tool", "framework", "language", "platform"}
 
 
-def _proposal_record(action: PlacementAction, index: int) -> ProposalRecord:
+def _proposal_record(action: PlacementAction) -> ProposalRecord:
     link = action.link
     canonical = link.requirement.canonical
     locations = link.supporting_locations or ((link.resume_location,) if link.resume_location else ())
@@ -132,16 +132,25 @@ def _proposal_record(action: PlacementAction, index: int) -> ProposalRecord:
         evidence_tier=link.tier,
         evidence_locations=tuple(locations),
         surface_to_use=action.term,
-        word_delta=len(action.rendered_text.split()),
+        word_delta=_word_count(action.rendered_text) - _word_count(_replaced_text(action)),
         status=ProposalStatus.NOT_EVALUATED,
         gate_code=None,
         gate_detail="",
         score_before=None,
         score_after=None,
         score_delta=None,
-        batch_index=index // 8,
+        # The optimizer writes the actual batch and iteration as it evaluates
+        # this proposal. -1 means the planner emitted it but no batch reached it.
+        batch_index=-1,
         iteration=0,
     )
+
+
+def _replaced_text(action: PlacementAction) -> str:
+    """Return source text replaced by an in-place operation, if any."""
+    if action.operation in {"surface_variant", "weave_bullet"}:
+        return action.link.resume_span
+    return ""
 
 
 __all__ = ["plan_placements", "plan_placements_with_inventory"]

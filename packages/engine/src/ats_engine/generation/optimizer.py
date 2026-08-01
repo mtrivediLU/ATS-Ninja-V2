@@ -8,7 +8,7 @@ from collections.abc import Iterable
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 
-from ats_engine.generation.diagnostics import GateCode, ProposalRecord, ProposalStatus, RunDiagnostics
+from ats_engine.generation.diagnostics import GateCode, ProposalRecord, ProposalStatus, RunDiagnostics, _word_count
 from ats_engine.generation.integration_planner import plan_placements_with_inventory
 from ats_engine.generation.planning import rewrite_summary
 from ats_engine.generation.resume import generate_resume_text
@@ -122,6 +122,13 @@ class _ProposalRecorder:
                 score_after=score_after,
                 iteration=iteration,
             )
+
+    def schedule(self, actions: Iterable[PlacementAction], *, batch_index: int, iteration: int) -> None:
+        """Record the actual optimizer batch that reached each proposal."""
+        for action in actions:
+            record_id = self.ids_by_label[_action_label(action)]
+            record = self.records[record_id]
+            self.records[record_id] = replace(record, batch_index=batch_index, iteration=iteration)
 
     def rollback(self, *, detail: str) -> None:
         for record_id, record in self.records.items():
@@ -330,6 +337,7 @@ def optimize(
             break
         batch = actions[offset : offset + _BATCH_SIZE]
         trace.iterations += 1
+        recorder.schedule(batch, batch_index=offset // _BATCH_SIZE, iteration=trace.iterations)
         candidate_plan, candidate_actions, rejected = _accept_safe_actions(
             current_plan,
             accepted,
@@ -532,6 +540,7 @@ def _optimize_pr21_compat(
             break
         batch = actions[offset : offset + _BATCH_SIZE]
         trace.iterations += 1
+        recorder.schedule(batch, batch_index=offset // _BATCH_SIZE, iteration=trace.iterations)
         candidate_plan, candidate_actions, rejected = _accept_safe_actions(
             current_plan,
             accepted,
@@ -1316,10 +1325,6 @@ def _gate_code_for_findings(findings: Iterable[ValidationFinding]) -> GateCode:
     if any("missing" in code or "fidelity" in code or "preserv" in code for code in codes):
         return GateCode.PROTECTED_FACT_LOSS
     return GateCode.VALIDATION_FINDING
-
-
-def _word_count(text: str) -> int:
-    return len(re.findall(r"\b\w+\b", text))
 
 
 def _relevant_terms_per_100_words(text: str, requirements: list[RequirementTerm]) -> float:

@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
+from functools import cache
 from pathlib import Path
 
-from ats_engine.bench import discover_cases, format_report, load_external_scores, run_all
+from ats_engine.bench import discover_cases, format_report, load_external_scores, run_all, run_case
+
+
+@cache
+def _all_results():
+    """Run the expensive real-fixture corpus only once in this test module."""
+    return run_all()
 
 
 def test_harness_discovers_all_qualified_fixture_directories() -> None:
@@ -20,7 +27,12 @@ def test_harness_discovers_all_qualified_fixture_directories() -> None:
 
 
 def test_harness_report_is_byte_identical_across_runs() -> None:
-    assert format_report(run_all()) == format_report(run_all())
+    results = _all_results()
+    assert format_report(results) == format_report(results)
+
+    crowdplat = next(case for case in discover_cases() if case.name == "crowdplat_web_scraper")
+    expected = next(result for result in results if result.name == crowdplat.name)
+    assert run_case(crowdplat) == expected
 
 
 def test_external_score_import_and_unclipped_negative_gap_closure() -> None:
