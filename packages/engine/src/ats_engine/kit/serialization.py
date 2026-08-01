@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ats_engine.generation.diagnostics import GateCode, ProposalRecord, ProposalStatus, RunDiagnostics
 from ats_engine.kit.contract import (
     APPLICATION_KIT_V1,
     APPLICATION_KIT_V2,
@@ -227,13 +228,58 @@ def _match_report_to_dict(report: MatchReport) -> dict[str, Any]:
             "score_path": list(report.optimization_trace.score_path),
             "accepted_actions": list(report.optimization_trace.accepted_actions),
             "rejected_actions": [
-                {"action": item.action, "reason": item.reason} for item in report.optimization_trace.rejected_actions
+                {
+                    "action": item.action,
+                    "reason": item.reason,
+                    "code": item.code.value if item.code is not None else None,
+                }
+                for item in report.optimization_trace.rejected_actions
             ],
             "unreachable_terms": list(report.optimization_trace.unreachable_terms),
             "delivery_state": report.optimization_trace.delivery_state.value,
             "fallback_reason": report.optimization_trace.fallback_reason,
             "calibration_suppressed": list(report.optimization_trace.calibration_suppressed),
+            "diagnostics": _run_diagnostics_to_dict(report.optimization_trace.diagnostics),
         },
+    }
+
+
+def _run_diagnostics_to_dict(diagnostics: RunDiagnostics) -> dict[str, Any]:
+    return {
+        "proposals": [
+            {
+                "id": record.id,
+                "operation": record.operation,
+                "target": record.target,
+                "requirement_canonicals": list(record.requirement_canonicals),
+                "requirement_weight": record.requirement_weight,
+                "evidence_tier": record.evidence_tier,
+                "evidence_locations": list(record.evidence_locations),
+                "surface_to_use": record.surface_to_use,
+                "word_delta": record.word_delta,
+                "status": record.status.value,
+                "gate_code": record.gate_code.value if record.gate_code is not None else None,
+                "gate_detail": record.gate_detail,
+                "score_before": record.score_before,
+                "score_after": record.score_after,
+                "score_delta": record.score_delta,
+                "batch_index": record.batch_index,
+                "iteration": record.iteration,
+            }
+            for record in diagnostics.proposals
+        ],
+        "proposals_by_status": dict(diagnostics.proposals_by_status),
+        "rejections_by_gate": dict(diagnostics.rejections_by_gate),
+        "accepted_by_operation": dict(diagnostics.accepted_by_operation),
+        "source_word_count": diagnostics.source_word_count,
+        "delivered_word_count": diagnostics.delivered_word_count,
+        "word_delta": diagnostics.word_delta,
+        "relevant_terms_per_100_words_before": diagnostics.relevant_terms_per_100_words_before,
+        "relevant_terms_per_100_words_after": diagnostics.relevant_terms_per_100_words_after,
+        "score_path": list(diagnostics.score_path),
+        "iterations": diagnostics.iterations,
+        "source_projection_sha256": diagnostics.source_projection_sha256,
+        "delivered_sha256": diagnostics.delivered_sha256,
     }
 
 
@@ -736,7 +782,11 @@ def _match_report_from_dict(raw: object) -> MatchReport | None:
             score_path=[float(item) for item in trace_data.get("score_path") or []],
             accepted_actions=[str(item) for item in trace_data.get("accepted_actions") or []],
             rejected_actions=[
-                OptimizationRejection(action=str(item.get("action", "")), reason=str(item.get("reason", "")))
+                OptimizationRejection(
+                    action=str(item.get("action", "")),
+                    reason=str(item.get("reason", "")),
+                    code=_gate_code(item.get("code")),
+                )
                 for item in trace_data.get("rejected_actions") or []
                 if isinstance(item, dict)
             ],
@@ -747,8 +797,69 @@ def _match_report_from_dict(raw: object) -> MatchReport | None:
             ),
             fallback_reason=str(trace_data.get("fallback_reason", "")),
             calibration_suppressed=[str(item) for item in trace_data.get("calibration_suppressed") or []],
+            diagnostics=_run_diagnostics_from_dict(trace_data.get("diagnostics")),
         ),
     )
+
+
+def _gate_code(raw: object) -> GateCode | None:
+    try:
+        return GateCode(str(raw)) if raw is not None else None
+    except ValueError:
+        return None
+
+
+def _run_diagnostics_from_dict(raw: object) -> RunDiagnostics:
+    if not isinstance(raw, dict):
+        return RunDiagnostics.empty()
+    proposals: list[ProposalRecord] = []
+    for item in raw.get("proposals") or []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            status = ProposalStatus(str(item.get("status", ProposalStatus.NOT_EVALUATED.value)))
+        except ValueError:
+            status = ProposalStatus.NOT_EVALUATED
+        proposals.append(
+            ProposalRecord(
+                id=str(item.get("id", "")),
+                operation=str(item.get("operation", "")),
+                target=str(item.get("target", "")),
+                requirement_canonicals=tuple(str(value) for value in item.get("requirement_canonicals") or []),
+                requirement_weight=float(item.get("requirement_weight", 0.0)),
+                evidence_tier=str(item.get("evidence_tier", "")),
+                evidence_locations=tuple(str(value) for value in item.get("evidence_locations") or []),
+                surface_to_use=str(item.get("surface_to_use", "")),
+                word_delta=int(item.get("word_delta", 0)),
+                status=status,
+                gate_code=_gate_code(item.get("gate_code")),
+                gate_detail=str(item.get("gate_detail", "")),
+                score_before=_optional_float(item.get("score_before")),
+                score_after=_optional_float(item.get("score_after")),
+                score_delta=_optional_float(item.get("score_delta")),
+                batch_index=int(item.get("batch_index", 0)),
+                iteration=int(item.get("iteration", 0)),
+            )
+        )
+    return RunDiagnostics(
+        proposals=tuple(proposals),
+        proposals_by_status={str(key): int(value) for key, value in (raw.get("proposals_by_status") or {}).items()},
+        rejections_by_gate={str(key): int(value) for key, value in (raw.get("rejections_by_gate") or {}).items()},
+        accepted_by_operation={str(key): int(value) for key, value in (raw.get("accepted_by_operation") or {}).items()},
+        source_word_count=int(raw.get("source_word_count", 0)),
+        delivered_word_count=int(raw.get("delivered_word_count", 0)),
+        word_delta=int(raw.get("word_delta", 0)),
+        relevant_terms_per_100_words_before=float(raw.get("relevant_terms_per_100_words_before", 0.0)),
+        relevant_terms_per_100_words_after=float(raw.get("relevant_terms_per_100_words_after", 0.0)),
+        score_path=tuple(float(value) for value in raw.get("score_path") or []),
+        iterations=int(raw.get("iterations", 0)),
+        source_projection_sha256=str(raw.get("source_projection_sha256", "")),
+        delivered_sha256=str(raw.get("delivered_sha256", "")),
+    )
+
+
+def _optional_float(raw: object) -> float | None:
+    return float(raw) if isinstance(raw, (str, int, float)) else None
 
 
 def _evidence_from_dict(raw: dict[str, Any]) -> EvidenceRef:
