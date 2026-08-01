@@ -78,6 +78,11 @@ def plan_placements_with_inventory(
     list, which makes omission and duplicate-record bugs observable.
     """
     actions = plan_placements(links, profile, jd_profile)
+    return actions, proposal_inventory(actions)
+
+
+def proposal_inventory(actions: list[PlacementAction]) -> tuple[ProposalRecord, ...]:
+    """Build initial diagnostics records for an already-planned action list."""
     records: list[ProposalRecord] = []
     seen_ids: set[str] = set()
     for action in actions:
@@ -86,7 +91,7 @@ def plan_placements_with_inventory(
             raise AssertionError(f"planner emitted a duplicate proposal id: {record.id}")
         seen_ids.add(record.id)
         records.append(record)
-    return actions, tuple(records)
+    return tuple(records)
 
 
 def _action(link: EvidenceLink, target: str, operation: str) -> PlacementAction:
@@ -153,4 +158,4 @@ def _replaced_text(action: PlacementAction) -> str:
     return ""
 
 
-__all__ = ["plan_placements", "plan_placements_with_inventory"]
+__all__ = ["plan_placements", "plan_placements_with_inventory", "proposal_inventory"]

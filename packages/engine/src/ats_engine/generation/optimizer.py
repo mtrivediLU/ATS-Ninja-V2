@@ -9,7 +9,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field, replace
 
 from ats_engine.generation.diagnostics import GateCode, ProposalRecord, ProposalStatus, RunDiagnostics, _word_count
-from ats_engine.generation.integration_planner import plan_placements_with_inventory
+from ats_engine.generation.integration_planner import plan_placements, proposal_inventory
 from ats_engine.generation.planning import rewrite_summary
 from ats_engine.generation.resume import generate_resume_text
 from ats_engine.kit.contract import ArtifactKind, DocumentState, OptimizationRejection, OptimizationTrace
@@ -217,7 +217,8 @@ def optimize(
         unreachable_terms=[link.requirement.canonical for link in links if link.tier == "missing"],
         delivery_state=DocumentState.GENERATED_WITH_FALLBACK,
     )
-    actions, inventory = plan_placements_with_inventory(links, profile, jd_profile)
+    actions = plan_placements(links, profile, jd_profile)
+    inventory = proposal_inventory(actions)
     recorder = _ProposalRecorder.from_inventory(actions, inventory)
     source_findings = validate_resume_plan_findings(
         source_plan,
@@ -511,7 +512,8 @@ def _optimize_pr21_compat(
         delivery_state=DocumentState.GENERATED_WITH_FALLBACK,
         fallback_reason="PR-21 compatibility path delivered the source projection.",
     )
-    actions, inventory = plan_placements_with_inventory(links, profile, jd_profile)
+    actions = plan_placements(links, profile, jd_profile)
+    inventory = proposal_inventory(actions)
     recorder = _ProposalRecorder.from_inventory(actions, inventory)
     if not requirements or not links:
         _finalize_diagnostics(trace, recorder, source_plan, source_plan, requirements)
