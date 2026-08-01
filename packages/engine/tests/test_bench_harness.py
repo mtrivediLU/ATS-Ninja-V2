@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from ats_engine.bench import discover_cases, format_report, load_external_scores, run_all
 
 
 def test_harness_discovers_all_qualified_fixture_directories() -> None:
-    cases = discover_cases()
-    assert [case.name for case in cases] == [
-        "cgi_fullstack_java_angular",
-        "crowdplat_web_scraper",
-        "latentview_bi_ai",
-    ]
+    root = Path(__file__).parent / "fixtures" / "real_extraction"
+    expected = sorted(
+        directory.name
+        for directory in root.iterdir()
+        if directory.is_dir()
+        and (directory / "job_description.txt").is_file()
+        and (directory / "resume_ats_ninja.pymupdf.txt").is_file()
+    )
+    assert [case.name for case in discover_cases()] == expected
 
 
 def test_harness_report_is_byte_identical_across_runs() -> None:
