@@ -12,11 +12,13 @@ from ats_engine.models import Mode
 
 FIXTURES = Path(__file__).parent / "fixtures" / "real_extraction"
 
-# Captured from ``main`` immediately before Phase 0 instrumentation.  The CGI
-# fixture retains an empty action expectation only because its deterministic
-# output already has dedicated delivery regression coverage; the score and
-# hash still pin the complete delivered artifact once recorded below.
+# Captured from ``main`` immediately before Phase 0 instrumentation.
 GOLDENS = {
+    "cgi_fullstack_java_angular": {
+        "actions": [],
+        "score": 41.21,
+        "sha256": "290d8f4abac46cbef6c7591181f618b6f122bac6f200f279fb566266c0d4c6b5",
+    },
     "crowdplat_web_scraper": {
         "actions": [
             "quality:headline",
