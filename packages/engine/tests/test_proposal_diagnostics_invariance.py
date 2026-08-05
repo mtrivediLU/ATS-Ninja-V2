@@ -1,71 +1,76 @@
-"""Step 3 behavioral goldens for the real extraction fixtures.
+"""Step 3 follow-up behavioral goldens for the real extraction fixtures.
 
-These values deliberately supersede the Step 2 baseline. ``optimizer_policy``
-now defaults to ``"pareto"`` (see ``config.py``), so this change is expected
-to change scores and delivered text on this branch -- that is the point of
-Step 3, not a regression (``test_optimizer_policy_legacy_reproduction.py``
-proves ``optimizer_policy="legacy"`` still reproduces the Step 2 baseline
-exactly, label rename aside; see below).
+These values supersede the first Step 3 baseline (which itself superseded
+Step 2 -- see git history for that rationale). This round fixes three
+defects the first Step 3 pass shipped around rather than through, so all
+three fixtures move:
 
-* CGI: unchanged. ``accepted_actions``, score (42.33), and the delivered hash
-  are identical to Step 2. Every proposal here -- including the two new
-  surface_variant candidates this step adds -- is rejected by a pre-existing
-  hard gate before pareto's own accept/reject rule is ever consulted:
-  ``_source_content_plan``'s targeting sentence restates the JD title
-  ("... Java + Angular ...") in the summary, pushing "java" from the
-  candidate's own baseline of 4 occurrences to 5 and tripping
-  ``STUFF_TERM_OCCURRENCES`` (a DEGRADE finding on the untouched source
-  projection, non-fatal there, but fatal at the final, unfiltered blocker
-  check) -- present on `main` before any of Step 2 or Step 3, confirmed by
-  directly probing ``validate_resume_plan_findings`` on the plan with zero
-  actions applied. Not fixed here: it is a source-projection/stuffing-detector
-  interaction, unrelated to placement acceptance policy either way.
-* CrowdPlat: score changes from 16.83 to 15.3; the delivered hash changes;
-  ``accepted_actions`` drops from 8 entries to 1 (``quality:headline``,
-  unaffected by policy). Measured directly, not assumed: the 6 placement
-  actions pareto now rejects (``mention_summary``/``append_skill``/
-  ``headline_mention`` for apis/python/communication) each show a positive
-  scalar ``score_delta`` in diagnostics but a zero delta on all three pareto
-  objectives. Traced to ``pramana.scoring._placement_bonus``: it awards up to
-  +4 scalar points for a term appearing in *both* skills and a bullet,
-  independent of whether the term was already fully credited -- these six
-  terms already were, from other sections, before the action ran. Pareto's
-  three objectives (coverage/adoption/density) deliberately exclude that
-  bonus, since it measures readability distribution, not new JD-relevant
-  content; legacy's strict-improvement rule does not distinguish the two.
-  Considered and rejected: adding a flat-candidate tie-break so pareto also
-  accepts these (matching legacy's count) -- measured directly against CGI,
-  where it let iterations of no-real-improvement batches accumulate summary
-  mentions past the stuffing budget and roll the whole run back to the source
-  projection. Rejecting flat candidates outright is worse by this count, but
-  strictly safer, and is what shipped.
-* LatentView: score (50.67) and delivered hash are unchanged from Step 2 --
-  this fixture's 9 accepted actions each move at least one pareto objective
-  (a genuinely new canonical becoming visible moves coverage, adoption, and
-  density together), so pareto and legacy agree on every one of them, by
-  coincidence of this fixture's specific proposals rather than by
-  construction. The one difference is the disclosed headline_mention rename
-  below, applied to the 3 affected entries.
+* CGI: 0 -> 17 accepted actions (1 quality + 16 placement), score 42.33 ->
+  43.44. Root cause fixed: ``_source_content_plan``'s engine-authored
+  targeting clause echoes the JD title ("... Java + Angular ...") into the
+  candidate's summary -- context the engine adds, never a candidate claim --
+  and the anti-stuffing measurement was counting its terms toward the
+  candidate's own repetition budget. That pushed "java" over its ceiling with
+  zero placements applied, and then blocked every placement proposal because
+  of a repetition the candidate never created. This held CGI at zero accepted
+  actions across three consecutive engine steps. Fixed by excluding that
+  clause from the anti-stuffing *measurement* only (``optimizer._without_targeting``);
+  it is unchanged in the delivered and scored summary, where it is a
+  deliberate target-title signal. See
+  ``test_cgi_targeting_clause_no_longer_self_inflicts_a_stuffing_block``.
+* CrowdPlat: 1 -> 8 accepted actions (2 quality + 6 placement), score 15.3 ->
+  16.83 -- recovering Step 2's original count of 8. Root cause fixed:
+  PRAMANA's own ``_placement_bonus`` rewards a term reinforced in both skills
+  and a bullet, but that bonus never reaches ``keyword_score`` and therefore
+  never reaches ``pramana_coverage`` -- pareto's original three objectives
+  structurally could not see it, so they rejected every action legacy
+  accepted on that basis alone as a flat, zero-objective-movement candidate.
+  Fixed by giving pareto a fourth objective, ``ScoreVector.placement_reinforcement``
+  (reused directly from ``PramanaScore.placement_bonus``, not recomputed).
+  Considered and rejected instead: fixing the "double-award" inside
+  ``_placement_bonus`` itself -- that only changes what the *legacy* scalar
+  policy accepts, since ``_placement_bonus`` is excluded from
+  ``pramana_coverage`` by construction; it cannot, by itself, change anything
+  pareto (the default policy) accepts. See
+  ``test_crowdplat_placement_reinforcement_recovers_step2_accepted_action_count``.
+* LatentView: 9 -> 17 accepted actions, score unchanged at 50.67. Two
+  independent, narrower defects fixed, both discovered while making
+  SURFACE_VARIANT's own acceptance criterion pass for real (see below):
+  ``validation/fidelity.py``'s unsupported-named-entity check is now
+  vocabulary-alias-aware (``_vocabulary_alias_canonicals``), and
+  ``rachana/preservation.py``'s term-preservation guard now floors a
+  vocabulary-backed requirement on its alias-merged canonical presence
+  (``_canonical_occurrence_counts``) rather than one dominant literal
+  spelling. A third, independent bug was found in the process:
+  ``pramana/scoring.py::_placement_target_text`` did not recognize the
+  granular ``skills:<group>:<item>`` target a skills-tier SURFACE_VARIANT
+  action carries, so its provenance check silently failed and zeroed that
+  requirement's credit regardless of the substitution's own correctness.
+  4 SURFACE_VARIANT actions are now genuinely accepted here (see the
+  ``surface_variant:`` entries below) -- the first fixture on which this
+  operation is accepted anywhere. The delivered PRAMANA score does not move,
+  by design: a literal-surface substitution is defined to add no new claim
+  and no new coverage, and the additional 4 ``weave_bullet`` actions
+  unlocked alongside it are also scalar-neutral (each shows a 0.0 legacy
+  score delta) -- they were rejected before this round purely because
+  nothing in the pre-follow-up 3-objective vector could see their real
+  ``jd_surface_adoption`` gain.
 
-All three: the operation this step adds, ``SURFACE_VARIANT`` (a literal
+All three: the operation this step added, ``SURFACE_VARIANT`` (a literal
 search-and-replace of the candidate's own vocabulary-registered spelling for
 the employer's exact one, `integration_planner.py`/`rachana/operations.py`),
-proposes real candidates on CGI and LatentView but is accepted on none of
-the three real fixtures -- see test_surface_variant_integration.py's
-xfail(strict=True) for the disclosed reason (a pre-existing, unrelated named-
-entity fidelity check does not yet recognize vocabulary-alias equivalence).
+is now genuinely accepted on a real fixture (LatentView, 4 actions) with zero
+fact loss -- see ``test_surface_variant_integration.py``, whose
+``xfail(strict=True)`` for the two fidelity/preservation defects above is
+removed.
 
-Also disclosed here, not a behavior change: the pre-existing ``surface_variant``
-label on headline actions was a mislabeled append-to-headline mechanism (see
-``integration_planner.py``'s history) -- renamed to ``headline_mention`` in
-this same change so ``SURFACE_VARIANT`` unambiguously means the new literal
-substitution operation everywhere it appears in diagnostics. Every accepted
-action below with that label reflects the rename only; the mechanism, its
-inputs, and its effect on the delivered text are byte-for-byte unchanged
-(proven in ``test_optimizer_policy_legacy_reproduction.py``).
+Also unchanged from the first Step 3 baseline, restated for continuity: the
+pre-existing ``surface_variant`` label on headline actions was a mislabeled
+append-to-headline mechanism, renamed to ``headline_mention``. Every accepted
+action below with that label reflects the rename only.
 
-Each golden was captured from this branch via a disposable measurement script
-(not copied from any brief), then cross-checked against
+Each golden was captured from this branch via a disposable measurement
+script (not copied from any brief), then cross-checked against
 ``python -m ats_engine.bench --json``.
 """
 
@@ -81,19 +86,46 @@ from ats_engine.models import Mode
 
 FIXTURES = Path(__file__).parent / "fixtures" / "real_extraction"
 
-# Captured from this branch after Step 3 (optimizer_policy defaults to "pareto").
+# Captured from this branch after the Step 3 follow-up (CGI stuffing fix,
+# CrowdPlat placement_reinforcement objective, fidelity/preservation/provenance
+# alias-awareness fixes).
 GOLDENS = {
     "cgi_fullstack_java_angular": {
-        "actions": [],
-        "score": 42.33,
-        "sha256": "a6d990fb152082c5c2356921aadd9c152b8a4e1286b56ede0d721db33e578d95",
+        "actions": [
+            "quality:headline",
+            "mention_summary:summary:Angular",
+            "mention_summary:summary:AWS",
+            "mention_summary:summary:CI/CD",
+            "mention_summary:summary:Docker",
+            "append_skill:skills:Angular",
+            "append_skill:skills:AWS",
+            "append_skill:skills:CI/CD",
+            "append_skill:skills:Docker",
+            "append_skill:skills:front-end",
+            "append_skill:skills:Hibernate",
+            "headline_mention:headline:Angular",
+            "headline_mention:headline:AWS",
+            "headline_mention:headline:CI/CD",
+            "weave_bullet:experience:5:bullet:3:CI/CD",
+            "weave_bullet:experience:1:bullet:0:front-end",
+            "weave_bullet:experience:5:bullet:1:Java",
+        ],
+        "score": 43.44,
+        "sha256": "516de792a643e5c43f5e9e3e5d7cc23a6ea0cc30ae565eef537557764e217cc0",
     },
     "crowdplat_web_scraper": {
         "actions": [
             "quality:headline",
+            "quality:summary",
+            "mention_summary:summary:APIs",
+            "mention_summary:summary:Python",
+            "append_skill:skills:Python",
+            "append_skill:skills:communication",
+            "headline_mention:headline:APIs",
+            "headline_mention:headline:Python",
         ],
-        "score": 15.3,
-        "sha256": "6d19c4b46fa7d562c097a7ed5566c505a940412aab7f1e4e7171bb3b8725c31b",
+        "score": 16.83,
+        "sha256": "401a0be48b943f1f09213234a94c34100a9db1bf686a64dc5d36f5b687c13c33",
     },
     "latentview_bi_ai": {
         "actions": [
@@ -106,15 +138,23 @@ GOLDENS = {
             "weave_bullet:experience:0:bullet:2:GenAI",
             "weave_bullet:experience:2:bullet:0:SQL",
             "weave_bullet:experience:0:bullet:2:AI assistants",
+            "weave_bullet:experience:1:bullet:1:automated report generation",
+            "weave_bullet:experience:2:bullet:2:business intelligence",
+            "weave_bullet:experience:0:bullet:3:dashboards",
+            "weave_bullet:experience:2:bullet:0:communication",
+            "surface_variant:experience:0:bullet:2:GenAI",
+            "surface_variant:skills:6:1:LLMs",
+            "surface_variant:experience:0:bullet:2:AI assistants",
+            "surface_variant:experience:1:bullet:1:automated report generation",
         ],
         "score": 50.67,
-        "sha256": "6701e19a687f522c9231f9f353d4999ff642ed31d5563ffe8c0b00b232056051",
+        "sha256": "928f9005effaf547b7878802469afbdda0c919a48ebbc10922f45c8ed4e5a7de",
     },
 }
 
 
 @pytest.mark.parametrize("case", sorted(GOLDENS))
-def test_fixture_tailoring_matches_step3_rebaseline(case: str) -> None:
+def test_fixture_tailoring_matches_step3_followup_baseline(case: str) -> None:
     result = run_pipeline(
         resume_text=(FIXTURES / "candidate_resume.pymupdf.txt").read_text(encoding="utf-8"),
         job_description=(FIXTURES / case / "job_description.txt").read_text(encoding="utf-8"),

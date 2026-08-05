@@ -129,7 +129,10 @@ def test_resume_completeness_holds_after_actions() -> None:
     # reversible and genuinely rewritten by _ReviewableBulletProvider. This
     # test's own claim -- rejecting a rewritten bullet restores the candidate
     # original losslessly -- is about the reject/restore mechanism, not about
-    # which policy chose to weave that bullet in the first place.
+    # which policy chose to weave that bullet in the first place. Re-verified
+    # after the Step 3 follow-up's fixes: removing this pin still fails here
+    # too (the picked "reversible" bullet is byte-identical original/tailored,
+    # measured directly), so the pin remains required.
     provider = _ReviewableBulletProvider()
     kit = generate_application_kit(
         resume_text=SYNTHETIC_RESUME,

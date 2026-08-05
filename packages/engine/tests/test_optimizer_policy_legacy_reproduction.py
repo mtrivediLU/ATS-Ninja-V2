@@ -1,20 +1,34 @@
-"""``optimizer_policy="legacy"`` must reproduce main's exact pre-Step-3 behavior.
+"""``optimizer_policy="legacy"`` keeps its own decision rule unchanged.
 
 Planning now also emits surface_variant proposals regardless of policy (see
 generation/integration_planner.py), so this is not a no-op claim: the legacy
 loop genuinely considers them too, just under the original strict-PRAMANA-
-score-improvement rule. Proven here against the delivered-text sha256 -- a
-byte-for-byte proof, not just a same-actions claim, since the delivered text
-is a deterministic function of exactly which actions were applied and how.
+score-improvement rule (plus its own plateau-break, unique to legacy -- see
+``optimizer.py``'s main loop). Proven here against the delivered-text
+sha256 -- a byte-for-byte proof, not just a same-actions claim, since the
+delivered text is a deterministic function of exactly which actions were
+applied and how.
 
-Measured directly on this branch with a disposable script before writing
-this test (not copied from the brief): identical score and delivered sha256
-to the true pre-Step-2/Step-3 baseline on all three fixtures. The sole
-disclosed difference is the accepted-action label itself for the headline
-operation, renamed ``surface_variant`` -> ``headline_mention`` in this same
-change (see test_proposal_diagnostics_invariance.py's module docstring for
-why): a label rename, not a behavior change, and independently proven so by
-the unchanged score and sha256 alongside it.
+These goldens changed once already, in the Step 3 follow-up round, and the
+reason is worth recording precisely because it is not a policy change: the
+follow-up fixed several validation-gate defects legacy and pareto both
+depend on --the CGI stuffing-measurement counting the engine's own targeting
+clause (``optimizer._without_targeting``) and a delivered-layout
+experience-index bug in the shared provenance scorer
+(``pramana/scoring.py::_experience_bullets``) chief among them. Those are
+gate corrections, not acceptance-rule changes, so legacy's own goldens moved
+too, alongside pareto's -- the claim this test makes is narrower than "legacy
+never changes": it is "legacy's own strict-improvement rule and plateau-break
+are unaffected by anything *this* branch does to the pareto policy itself."
+Measured directly for this round: CGI's legacy goldens now differ (the
+stuffing block no longer masks its plateau-break stopping at zero placement
+actions, and the surviving quality-only headline rewrite changes the
+delivered sha256); CrowdPlat's now match its own pareto golden exactly
+(``test_proposal_diagnostics_invariance.py``) -- Step 3's placement_reinforcement
+objective closed the gap between the two policies for this fixture
+specifically; LatentView's are completely unchanged from the original
+Step 2/pre-Step-3 baseline, confirming legacy's plateau-break still stops it
+at the same point regardless of anything pareto now accepts beyond it.
 """
 
 from __future__ import annotations
@@ -31,27 +45,42 @@ from ats_engine.models import Mode
 FIXTURES = Path(__file__).parent / "fixtures" / "real_extraction"
 
 # Measured on this branch with optimizer_policy="legacy" via a disposable
-# script, then cross-checked against the true pre-Step-2/Step-3 baseline
-# (main before this workstream) run the same way -- identical on both.
+# script, after the Step 3 follow-up's shared validation-gate fixes.
 LEGACY_GOLDENS = {
     "cgi_fullstack_java_angular": {
-        "accepted_actions": [],
+        # The stuffing-measurement fix (optimizer._without_targeting) removed
+        # the false STUFF_TERM_OCCURRENCES block, but legacy's own, unrelated
+        # plateau-break (score_path[-1] - score_path[-2] < 0.5) now stops the
+        # batch loop at zero accepted placements on its own -- a real,
+        # unmasked outcome of legacy's decision rule, not a re-introduction of
+        # the bug just fixed. Only the quality-only headline rewrite survives,
+        # changing the delivered sha256 from the pre-fix (source-rolled-back)
+        # value even though the score rounds to the same 42.33.
+        "accepted_actions": ["quality:headline"],
         "score": 42.33,
-        "sha256": "a6d990fb152082c5c2356921aadd9c152b8a4e1286b56ede0d721db33e578d95",
+        "sha256": "e42c8389cedfba2f63541e199602cdec26be03e90e7b11a09ccc572b284b839a",
     },
     "crowdplat_web_scraper": {
+        # Now identical to this fixture's pareto golden
+        # (test_proposal_diagnostics_invariance.py): Step 3's
+        # placement_reinforcement objective closed the gap between the two
+        # policies here, so optimizer_policy no longer changes this fixture's
+        # outcome at all. "communication" survives via append_skill only, not
+        # mention_summary too (a stuffing bisection detail, not this test's
+        # concern); quality:summary is now accepted where it previously was
+        # not, restoring a genuine Step 2 quality proposal.
         "accepted_actions": [
             "quality:headline",
+            "quality:summary",
             "mention_summary:summary:APIs",
             "mention_summary:summary:Python",
-            "mention_summary:summary:communication",
             "append_skill:skills:Python",
             "append_skill:skills:communication",
             "headline_mention:headline:APIs",
             "headline_mention:headline:Python",
         ],
         "score": 16.83,
-        "sha256": "a18046eea6c3a109172a4ac1cde2bbe7f45fca83aa060ac902394b2478f8ef52",
+        "sha256": "401a0be48b943f1f09213234a94c34100a9db1bf686a64dc5d36f5b687c13c33",
     },
     "latentview_bi_ai": {
         "accepted_actions": [

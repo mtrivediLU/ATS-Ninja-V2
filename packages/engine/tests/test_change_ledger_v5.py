@@ -555,7 +555,10 @@ def test_restore_reproduces_the_exact_ats_v2_score_and_surfaced_keywords() -> No
     # is orthogonal to what this test asserts (a reversible action's restore
     # round-trip is exact) and is flagged as a follow-up rather than fixed
     # here, since it is change-ledger reconstruction, not optimizer
-    # acceptance policy.
+    # acceptance policy. Re-verified after the Step 3 follow-up's fixes
+    # (which change how many actions several real fixtures accept): removing
+    # this pin still fails here too (55.49 != 51.01, measured directly), so
+    # the pin remains required.
     kit = generate_application_kit(
         resume_text=SYNTHETIC_RESUME,
         job_description=SYNTHETIC_JD,

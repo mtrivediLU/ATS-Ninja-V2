@@ -1280,7 +1280,11 @@ Languages: SQL
         # placements are already fully credited elsewhere in the rendered
         # text, so none of PRAMANA coverage/JD-surface adoption/density move
         # for them -- correctly rejected by pareto's own rule, not a bisection
-        # failure, and orthogonal to what this test is proving.
+        # failure, and orthogonal to what this test is proving. Re-verified
+        # after adding a fourth pareto objective, placement_reinforcement
+        # (Step 3 follow-up): these placements do not create a dual
+        # skills-and-bullet reinforcement either, so the pin is still
+        # required -- confirmed by removing it and observing this test fail.
         _delivered, direct_trace = optimize(
             profile,
             jd_profile,
