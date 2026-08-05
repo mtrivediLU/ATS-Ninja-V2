@@ -143,6 +143,25 @@ class _ProposalRecorder:
     def is_recorded(self, action: PlacementAction) -> bool:
         return self.records[self.ids_by_label[_action_label(action)]].status is not ProposalStatus.NOT_EVALUATED
 
+    def finalize_unevaluated(self) -> None:
+        """Give every proposal no batch ever reached a real terminal status.
+
+        A run can return before the evaluation loop starts (source-projection
+        failure, source score regression) or stop the loop early (iteration
+        cap, score plateau) while planner actions remain unscheduled. Both are
+        legitimate outcomes, not evaluator bugs, but ``NOT_EVALUATED`` is not
+        a terminal status -- it exists only to detect a proposal the recorder
+        never reached. Finalize is the one place that closes it out.
+        """
+        for record_id, record in self.records.items():
+            if record.status is ProposalStatus.NOT_EVALUATED:
+                self.records[record_id] = replace(
+                    record,
+                    status=ProposalStatus.REJECTED,
+                    gate_code=GateCode.RUN_CONCLUDED_BEFORE_EVALUATION,
+                    gate_detail="optimize() returned before this proposal was scheduled into a batch",
+                )
+
     def _set(
         self,
         action: PlacementAction,
@@ -429,7 +448,8 @@ def optimize(
     # the candidate's own source did.  This is checked once more at the end
     # because the summary and bullet rewrites above take a different path into
     # the plan than the batched placements do.
-    final_regressions = guard.regressions(generate_resume_text(current_plan))
+    current_plan_text = generate_resume_text(current_plan)
+    final_regressions = guard.regressions(current_plan_text)
     if final_regressions:
         trace.rejected_actions.append(
             _rejection(
@@ -483,7 +503,14 @@ def optimize(
     else:
         trace.delivery_state = DocumentState.GENERATED_WITH_FALLBACK
         trace.fallback_reason = "No safe evidence-backed improvement was accepted; delivered the source projection."
-    _finalize_diagnostics(trace, recorder, source_plan, current_plan, requirements)
+    _finalize_diagnostics(
+        trace,
+        recorder,
+        source_plan,
+        current_plan,
+        requirements,
+        precomputed_delivered_text=current_plan_text,
+    )
     return current_plan, trace
 
 
@@ -1344,16 +1371,30 @@ def _finalize_diagnostics(
     source_plan: ResumePlan,
     delivered_plan: ResumePlan,
     requirements: list[RequirementTerm],
+    *,
+    precomputed_delivered_text: str | None = None,
 ) -> None:
-    """Persist one and only one terminal record for every planner action."""
+    """Persist one and only one terminal record for every planner action.
+
+    ``precomputed_delivered_text`` lets a caller that already rendered
+    ``delivered_plan`` for an earlier check (for example the final
+    preservation-guard pass) hand that text back in instead of paying for a
+    second identical render.
+    """
+    recorder.finalize_unevaluated()
     proposals = tuple(recorder.records.values())
     if len(proposals) != len(recorder.ids_by_label) or len({record.id for record in proposals}) != len(proposals):
         raise AssertionError("every planner-emitted action must have exactly one proposal record")
-    if any(not isinstance(record.status, ProposalStatus) for record in proposals):
-        raise AssertionError("every proposal must have a terminal status")
+    if any(record.status is ProposalStatus.NOT_EVALUATED for record in proposals):
+        raise AssertionError("every proposal must reach a terminal status before finalize")
 
     source_text = generate_resume_text(source_plan)
-    delivered_text = generate_resume_text(delivered_plan)
+    if delivered_plan is source_plan:
+        delivered_text = source_text
+    elif precomputed_delivered_text is not None:
+        delivered_text = precomputed_delivered_text
+    else:
+        delivered_text = generate_resume_text(delivered_plan)
     statuses = {status.value: 0 for status in ProposalStatus}
     gates = {code.value: 0 for code in GateCode}
     operations: dict[str, int] = {}

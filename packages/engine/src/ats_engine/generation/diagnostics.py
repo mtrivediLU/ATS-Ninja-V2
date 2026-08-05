@@ -41,6 +41,7 @@ class GateCode(StrEnum):
     SOURCE_PROJECTION_FAILURE = "source_projection_failure"
     QUALITY_SCORE_REGRESSION = "quality_score_regression"
     TRUTH_GATE_REJECTION = "truth_gate_rejection"
+    RUN_CONCLUDED_BEFORE_EVALUATION = "run_concluded_before_evaluation"
 
 
 @dataclass(frozen=True, slots=True)
