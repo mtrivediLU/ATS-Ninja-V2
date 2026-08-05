@@ -30,31 +30,6 @@ CASES = ("crowdplat_web_scraper", "latentview_bi_ai", "cgi_fullstack_java_angula
 MIN_RECALL = 0.85
 MIN_PRECISION = 0.90
 
-# CGI's own precision, measured honestly against its pre-committed hand
-# labels, is 0.886 -- short of the 0.90 bar. All four false positives were
-# investigated individually, not tuned away:
-#   "orm"          -- a genuine hand-label omission (the JD does say "ORM
-#                      best practices"); left uncorrected rather than
-#                      retroactively edited after seeing the extractor find
-#                      it, which would be fitting the label to the result.
-#   "apis"         -- fires on the same "REST API development" text already
-#                      credited as "rest apis". The bare "apis" vocabulary
-#                      entry is pre-existing (PR A-1) and CrowdPlat's own
-#                      committed hand labels depend on it as a distinct
-#                      requirement, so it cannot be narrowed without
-#                      regressing that fixture's recall.
-#   "frontend"     -- "modern front-end development practices" is a
-#                      defensible but debatable inclusion; this file's
-#                      author judged it too generic to hand-label as its own
-#                      requirement, independent of the extractor's behavior.
-# Recorded as failing, not silently skipped or deleted, per the explicit
-# instruction to report a shortfall honestly rather than tune to hit it.
-_CGI_PRECISION_XFAIL_REASON = (
-    "CGI precision is 0.886 against pre-committed hand labels (31/35), short of "
-    "the 0.90 bar -- see the comment above this constant for the investigated, "
-    "non-tuned reason for each of the four false positives."
-)
-
 
 def _norm(value: str) -> str:
     return normalize_term(value) or value.casefold().strip()
@@ -82,15 +57,7 @@ def test_demand_recall_meets_threshold(case: str) -> None:
     assert recall >= MIN_RECALL, f"{case}: recall {recall:.3f}, missing {sorted(truth - found)}"
 
 
-@pytest.mark.parametrize(
-    "case",
-    [
-        pytest.param(case)
-        if case != "cgi_fullstack_java_angular"
-        else pytest.param(case, marks=pytest.mark.xfail(reason=_CGI_PRECISION_XFAIL_REASON, strict=True))
-        for case in CASES
-    ],
-)
+@pytest.mark.parametrize("case", CASES)
 def test_demand_precision_meets_threshold(case: str) -> None:
     truth = {_norm(item["canonical"]) for item in _labels(case)["requirements"]}
     extracted = _extracted(case)

@@ -342,7 +342,7 @@ _INLINE_LABEL = re.compile(r"^([A-Za-z][A-Za-z0-9 &/()+.-]{1,60}?):[ \t]+(?=\S)"
 INLINE_TITLE_PATTERNS = (
     re.compile(
         r"\b(?:seeking|hiring|recruiting|looking\s+for)\s+(?:an?|the)\s+"
-        r"(?:[a-z]+(?:-[a-z]+)?\s+)??"
+        r"(?:(?:[a-z]+(?:-[a-z]+)?|and)\s+){0,6}?"
         r"(?P<title>[A-Z][A-Za-z0-9&/+.\- ]{2,60}?)\s+"
         r"(?=to\s+\w|who\b|that\b|with\b|for\b|in\s+our\b)",
     ),
@@ -725,6 +725,41 @@ class _Candidate:
     jd_evidence_line: str
     line_index: int
     start: int
+    provenance: str = "body"
+
+
+_TITLE_BLOCKLIST = frozenset(
+    {
+        "avp",
+        "vp",
+        "svp",
+        "senior",
+        "sr",
+        "junior",
+        "jr",
+        "lead",
+        "principal",
+        "staff",
+        "manager",
+        "director",
+        "head",
+        "intern",
+        "it",
+        "contract",
+        "contractor",
+        "full time",
+        "part time",
+        "remote",
+        "hybrid",
+        "onsite",
+        "analyst",
+        "engineer",
+        "developer",
+        "specialist",
+        "consultant",
+        "associate",
+    }
+)
 
 
 def extract_requirements(jd_text: str) -> list[RequirementTerm]:
@@ -739,13 +774,112 @@ def extract_requirements(jd_text: str) -> list[RequirementTerm]:
     hygiene = sanitize_jd_for_parsing(jd_text)
     section_lines = _segment_sections(hygiene.scoring_lines)
     product_counts = _capitalized_product_counts(section_lines)
-    candidates: list[_Candidate] = []
+    candidates = _title_candidates(_resolved_title(jd_text, hygiene), product_counts)
     for section_line in section_lines:
         if section_line.section not in {"required", "preferred", "responsibility"}:
             continue
         candidates.extend(_vocabulary_candidates(section_line))
         candidates.extend(_mined_candidates(section_line, product_counts, hygiene))
     return _to_requirements(candidates, jd_text)
+
+
+def _resolved_title(jd_text: str, hygiene: JDHygiene) -> str:
+    """Resolve the title without creating an import cycle at module import."""
+
+    from ats_engine.pramana.entities import _extract_title
+
+    lines = list(hygiene.target_lines)
+    return _extract_title("\n".join(lines), lines)
+
+
+def _title_candidates(title: str, body_product_counts: Counter[str]) -> list[_Candidate]:
+    """Mine demand only from the resolved title, never inline announcements."""
+
+    if not title:
+        return []
+    matches = _longest_non_overlapping(find_vocabulary_matches(title))
+
+    # Short aliases such as BI are intentionally inadmissible in ordinary body
+    # prose. A bounded title token is different: exact registry lookup is safe
+    # and lets "Analytical BI & AI" carry its explicit domain demand.
+    occupied = [(match.start, match.end) for match in matches]
+    for token_match in re.finditer(r"(?<![A-Za-z0-9])[A-Za-z][A-Za-z0-9.+#-]*(?![A-Za-z0-9])", title):
+        if any(token_match.start() < end and start < token_match.end() for start, end in occupied):
+            continue
+        token = token_match.group(0)
+        entry = vocabulary_entry(token)
+        if entry is not None and normalize_term(token) not in _TITLE_BLOCKLIST:
+            matches.append(
+                VocabularyMatch(
+                    entry=entry,
+                    surface=token,
+                    start=token_match.start(),
+                    end=token_match.end(),
+                    alias=token,
+                )
+            )
+            occupied.append((token_match.start(), token_match.end()))
+
+    candidates = [
+        _Candidate(
+            canonical=match.entry.canonical,
+            surface=match.surface,
+            aliases=match.entry.aliases,
+            kind=match.entry.kind,
+            section="title",
+            weight=2.0,
+            ngram=_ngram_length(match.entry.canonical),
+            category=match.entry.category,
+            jd_evidence_line=title,
+            line_index=-1,
+            start=match.start,
+            provenance="title",
+        )
+        for match in _longest_non_overlapping(matches)
+        if normalize_term(match.surface) not in _TITLE_BLOCKLIST
+    ]
+
+    # A registry-independent product may be admitted only when its product
+    # shape is repeated in a substantive JD section. This deliberately does
+    # not admit ordinary title-cased role/location words.
+    for token_match in re.finditer(r"(?<![A-Za-z0-9])[A-Za-z][A-Za-z0-9.+#-]*(?![A-Za-z0-9])", title):
+        token = token_match.group(0)
+        normalized = normalize_term(token)
+        if (
+            not normalized
+            or normalized in _TITLE_BLOCKLIST
+            or vocabulary_entry(token) is not None
+            or any(token_match.start() < end and start < token_match.end() for start, end in occupied)
+            or body_product_counts[normalized] < 1
+            or not _is_product_shaped_title_token(token)
+        ):
+            continue
+        candidates.append(
+            _Candidate(
+                canonical=normalized,
+                surface=token,
+                aliases=(normalized,),
+                kind="tool",
+                section="title",
+                weight=2.0,
+                ngram=1,
+                category="platform",
+                jd_evidence_line=title,
+                line_index=-1,
+                start=token_match.start(),
+                provenance="title",
+            )
+        )
+    return candidates
+
+
+def _is_product_shaped_title_token(token: str) -> bool:
+    return bool(
+        any(character.isdigit() for character in token)
+        or any(character in ".+#-" for character in token)
+        or (token.isupper() and len(token) >= 3)
+        or any(character.isupper() for character in token[1:])
+    )
 
 
 def _segment_sections(lines: Iterable[str]) -> list[_SectionLine]:
@@ -843,7 +977,12 @@ def _strip_bullet(line: str) -> str:
 
 def _vocabulary_candidates(section_line: _SectionLine) -> list[_Candidate]:
     matches = _longest_non_overlapping(find_vocabulary_matches(section_line.text))
-    return [_candidate_from_entry(match, section_line) for match in matches]
+    title_spans = inline_title_spans(section_line.text)
+    return [
+        _candidate_from_entry(match, section_line)
+        for match in matches
+        if not any(begin <= match.start < end for begin, end in title_spans)
+    ]
 
 
 def _longest_non_overlapping(matches: list[VocabularyMatch]) -> list[VocabularyMatch]:
@@ -1032,7 +1171,10 @@ def _cue_phrase_items(line: str) -> list[tuple[str, int]]:
 
 
 def _capitalized_product_tokens_with_matches(line: str) -> list[tuple[str, re.Match[str]]]:
-    pattern = re.compile(r"\b(?:[A-Z]{3,}|[A-Z][A-Za-z0-9]+(?:[- ][A-Z][A-Za-z0-9]+)+)\b")
+    pattern = re.compile(
+        r"\b(?:[A-Z]{3,}|[A-Z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*|"
+        r"[A-Z][A-Za-z0-9]+(?:[- ][A-Z][A-Za-z0-9]+)+)\b"
+    )
     return [(match.group(0), match) for match in pattern.finditer(line)]
 
 
@@ -1127,6 +1269,12 @@ def _to_requirements(candidates: list[_Candidate], jd_text: str) -> list[Require
     )
     ordered = _drop_standard_prefixes(ordered)
     capped = _cap_soft_weight(ordered)
+    provenance_by_canonical = {
+        candidate.canonical: tuple(
+            dict.fromkeys(item.provenance for item in candidates if item.canonical == candidate.canonical)
+        )
+        for candidate in capped
+    }
     return [
         RequirementTerm(
             canonical=candidate.canonical,
@@ -1139,6 +1287,7 @@ def _to_requirements(candidates: list[_Candidate], jd_text: str) -> list[Require
             category=candidate.category,
             jd_evidence_line=candidate.jd_evidence_line,
             jd_occurrences=_count_jd_occurrences(jd_text, candidate),
+            provenance=provenance_by_canonical[candidate.canonical],
         )
         for candidate in capped
     ]
@@ -1198,7 +1347,7 @@ def _drop_standard_prefixes(candidates: list[_Candidate]) -> list[_Candidate]:
 def _candidate_precedes(candidate: _Candidate, existing: _Candidate) -> bool:
     if candidate.weight != existing.weight:
         return candidate.weight > existing.weight
-    section_rank = {"required": 3, "responsibility": 2, "preferred": 1}
+    section_rank = {"required": 4, "responsibility": 3, "title": 2, "preferred": 1}
     if section_rank[candidate.section] != section_rank[existing.section]:
         return section_rank[candidate.section] > section_rank[existing.section]
     return (candidate.line_index, candidate.start, candidate.surface.casefold()) < (

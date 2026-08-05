@@ -121,6 +121,10 @@ class RequirementTerm:
     # built outside real JD extraction (tests, the legacy-keyword conversion
     # in match_report.py) have no JD text to count against.
     jd_occurrences: int = 1
+    # Demand-source provenance is additive so downstream scoring can choose to
+    # weight an explicit title mention differently from body requirements.
+    # Older constructors and serialized artifacts remain valid via the default.
+    provenance: tuple[str, ...] = ("body",)
 
 
 @dataclass(frozen=True, slots=True)
