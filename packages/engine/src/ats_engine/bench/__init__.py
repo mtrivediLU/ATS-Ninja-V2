@@ -171,6 +171,10 @@ def result_to_dict(result: BenchmarkResult) -> dict[str, Any]:
             "before": diagnostics.jd_surface_adoption_before,
             "after": diagnostics.jd_surface_adoption_after,
         },
+        "placement_reinforcement": {
+            "before": diagnostics.placement_reinforcement_before,
+            "after": diagnostics.placement_reinforcement_after,
+        },
         "proposals": [
             {
                 "id": item.id,
@@ -182,6 +186,7 @@ def result_to_dict(result: BenchmarkResult) -> dict[str, Any]:
                 "coverage_delta": item.coverage_delta,
                 "adoption_delta": item.adoption_delta,
                 "density_delta": item.density_delta,
+                "placement_delta": item.placement_delta,
             }
             for item in diagnostics.proposals
         ],
@@ -229,6 +234,8 @@ def format_report(results: tuple[BenchmarkResult, ...]) -> str:
                 f"{data['pramana_coverage']['before']:.4f} -> {data['pramana_coverage']['after']:.4f}",
                 "  jd_surface_adoption: "
                 f"{data['jd_surface_adoption']['before']:.4f} -> {data['jd_surface_adoption']['after']:.4f}",
+                "  placement_reinforcement: "
+                f"{data['placement_reinforcement']['before']:.1f} -> {data['placement_reinforcement']['after']:.1f}",
                 f"  sha256 source_projection: {result.source_sha256}",
                 f"  sha256 delivered: {result.delivered_sha256}",
                 f"  counts by operation: {json.dumps(data['counts']['by_operation'], sort_keys=True)}",
@@ -245,7 +252,8 @@ def format_report(results: tuple[BenchmarkResult, ...]) -> str:
                 f"score={proposal['score_delta'] if proposal['score_delta'] is not None else '-'} | "
                 f"coverage={_format_delta(proposal['coverage_delta'])} | "
                 f"adoption={_format_delta(proposal['adoption_delta'])} | "
-                f"density={_format_delta(proposal['density_delta'])}"
+                f"density={_format_delta(proposal['density_delta'])} | "
+                f"placement={_format_delta(proposal['placement_delta'])}"
             )
         if result.external_scores is not None:
             external = result.external_scores

@@ -78,6 +78,11 @@ class ProposalRecord:
     coverage_delta: float | None = None
     adoption_delta: float | None = None
     density_delta: float | None = None
+    # Additive (Step 3 follow-up): placement_reinforcement's own delta, kept
+    # alongside the three above rather than folded in, for the same reason
+    # they are three separate fields rather than one -- a reviewer auditing
+    # why a proposal was accepted needs to see which objective actually moved.
+    placement_delta: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,6 +112,10 @@ class RunDiagnostics:
     pramana_coverage_after: float = 0.0
     jd_surface_adoption_before: float = 0.0
     jd_surface_adoption_after: float = 0.0
+    # Additive (Step 3 follow-up): run-level before/after for the fourth
+    # pareto objective, placement_reinforcement (see ats_engine.rachana.objectives).
+    placement_reinforcement_before: float = 0.0
+    placement_reinforcement_after: float = 0.0
 
     @classmethod
     def empty(cls) -> RunDiagnostics:

@@ -40,6 +40,20 @@ class ScoreVector:
         stated surface form (see ``surface_adoption_ratio`` below).
     ``density``: relevant JD-term canonicals visibly expressed per 100 words
         (see ``relevant_terms_per_100_words`` below).
+    ``placement_reinforcement``: how many already-credited requirements are
+        reinforced by appearing in *both* skills and an experience bullet --
+        a recruiter-skim readability signal, reused directly from PRAMANA's
+        own ``placement_bonus`` (``pramana/scoring.py::_placement_bonus``)
+        rather than recomputed here. PRAMANA excludes it from
+        ``keyword_score`` (and therefore from ``pramana_coverage`` above) by
+        design, since it is not demand coverage; a scalar acceptance rule
+        that only looks at PRAMANA's total score can still see it, but the
+        pareto policy's other three objectives structurally cannot. Without
+        this as its own objective, pareto has no way to accept a safe,
+        genuinely useful dual-placement action that legacy accepted on this
+        basis alone. Deliberately not normalized to 0..1, matching
+        ``placement_bonus``'s own native 0..4 scale (and ``word_count``'s
+        precedent for an unnormalized field on this vector).
     ``word_count``: the text's own word count, so acceptance can refuse a
         change that grows the document to buy either metric.
     """
@@ -47,6 +61,7 @@ class ScoreVector:
     pramana_coverage: float
     jd_surface_adoption: float
     density: float
+    placement_reinforcement: float
     word_count: int
 
 
@@ -113,6 +128,7 @@ def score_vector(text: str, requirements: list[RequirementTerm], pramana: Praman
         pramana_coverage=pramana.keyword_score / 100.0,
         jd_surface_adoption=surface_adoption_ratio(text, pramana.per_requirement),
         density=relevant_terms_per_100_words(text, requirements),
+        placement_reinforcement=pramana.placement_bonus,
         word_count=_word_count(text),
     )
 

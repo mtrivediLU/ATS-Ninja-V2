@@ -268,6 +268,7 @@ def _run_diagnostics_to_dict(diagnostics: RunDiagnostics) -> dict[str, Any]:
                 "coverage_delta": record.coverage_delta,
                 "adoption_delta": record.adoption_delta,
                 "density_delta": record.density_delta,
+                "placement_delta": record.placement_delta,
             }
             for record in diagnostics.proposals
         ],
@@ -287,6 +288,8 @@ def _run_diagnostics_to_dict(diagnostics: RunDiagnostics) -> dict[str, Any]:
         "pramana_coverage_after": diagnostics.pramana_coverage_after,
         "jd_surface_adoption_before": diagnostics.jd_surface_adoption_before,
         "jd_surface_adoption_after": diagnostics.jd_surface_adoption_after,
+        "placement_reinforcement_before": diagnostics.placement_reinforcement_before,
+        "placement_reinforcement_after": diagnostics.placement_reinforcement_after,
     }
 
 
@@ -849,6 +852,7 @@ def _run_diagnostics_from_dict(raw: object) -> RunDiagnostics:
                 coverage_delta=_optional_float(item.get("coverage_delta")),
                 adoption_delta=_optional_float(item.get("adoption_delta")),
                 density_delta=_optional_float(item.get("density_delta")),
+                placement_delta=_optional_float(item.get("placement_delta")),
             )
         )
     return RunDiagnostics(
@@ -869,6 +873,8 @@ def _run_diagnostics_from_dict(raw: object) -> RunDiagnostics:
         pramana_coverage_after=float(raw.get("pramana_coverage_after", 0.0)),
         jd_surface_adoption_before=float(raw.get("jd_surface_adoption_before", 0.0)),
         jd_surface_adoption_after=float(raw.get("jd_surface_adoption_after", 0.0)),
+        placement_reinforcement_before=float(raw.get("placement_reinforcement_before", 0.0)),
+        placement_reinforcement_after=float(raw.get("placement_reinforcement_after", 0.0)),
     )
 
 

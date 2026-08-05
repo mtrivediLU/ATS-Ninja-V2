@@ -211,12 +211,14 @@ class _ProposalRecorder:
         coverage_delta: float | None
         adoption_delta: float | None
         density_delta: float | None
+        placement_delta: float | None
         if objectives_before is not None and objectives_after is not None:
             coverage_delta = objectives_after.pramana_coverage - objectives_before.pramana_coverage
             adoption_delta = objectives_after.jd_surface_adoption - objectives_before.jd_surface_adoption
             density_delta = objectives_after.density - objectives_before.density
+            placement_delta = objectives_after.placement_reinforcement - objectives_before.placement_reinforcement
         else:
-            coverage_delta = adoption_delta = density_delta = None
+            coverage_delta = adoption_delta = density_delta = placement_delta = None
         self.records[record_id] = replace(
             record,
             status=status,
@@ -229,6 +231,7 @@ class _ProposalRecorder:
             coverage_delta=coverage_delta,
             adoption_delta=adoption_delta,
             density_delta=density_delta,
+            placement_delta=placement_delta,
         )
 
 
@@ -938,7 +941,7 @@ def validate_resume_plan_findings(
     stuffing = apply_calibration(
         validate_resume_stuffing_findings(
             actions=action_list,
-            summary=plan.summary,
+            summary=_without_targeting(plan.summary, plan.jd_profile),
             bullets=[bullet for experience in plan.experience for bullet in experience.bullets],
             skill_groups=plan.skill_groups,
             requirements=requirements,
@@ -1333,6 +1336,33 @@ def _with_targeting(summary: str, jd_profile: JDProfile) -> str:
     return " ".join(part for part in (summary.strip(), clause) if part)
 
 
+def _without_targeting(summary: str, jd_profile: JDProfile) -> str:
+    """The candidate-authored summary text, for anti-stuffing measurement only.
+
+    Inverse of ``_with_targeting``. That clause is JD title context the
+    engine appends -- "never candidate history" per its own docstring -- so
+    counting its terms toward the candidate's own keyword-stuffing budget is a
+    category error, not a real repetition. Left unfixed, a JD title that
+    repeats a term the candidate already uses near the stuffing ceiling (for
+    example a title containing "Java" when the candidate's resume already
+    states "Java" four times) pushes the *engine's own* text over the limit
+    and then blocks every placement proposal because of it -- a defect that
+    exists identically with zero proposals applied, since it is entirely a
+    property of the source projection. The clause stays in the delivered and
+    *scored* summary (that is its intended target-title signal); it is
+    excluded only from the text this anti-stuffing measurement counts.
+    """
+    title = jd_profile.title.strip()
+    if not title or title == "Target Role":
+        return summary
+    clean_title = title.replace("–", "-").replace("—", "-")
+    clause = f"Targeting {clean_title} opportunities."
+    stripped = summary.strip()
+    if stripped.casefold().endswith(clause.casefold()):
+        return stripped[: len(stripped) - len(clause)].strip()
+    return stripped
+
+
 def _v2_plan_decisions(
     prior: list[PlanDecision],
     plan: ResumePlan,
@@ -1632,6 +1662,12 @@ def _finalize_diagnostics(
         pramana_coverage_after=final_objectives.pramana_coverage if final_objectives is not None else 0.0,
         jd_surface_adoption_before=(initial_objectives.jd_surface_adoption if initial_objectives is not None else 0.0),
         jd_surface_adoption_after=final_objectives.jd_surface_adoption if final_objectives is not None else 0.0,
+        placement_reinforcement_before=(
+            initial_objectives.placement_reinforcement if initial_objectives is not None else 0.0
+        ),
+        placement_reinforcement_after=(
+            final_objectives.placement_reinforcement if final_objectives is not None else 0.0
+        ),
     )
 
 
@@ -1722,6 +1758,11 @@ def _score_plan(
 _COVERAGE_TOLERANCE = 0.01
 _ADOPTION_TOLERANCE = 0.01
 _DENSITY_TOLERANCE = 0.02
+# placement_reinforcement is PRAMANA's own placement_bonus, a 0..4 integer
+# count (see ScoreVector.placement_reinforcement). Its values are exact
+# floats with no accumulated rounding, so 0.5 is simply "at least one whole
+# reinforcement," not noise headroom.
+_PLACEMENT_TOLERANCE = 0.5
 
 
 def _pareto_verdict(before: ScoreVector, after: ScoreVector) -> bool:
@@ -1729,8 +1770,18 @@ def _pareto_verdict(before: ScoreVector, after: ScoreVector) -> bool:
 
     Order matches the brief: (1) hard gates are checked by the caller before
     this is ever consulted, and are not repeated here; (2) reject any
-    regression beyond tolerance on any of the three objectives; (3) accept
-    only if at least one objective improves beyond its own threshold.
+    regression beyond tolerance on any objective; (3) accept only if at least
+    one objective improves beyond its own threshold.
+
+    ``placement_reinforcement`` (see ``ScoreVector``) is a fourth objective
+    alongside the brief's original three. Without it, pareto has no way to
+    see the one thing PRAMANA's own ``_placement_bonus`` rewards -- a term
+    reinforced in both skills and a bullet -- so it rejected every action
+    legacy accepted on that basis alone, as a flat, zero-objective-movement
+    candidate (see the CrowdPlat measurement in the PR description). That is
+    a real, safe, useful signal a scalar acceptance rule can see and a
+    three-objective vector structurally cannot; giving pareto its own view of
+    it is the fix, not a reason to fall back to the scalar rule.
 
     Point 4 of the brief ("among non-dominated candidates, prefer...") is a
     tie-break for choosing among *several* alternative candidates for the
@@ -1750,12 +1801,14 @@ def _pareto_verdict(before: ScoreVector, after: ScoreVector) -> bool:
         after.pramana_coverage < before.pramana_coverage - _COVERAGE_TOLERANCE
         or after.jd_surface_adoption < before.jd_surface_adoption - _ADOPTION_TOLERANCE
         or after.density < before.density - _DENSITY_TOLERANCE
+        or after.placement_reinforcement < before.placement_reinforcement - _PLACEMENT_TOLERANCE
     ):
         return False
     return (
         after.pramana_coverage > before.pramana_coverage + _COVERAGE_TOLERANCE
         or after.jd_surface_adoption > before.jd_surface_adoption + _ADOPTION_TOLERANCE
         or after.density > before.density + _DENSITY_TOLERANCE
+        or after.placement_reinforcement > before.placement_reinforcement + _PLACEMENT_TOLERANCE
     )
 
 
