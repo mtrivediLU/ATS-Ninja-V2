@@ -171,3 +171,21 @@ def test_bullet_validation_is_wired_to_reject_escalation_and_first_person() -> N
         )
         is False
     )
+
+
+def test_bullet_rewrite_path_still_rejects_a_fabricated_technology() -> None:
+    from ats_engine.generation.planning import _bullet_is_valid
+
+    # The shared fidelity gate (validation/fidelity.py) is now alias-aware for
+    # a candidate's own spelling of a term the source already proves. That
+    # must not weaken this LLM-rewrite path: a technology with no source
+    # occurrence and no registered vocabulary alias to anything the candidate
+    # actually wrote is still a hard rejection.
+    assert (
+        _bullet_is_valid(
+            "Built pipelines using MongoDB for the data platform team",
+            "Built pipelines for the data platform team",
+            [],
+        )
+        is False
+    )
