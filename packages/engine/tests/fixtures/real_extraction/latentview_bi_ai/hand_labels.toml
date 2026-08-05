@@ -17,6 +17,14 @@
 # gaps.  They are listed under [not_requirements].  Note that `low-code` and
 # `no-code` ARE genuine requirements -- the defect is the label `AI Tooling
 # Platforms` and the mangled surface `modern low code`, not the concept.
+#
+# STEP 2 PRE-EXTRACTION ADDITIONS
+# -------------------------------
+# These labels were added by reading job_description.txt before title mining
+# or list parsing changed. `BI` and `AI` are exact title surfaces (their counts
+# are 3 and 9 across the posting); the parenthetical product names point back
+# to the literal `LLMs` parent. `AI assistants` is a substantive responsibility
+# in the introductory role description, not EEO/culture boilerplate.
 
 [meta]
 case = "latentview_bi_ai"
@@ -48,6 +56,7 @@ surface = "LLMs"
 kind = "tool"
 section = "required"
 jd_occurrences = 1
+provenance = ["body"]
 
 [[requirements]]
 canonical = "chatgpt"
@@ -55,6 +64,7 @@ surface = "ChatGPT"
 kind = "tool"
 section = "required"
 jd_occurrences = 1
+parent_canonical = "llms"
 
 [[requirements]]
 canonical = "claude"
@@ -62,6 +72,7 @@ surface = "Claude"
 kind = "tool"
 section = "required"
 jd_occurrences = 1
+parent_canonical = "llms"
 
 [[requirements]]
 canonical = "microsoft copilot"
@@ -69,6 +80,23 @@ surface = "Microsoft Copilot"
 kind = "tool"
 section = "required"
 jd_occurrences = 1
+parent_canonical = "llms"
+
+[[requirements]]
+canonical = "artificial intelligence"
+surface = "AI"
+kind = "domain"
+section = "title"
+jd_occurrences = 9
+provenance = ["title"]
+
+[[requirements]]
+canonical = "ai assistants"
+surface = "AI assistants"
+kind = "skill"
+section = "responsibility"
+jd_occurrences = 1
+provenance = ["body"]
 
 [[requirements]]
 canonical = "low-code"
@@ -98,6 +126,9 @@ surface = "business intelligence"
 kind = "domain"
 section = "responsibility"
 jd_occurrences = 2
+provenance = ["title", "body"]
+title_surface = "BI"
+title_jd_occurrences = 3
 
 [[requirements]]
 canonical = "generative ai"

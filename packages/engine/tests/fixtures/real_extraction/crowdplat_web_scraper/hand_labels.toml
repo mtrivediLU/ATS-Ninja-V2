@@ -23,7 +23,17 @@
 # Deliberately NOT labelled: "web scraping" -- the phrase never appears in the
 # posting (it says "Web Scraper" and "extracting data from public web
 # sources").  Requiring a term the JD does not contain would unfairly punish
-# the extractor.
+# the old body-only extractor. Step 2 changes that judgment for the exact
+# title surface `Web Scraper`: the title is now an explicit demand source, so
+# the canonical web-scraping competency is labelled below without pretending
+# the literal phrase `web scraping` occurs.
+#
+# STEP 2 PRE-EXTRACTION ADDITIONS
+# -------------------------------
+# These title and parent/child annotations were written from
+# job_description.txt before the Step 2 extractor changes. Parenthetical
+# children retain their exact source spelling and point back to Python; counts
+# remain case-insensitive word-boundary measurements.
 
 [meta]
 case = "crowdplat_web_scraper"
@@ -40,6 +50,7 @@ surface = "Python"
 kind = "tool"
 section = "required"
 jd_occurrences = 2
+provenance = ["body"]
 
 [[requirements]]
 canonical = "beautifulsoup"
@@ -47,6 +58,7 @@ surface = "BeautifulSoup"
 kind = "tool"
 section = "required"
 jd_occurrences = 2
+parent_canonical = "python"
 
 [[requirements]]
 canonical = "scrapy"
@@ -54,6 +66,7 @@ surface = "Scrapy"
 kind = "tool"
 section = "required"
 jd_occurrences = 2
+parent_canonical = "python"
 
 [[requirements]]
 canonical = "selenium"
@@ -61,6 +74,7 @@ surface = "Selenium"
 kind = "tool"
 section = "required"
 jd_occurrences = 2
+parent_canonical = "python"
 
 [[requirements]]
 canonical = "playwright"
@@ -68,6 +82,7 @@ surface = "Playwright"
 kind = "tool"
 section = "required"
 jd_occurrences = 2
+parent_canonical = "python"
 
 [[requirements]]
 canonical = "apis"
@@ -122,10 +137,19 @@ jd_occurrences = 2
 # ---------------------------------------------------------- methodology ----
 [[requirements]]
 canonical = "data extraction"
-surface = "data extraction"
+surface = "Data Extraction"
 kind = "methodology"
-section = "required"
+section = "title"
 jd_occurrences = 1
+provenance = ["title"]
+
+[[requirements]]
+canonical = "web scraping"
+surface = "Web Scraper"
+kind = "skill"
+section = "title"
+jd_occurrences = 1
+provenance = ["title"]
 
 [[requirements]]
 canonical = "pagination"

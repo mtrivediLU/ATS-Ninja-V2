@@ -57,6 +57,15 @@
 # mined as a requirement -- §4's documented defect), and no requirement here
 # is ever a preposition-prefixed fragment ("including EKS", "including
 # GitHub") -- those fragments must not appear in extraction output either.
+#
+# STEP 2 PRE-EXTRACTION ADDITIONS
+# -------------------------------
+# These additions were hand-labelled from job_description.txt before the
+# Step 2 title-mining and vocabulary changes. `Full Stack` is a requirement in
+# the resolved title (the later intro occurrence is an inline title
+# announcement); `responsive user interfaces` is the posting's exact surface
+# for the responsive-design competency. Counts use the same word-boundary
+# method documented above.
 
 [meta]
 case = "cgi_fullstack_java_angular"
@@ -75,6 +84,8 @@ surface = "Java"
 kind = "tool"
 section = "required"
 jd_occurrences = 5
+provenance = ["title", "body"]
+title_surface = "Java"
 
 [[requirements]]
 canonical = "j2ee"
@@ -110,6 +121,24 @@ surface = "Angular"
 kind = "tool"
 section = "required"
 jd_occurrences = 5
+provenance = ["title", "body"]
+title_surface = "Angular"
+
+[[requirements]]
+canonical = "full-stack"
+surface = "Full Stack"
+kind = "skill"
+section = "title"
+jd_occurrences = 2
+provenance = ["title"]
+
+[[requirements]]
+canonical = "responsive design"
+surface = "responsive user interfaces"
+kind = "skill"
+section = "responsibility"
+jd_occurrences = 1
+provenance = ["body"]
 
 [[requirements]]
 canonical = "aws"

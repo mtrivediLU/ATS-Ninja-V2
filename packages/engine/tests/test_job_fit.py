@@ -75,10 +75,14 @@ def test_provider_none_builds_complete_useful_job_fit() -> None:
     assert artifact is not None
     assert artifact.summary
     assert artifact.requirements
-    assert artifact.requirement_coverage_score == 100.0
-    assert artifact.fit_band is FitBand.STRONG
-    assert {item.classification for item in artifact.requirements} == {RequirementClassification.PROVEN}
+    assert artifact.requirement_coverage_score == 75.0
+    assert artifact.fit_band is FitBand.COMPETITIVE
+    assert {item.classification for item in artifact.requirements} == {
+        RequirementClassification.PROVEN,
+        RequirementClassification.GENUINE_GAP,
+    }
     assert {"python", "sql", "dashboards"} <= {item.lower() for item in artifact.strongest_matches}
+    assert [item.casefold() for item in artifact.must_have_gaps] == ["ai"]
     assert artifact.consistency.passed
     assert not artifact.withheld
     assert all(len(ref.excerpt) <= 160 for ref in artifact.evidence)
@@ -186,6 +190,7 @@ def test_mixed_provider_paragraph_preserves_supported_fact_and_removes_fabricati
         f"Requirement coverage: {deterministic.job_fit.requirement_coverage_score:.2f}%. "
         f"Fit band: {deterministic.job_fit.fit_band.value}. "
         "The candidate's Python and SQL work at Northstar Analytics is directly relevant. "
+        "AI is a genuine gap. "
         "The candidate also improved revenue by 47%."
     )
     kit = generate_application_kit(

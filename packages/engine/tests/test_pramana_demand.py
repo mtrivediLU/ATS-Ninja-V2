@@ -30,31 +30,6 @@ CASES = ("crowdplat_web_scraper", "latentview_bi_ai", "cgi_fullstack_java_angula
 MIN_RECALL = 0.85
 MIN_PRECISION = 0.90
 
-# CGI's own precision, measured honestly against its pre-committed hand
-# labels, is 0.886 -- short of the 0.90 bar. All four false positives were
-# investigated individually, not tuned away:
-#   "orm"          -- a genuine hand-label omission (the JD does say "ORM
-#                      best practices"); left uncorrected rather than
-#                      retroactively edited after seeing the extractor find
-#                      it, which would be fitting the label to the result.
-#   "apis"         -- fires on the same "REST API development" text already
-#                      credited as "rest apis". The bare "apis" vocabulary
-#                      entry is pre-existing (PR A-1) and CrowdPlat's own
-#                      committed hand labels depend on it as a distinct
-#                      requirement, so it cannot be narrowed without
-#                      regressing that fixture's recall.
-#   "frontend"     -- "modern front-end development practices" is a
-#                      defensible but debatable inclusion; this file's
-#                      author judged it too generic to hand-label as its own
-#                      requirement, independent of the extractor's behavior.
-# Recorded as failing, not silently skipped or deleted, per the explicit
-# instruction to report a shortfall honestly rather than tune to hit it.
-_CGI_PRECISION_XFAIL_REASON = (
-    "CGI precision is 0.886 against pre-committed hand labels (31/35), short of "
-    "the 0.90 bar -- see the comment above this constant for the investigated, "
-    "non-tuned reason for each of the four false positives."
-)
-
 
 def _norm(value: str) -> str:
     return normalize_term(value) or value.casefold().strip()
@@ -82,15 +57,7 @@ def test_demand_recall_meets_threshold(case: str) -> None:
     assert recall >= MIN_RECALL, f"{case}: recall {recall:.3f}, missing {sorted(truth - found)}"
 
 
-@pytest.mark.parametrize(
-    "case",
-    [
-        pytest.param(case)
-        if case != "cgi_fullstack_java_angular"
-        else pytest.param(case, marks=pytest.mark.xfail(reason=_CGI_PRECISION_XFAIL_REASON, strict=True))
-        for case in CASES
-    ],
-)
+@pytest.mark.parametrize("case", CASES)
 def test_demand_precision_meets_threshold(case: str) -> None:
     truth = {_norm(item["canonical"]) for item in _labels(case)["requirements"]}
     extracted = _extracted(case)
@@ -193,6 +160,33 @@ def test_extraction_never_seeds_from_a_candidate_profile(case: str) -> None:
         assert requirement.jd_evidence_line, "every requirement must cite the JD line it came from"
 
 
+@pytest.mark.parametrize("case", CASES)
+def test_title_provenance_matches_the_precommitted_gold(case: str) -> None:
+    extracted = _by_canonical(case)
+    for item in _labels(case)["requirements"]:
+        expected = item.get("provenance")
+        if expected is not None:
+            assert tuple(expected) == extracted[_norm(item["canonical"])].provenance
+
+
+@pytest.mark.parametrize("case", CASES)
+def test_parent_relations_match_the_precommitted_gold(case: str) -> None:
+    extracted = _by_canonical(case)
+    for item in _labels(case)["requirements"]:
+        expected = item.get("parent_canonical")
+        if expected is not None:
+            assert extracted[_norm(item["canonical"])].parent_canonical == _norm(expected)
+
+
+@pytest.mark.parametrize("case", CASES)
+def test_no_malformed_or_fragment_requirements(case: str) -> None:
+    forbidden_edges = ("including ", "such as ", "using ", "with ", "and ", "or ")
+    for requirement in _by_canonical(case).values():
+        surface = requirement.surface.casefold().strip()
+        assert not surface.startswith(forbidden_edges)
+        assert not surface.endswith((" required", " preferred", "(", "[", "{"))
+
+
 # --------------------------------------------------------- jd_occurrences ----
 # PRAMANA's target(r) = clamp(jd_occurrences, 1, 3) needs a real count of how
 # many times the JD states each requirement. hand_labels.toml's own
@@ -238,3 +232,5 @@ def test_jd_occurrences_defaults_to_one_for_a_synthetic_requirement() -> None:
         jd_evidence_line="",
     )
     assert requirement.jd_occurrences == 1
+    assert requirement.provenance == ("body",)
+    assert requirement.parent_canonical is None

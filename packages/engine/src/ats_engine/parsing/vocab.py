@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Final
 
+VOCAB_VERSION: Final[str] = "2026.08.05-step2"
+
 
 @dataclass(frozen=True, slots=True)
 class VocabularyEntry:
@@ -166,8 +168,10 @@ VOCABULARY: Final[tuple[VocabularyEntry, ...]] = (
     _entry("spark", aliases=("apache spark",), category="data_engineering"),
     _entry("airflow", aliases=("apache airflow",), category="data_engineering"),
     _entry("sql", aliases=("structured query language",), display="SQL", category="database"),
+    _entry("nosql", aliases=("no sql",), display="NoSQL", category="database"),
     _entry("postgresql", aliases=("postgres",), display="PostgreSQL", category="database"),
     _entry("mongodb", aliases=("mongo db", "mongo"), display="MongoDB", category="database"),
+    _entry("rabbitmq", aliases=("rabbit mq",), display="RabbitMQ", category="messaging"),
     _entry("oracle", aliases=("oracle database", "oracle db"), display="Oracle", category="database"),
     _entry("pl/sql", aliases=("pl-sql", "plsql", "pl sql"), display="PL/SQL", category="database"),
     _entry(
@@ -185,7 +189,6 @@ VOCABULARY: Final[tuple[VocabularyEntry, ...]] = (
     _entry("d3.js", aliases=("d3", "d3 js"), display="D3.js", category="framework"),
     # Geospatial and document-management terms from the COO case.
     _entry("esri arcgis", aliases=("esri", "arcgis", "esri arc gis"), display="ESRI ArcGIS", category="geospatial"),
-    _entry("arcgis", aliases=("arc gis",), display="ArcGIS", category="geospatial"),
     _entry("qgis", display="QGIS", category="geospatial"),
     _entry("geocoding", aliases=("geo coding",), category="geospatial", kind="skill"),
     _entry("m-files", aliases=("m files", "mfiles"), display="M-Files", category="operations_support"),
@@ -237,7 +240,6 @@ VOCABULARY: Final[tuple[VocabularyEntry, ...]] = (
     _entry("openai", aliases=("open ai",), display="OpenAI", category="platform"),
     _entry("gemini", aliases=("google gemini",), category="platform"),
     _entry("rag", aliases=("retrieval augmented generation",), display="RAG", category="framework"),
-    _entry("llm", aliases=("large language model", "large language models"), display="LLM", category="framework"),
     # Security, support, and quality.
     _entry("cybersecurity", aliases=("cyber security",), category="security_governance", kind="domain"),
     _entry("access controls", aliases=("access control",), category="security_governance", kind="methodology"),
@@ -338,8 +340,15 @@ VOCABULARY: Final[tuple[VocabularyEntry, ...]] = (
     _entry(".net framework", aliases=("dotnet framework",), display=".NET Framework", category="framework"),
     _entry("powershell", aliases=("power shell",), display="PowerShell", category="programming_language"),
     _entry("liquid", category="programming_language"),
-    _entry("react", category="framework"),
+    _entry(
+        "react",
+        aliases=("reactjs", "react.js", "react js"),
+        display="React",
+        category="framework",
+    ),
     _entry("react native", aliases=("react-native",), category="framework"),
+    _entry("nestjs", aliases=("nest.js", "nest js"), display="NestJS", category="framework"),
+    _entry("redux", display="Redux", category="framework"),
     _entry("node.js", aliases=("node js", "nodejs"), display="Node.js", category="framework"),
     _entry("express", aliases=("express.js", "express js"), display="Express", category="framework"),
     _entry("next.js", aliases=("next js", "nextjs"), display="Next.js", category="framework"),
@@ -357,6 +366,15 @@ VOCABULARY: Final[tuple[VocabularyEntry, ...]] = (
     _entry("frontend", aliases=("front-end", "front end"), category="web_development", kind="skill"),
     _entry("backend", aliases=("back-end", "back end"), category="web_development", kind="skill"),
     _entry("full-stack", aliases=("full stack", "fullstack"), category="web_development", kind="skill"),
+    _entry("graphql", display="GraphQL", category="integration"),
+    _entry(
+        "responsive design",
+        aliases=("responsive user interfaces", "responsive ui", "responsive web design"),
+        category="web_development",
+        kind="skill",
+    ),
+    _entry("component libraries", aliases=("component library",), category="web_development", kind="skill"),
+    _entry("design systems", aliases=("design system",), category="web_development", kind="skill"),
     _entry("plug-ins", aliases=("plug-in", "plugins", "plugin"), category="framework"),
     # Business analysis, documentation, and productivity.
     _entry("business requirements", category="business_analysis", kind="skill"),
@@ -387,6 +405,13 @@ VOCABULARY: Final[tuple[VocabularyEntry, ...]] = (
     # entries existed the entire GenAI half of a modern BI posting was invisible
     # to the demand model.
     _entry("generative ai", aliases=("genai", "gen ai"), display="Generative AI", category="platform", kind="domain"),
+    _entry(
+        "artificial intelligence",
+        aliases=("ai",),
+        display="Artificial Intelligence",
+        category="platform",
+        kind="domain",
+    ),
     _entry(
         "llms", aliases=("llm", "large language models", "large language model"), display="LLMs", category="platform"
     ),
@@ -444,7 +469,7 @@ VOCABULARY: Final[tuple[VocabularyEntry, ...]] = (
     # Web scraping / data extraction stack.
     _entry("beautifulsoup", aliases=("beautiful soup", "bs4"), display="BeautifulSoup", category="framework"),
     _entry("scrapy", display="Scrapy", category="framework"),
-    _entry("apis", aliases=("api", "rest api", "rest apis"), display="APIs", category="integration"),
+    _entry("apis", aliases=("api",), display="APIs", category="integration"),
     _entry("json", display="JSON", category="integration"),
     _entry("csv", display="CSV", category="integration"),
     _entry("linkedin", display="LinkedIn", category="platform"),
@@ -544,6 +569,51 @@ def find_vocabulary_matches(text: str) -> list[VocabularyMatch]:
                 )
             )
     return sorted(matches, key=lambda match: (match.start, -(match.end - match.start), match.entry.canonical))
+
+
+def vocabulary_collisions() -> tuple[str, ...]:
+    """Return exact or substring alias hazards in the registry.
+
+    A nested alias is safe only when the other entry has a longer full-form
+    match that wins overlap resolution. Thus ``react`` inside ``React Native``
+    is accepted, while assigning ``react native`` itself to the React entry is
+    rejected. Boundary-aware matching makes ``sql`` inside ``NoSQL`` and
+    ``PostgreSQL`` safe without exception lists.
+    """
+
+    hazards: set[str] = set()
+    owners: dict[str, str] = {}
+    for entry in VOCABULARY:
+        for alias in entry.aliases:
+            normalized = normalize_term(alias)
+            previous = owners.get(normalized)
+            if previous is not None and previous != entry.canonical:
+                hazards.add(f"alias {alias!r} belongs to both {previous!r} and {entry.canonical!r}")
+            owners[normalized] = entry.canonical
+
+    for source in VOCABULARY:
+        for alias in source.aliases:
+            for target in VOCABULARY:
+                if source.canonical == target.canonical:
+                    continue
+                for target_form in (target.canonical, target.display):
+                    if normalize_term(alias) not in normalize_term(target_form):
+                        continue
+                    if _alias_pattern(alias).search(target_form) is None:
+                        continue
+                    matches = find_vocabulary_matches(target_form)
+                    full = [match for match in matches if match.start == 0 and match.end == len(target_form)]
+                    if not full:
+                        hazards.add(
+                            f"alias {alias!r} for {source.canonical!r} matches inside "
+                            f"{target.canonical!r} without a full owning match"
+                        )
+                        continue
+                    longest = max(match.end - match.start for match in full)
+                    winners = {match.entry.canonical for match in full if match.end - match.start == longest}
+                    if target.canonical not in winners or source.canonical in winners:
+                        hazards.add(f"alias {alias!r} for {source.canonical!r} can swallow {target.canonical!r}")
+    return tuple(sorted(hazards))
 
 
 @lru_cache(maxsize=1)

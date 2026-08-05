@@ -24,6 +24,7 @@ from ats_engine.pramana.entities import _extract_company, _is_valid_company_cand
 FIXTURES = Path(__file__).parent / "fixtures" / "real_extraction"
 
 EXPECTED = {
+    "cgi_fullstack_java_angular": ("CGI", "Senior Full Stack Developer (Java + Angular)"),
     "crowdplat_web_scraper": ("CrowdPlat", "Web Scraper / Data Extraction Specialist"),
     "latentview_bi_ai": ("LatentView Analytics", "Analytical BI & AI"),
 }
