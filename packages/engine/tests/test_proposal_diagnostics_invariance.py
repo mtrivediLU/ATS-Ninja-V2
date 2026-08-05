@@ -1,17 +1,20 @@
-"""Golden assertions proving Phase 0 instrumentation does not tailor differently.
+"""Step 2 behavioral goldens for the real extraction fixtures.
 
-The ``cgi_fullstack_java_angular`` sha256 below was corrected after CI run
-30712253680 failed on it. Diagnosis: ``accepted_actions`` and ``score`` both
-matched their golden values; only the text hash did not. Checked directly
-against ``main`` (commit f60558b, this branch's actual merge-base) via a
-disposable ``git worktree`` plus a ``PYTHONPATH`` override -- no code from
-this branch involved -- main's own ``run_pipeline`` output for this exact
-fixture hashes to ``a6d990fb...``, not the ``290d8f4a...`` this test asserted.
-Repeated across two fresh interpreter processes to rule out hash-seed
-non-determinism; both instrumented and un-instrumented code agree. The other
-two goldens (``crowdplat_web_scraper``, ``latentview_bi_ai``) were verified
-the same way and were already correct. This was a mis-captured constant in
-the original Phase 0 commit, not a behavioral change introduced there.
+These values deliberately supersede the Step 1 invariance baseline. Demand
+repair is expected to change scores and may change delivered text:
+
+* CGI: responsive design was added, the overlapping bare APIs requirement was
+  removed, and Full Stack is now distinguished as title provenance. The score
+  changes from 41.21 to 42.33; accepted actions and delivered hash do not.
+* CrowdPlat: title mining adds Web Scraper and Data Extraction. The changed
+  demand set removes ``quality:summary`` from the accepted-action set, moves
+  the score from 18.12 to 16.83, and changes the delivered hash.
+* LatentView: title mining adds Artificial Intelligence from the exact ``AI``
+  surface. The score changes from 47.55 to 50.67; accepted actions and hash do
+  not.
+
+Each golden was captured from this branch after all Step 2 extraction changes,
+and cross-checked against ``python -m ats_engine.bench --json``.
 """
 
 from __future__ import annotations
@@ -26,17 +29,16 @@ from ats_engine.models import Mode
 
 FIXTURES = Path(__file__).parent / "fixtures" / "real_extraction"
 
-# Captured from ``main`` immediately before Phase 0 instrumentation.
+# Captured from this branch after Step 2 demand repair.
 GOLDENS = {
     "cgi_fullstack_java_angular": {
         "actions": [],
-        "score": 41.21,
+        "score": 42.33,
         "sha256": "a6d990fb152082c5c2356921aadd9c152b8a4e1286b56ede0d721db33e578d95",
     },
     "crowdplat_web_scraper": {
         "actions": [
             "quality:headline",
-            "quality:summary",
             "mention_summary:summary:APIs",
             "mention_summary:summary:Python",
             "mention_summary:summary:communication",
@@ -45,8 +47,8 @@ GOLDENS = {
             "surface_variant:headline:APIs",
             "surface_variant:headline:Python",
         ],
-        "score": 18.12,
-        "sha256": "11f3b30c143b0ca300c8bc2992aab5b38b1b2a6976f28dce03c6cc879dc13d23",
+        "score": 16.83,
+        "sha256": "a18046eea6c3a109172a4ac1cde2bbe7f45fca83aa060ac902394b2478f8ef52",
     },
     "latentview_bi_ai": {
         "actions": [
@@ -60,14 +62,14 @@ GOLDENS = {
             "weave_bullet:experience:2:bullet:0:SQL",
             "weave_bullet:experience:0:bullet:2:AI assistants",
         ],
-        "score": 47.55,
+        "score": 50.67,
         "sha256": "6701e19a687f522c9231f9f353d4999ff642ed31d5563ffe8c0b00b232056051",
     },
 }
 
 
 @pytest.mark.parametrize("case", sorted(GOLDENS))
-def test_fixture_tailoring_is_identical_to_main_baseline(case: str) -> None:
+def test_fixture_tailoring_matches_step2_rebaseline(case: str) -> None:
     result = run_pipeline(
         resume_text=(FIXTURES / "candidate_resume.pymupdf.txt").read_text(encoding="utf-8"),
         job_description=(FIXTURES / case / "job_description.txt").read_text(encoding="utf-8"),

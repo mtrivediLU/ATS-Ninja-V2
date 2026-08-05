@@ -160,6 +160,33 @@ def test_extraction_never_seeds_from_a_candidate_profile(case: str) -> None:
         assert requirement.jd_evidence_line, "every requirement must cite the JD line it came from"
 
 
+@pytest.mark.parametrize("case", CASES)
+def test_title_provenance_matches_the_precommitted_gold(case: str) -> None:
+    extracted = _by_canonical(case)
+    for item in _labels(case)["requirements"]:
+        expected = item.get("provenance")
+        if expected is not None:
+            assert tuple(expected) == extracted[_norm(item["canonical"])].provenance
+
+
+@pytest.mark.parametrize("case", CASES)
+def test_parent_relations_match_the_precommitted_gold(case: str) -> None:
+    extracted = _by_canonical(case)
+    for item in _labels(case)["requirements"]:
+        expected = item.get("parent_canonical")
+        if expected is not None:
+            assert extracted[_norm(item["canonical"])].parent_canonical == _norm(expected)
+
+
+@pytest.mark.parametrize("case", CASES)
+def test_no_malformed_or_fragment_requirements(case: str) -> None:
+    forbidden_edges = ("including ", "such as ", "using ", "with ", "and ", "or ")
+    for requirement in _by_canonical(case).values():
+        surface = requirement.surface.casefold().strip()
+        assert not surface.startswith(forbidden_edges)
+        assert not surface.endswith((" required", " preferred", "(", "[", "{"))
+
+
 # --------------------------------------------------------- jd_occurrences ----
 # PRAMANA's target(r) = clamp(jd_occurrences, 1, 3) needs a real count of how
 # many times the JD states each requirement. hand_labels.toml's own
@@ -205,3 +232,5 @@ def test_jd_occurrences_defaults_to_one_for_a_synthetic_requirement() -> None:
         jd_evidence_line="",
     )
     assert requirement.jd_occurrences == 1
+    assert requirement.provenance == ("body",)
+    assert requirement.parent_canonical is None

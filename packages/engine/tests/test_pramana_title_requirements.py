@@ -32,6 +32,16 @@ We are seeking a Python Developer to coordinate delivery.
     assert "python" not in _by_canonical(jd)
 
 
+def test_descriptor_heavy_inline_announcement_is_still_excluded() -> None:
+    jd = """Job Title: Platform Engineer
+
+Responsibilities:
+CGI is seeking a highly skilled and experienced Python Engineer to join our team.
+"""
+
+    assert "python" not in _by_canonical(jd)
+
+
 def test_title_and_body_provenance_are_merged_without_losing_body_priority() -> None:
     jd = """Python Engineer
 
