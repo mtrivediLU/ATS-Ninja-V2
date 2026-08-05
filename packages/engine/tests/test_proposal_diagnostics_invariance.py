@@ -1,4 +1,18 @@
-"""Golden assertions proving Phase 0 instrumentation does not tailor differently."""
+"""Golden assertions proving Phase 0 instrumentation does not tailor differently.
+
+The ``cgi_fullstack_java_angular`` sha256 below was corrected after CI run
+30712253680 failed on it. Diagnosis: ``accepted_actions`` and ``score`` both
+matched their golden values; only the text hash did not. Checked directly
+against ``main`` (commit f60558b, this branch's actual merge-base) via a
+disposable ``git worktree`` plus a ``PYTHONPATH`` override -- no code from
+this branch involved -- main's own ``run_pipeline`` output for this exact
+fixture hashes to ``a6d990fb...``, not the ``290d8f4a...`` this test asserted.
+Repeated across two fresh interpreter processes to rule out hash-seed
+non-determinism; both instrumented and un-instrumented code agree. The other
+two goldens (``crowdplat_web_scraper``, ``latentview_bi_ai``) were verified
+the same way and were already correct. This was a mis-captured constant in
+the original Phase 0 commit, not a behavioral change introduced there.
+"""
 
 from __future__ import annotations
 
@@ -17,7 +31,7 @@ GOLDENS = {
     "cgi_fullstack_java_angular": {
         "actions": [],
         "score": 41.21,
-        "sha256": "290d8f4abac46cbef6c7591181f618b6f122bac6f200f279fb566266c0d4c6b5",
+        "sha256": "a6d990fb152082c5c2356921aadd9c152b8a4e1286b56ede0d721db33e578d95",
     },
     "crowdplat_web_scraper": {
         "actions": [
