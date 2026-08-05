@@ -217,7 +217,7 @@ def optimize(
         unreachable_terms=[link.requirement.canonical for link in links if link.tier == "missing"],
         delivery_state=DocumentState.GENERATED_WITH_FALLBACK,
     )
-    actions = plan_placements(links, profile, jd_profile)
+    actions = _dedupe_actions(plan_placements(links, profile, jd_profile))
     inventory = proposal_inventory(actions)
     recorder = _ProposalRecorder.from_inventory(actions, inventory)
     source_findings = validate_resume_plan_findings(
@@ -512,7 +512,7 @@ def _optimize_pr21_compat(
         delivery_state=DocumentState.GENERATED_WITH_FALLBACK,
         fallback_reason="PR-21 compatibility path delivered the source projection.",
     )
-    actions = plan_placements(links, profile, jd_profile)
+    actions = _dedupe_actions(plan_placements(links, profile, jd_profile))
     inventory = proposal_inventory(actions)
     recorder = _ProposalRecorder.from_inventory(actions, inventory)
     if not requirements or not links:
