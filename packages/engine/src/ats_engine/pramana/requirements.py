@@ -11,9 +11,11 @@ import re
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass
+from functools import lru_cache
 
 from ats_engine.models import RequirementTerm
 from ats_engine.parsing.vocab import (
+    VOCAB_VERSION,
     VocabularyEntry,
     VocabularyMatch,
     find_vocabulary_matches,
@@ -168,7 +170,9 @@ _GENERIC_HEADS = {
     "portal",
     "process",
     "processes",
+    "preferred",
     "related",
+    "required",
     "requirement",
     "requirements",
     "role",
@@ -382,6 +386,7 @@ _ORG_ROLE_WORDS = frozenset(
         "careers",
         "career",
         "portal",
+        "preferred",
         "platform",
         "department",
         "division",
@@ -773,6 +778,22 @@ def extract_requirements(jd_text: str) -> list[RequirementTerm]:
     section.
     """
 
+    return list(_extract_requirements_cached(*_jd_parse_cache_key(jd_text)))
+
+
+def _jd_parse_cache_key(jd_text: str) -> tuple[str, str]:
+    """Key deterministic JD requirement parses by vocabulary contract."""
+
+    return VOCAB_VERSION, jd_text
+
+
+@lru_cache(maxsize=128)
+def _extract_requirements_cached(vocab_version: str, jd_text: str) -> tuple[RequirementTerm, ...]:
+    # ``vocab_version`` is deliberately part of the cache signature. It is not
+    # read in the body, but changing the registry version necessarily produces
+    # a new key and prevents stale requirements from being served.
+    del vocab_version
+
     hygiene = sanitize_jd_for_parsing(jd_text)
     section_lines = _segment_sections(hygiene.scoring_lines)
     product_counts = _capitalized_product_counts(section_lines)
@@ -782,7 +803,7 @@ def extract_requirements(jd_text: str) -> list[RequirementTerm]:
             continue
         candidates.extend(_vocabulary_candidates(section_line))
         candidates.extend(_mined_candidates(section_line, product_counts, hygiene))
-    return _to_requirements(candidates, jd_text)
+    return tuple(_to_requirements(candidates, jd_text))
 
 
 def _resolved_title(jd_text: str, hygiene: JDHygiene) -> str:
@@ -1042,13 +1063,17 @@ def _parent_canonical_for_span(line: str, start: int, end: int) -> str | None:
 
 
 def _canonical_parent(parent: ListMember) -> str | None:
+    normalized = normalize_term(parent.text)
+    words = normalized.split()
+    if not words or words[-1] in _GENERIC_HEADS or all(word in _GENERIC_TOKENS for word in words):
+        return None
     entry = vocabulary_entry(parent.text)
     if entry is not None:
         return entry.canonical
     matches = _longest_non_overlapping(find_vocabulary_matches(parent.text))
     if matches:
         return matches[-1].entry.canonical
-    return normalize_term(parent.text) or None
+    return normalized or None
 
 
 def _weight_for(entry: VocabularyEntry, section: str) -> float:
