@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+from ats_engine.generation.diagnostics import GateCode, RunDiagnostics
 from ats_engine.validation.findings import ValidationFinding
 
 """The versioned ApplicationKit contract.
@@ -429,6 +430,7 @@ class OptimizationRejection:
 
     action: str
     reason: str
+    code: GateCode | None = None
 
 
 @dataclass(slots=True)
@@ -444,6 +446,9 @@ class OptimizationTrace:
     fallback_reason: str = ""
     # Finding codes only; exact calibration identities remain in-memory.
     calibration_suppressed: list[str] = field(default_factory=list)
+    # Additive Phase 0 proposal-level contract.  An empty value is used when a
+    # persisted kit predates diagnostics.
+    diagnostics: RunDiagnostics = field(default_factory=RunDiagnostics.empty)
 
 
 @dataclass(slots=True)

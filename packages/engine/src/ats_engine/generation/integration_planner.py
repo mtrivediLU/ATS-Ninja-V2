@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import re
+
+from ats_engine.generation.diagnostics import ProposalRecord, ProposalStatus, _word_count
 from ats_engine.models import EvidenceLink, JDProfile, PlacementAction, Profile
 
 _PLACEABLE_TIERS = frozenset({"A", "B", "C", "cert", "variant"})
@@ -63,6 +66,34 @@ def plan_placements(
     return actions
 
 
+def plan_placements_with_inventory(
+    links: list[EvidenceLink],
+    profile: Profile,
+    jd_profile: JDProfile,
+) -> tuple[list[PlacementAction], tuple[ProposalRecord, ...]]:
+    """Return planner actions with a one-to-one, initially unevaluated inventory.
+
+    ``plan_placements`` remains the public compatibility entry point.  The
+    inventory is deliberately generated from exactly the same returned action
+    list, which makes omission and duplicate-record bugs observable.
+    """
+    actions = plan_placements(links, profile, jd_profile)
+    return actions, proposal_inventory(actions)
+
+
+def proposal_inventory(actions: list[PlacementAction]) -> tuple[ProposalRecord, ...]:
+    """Build initial diagnostics records for an already-planned action list."""
+    records: list[ProposalRecord] = []
+    seen_ids: set[str] = set()
+    for action in actions:
+        record = _proposal_record(action)
+        if record.id in seen_ids:
+            raise AssertionError(f"planner emitted a duplicate proposal id: {record.id}")
+        seen_ids.add(record.id)
+        records.append(record)
+    return tuple(records)
+
+
 def _action(link: EvidenceLink, target: str, operation: str) -> PlacementAction:
     term = link.surface_to_use or link.requirement.surface or link.requirement.canonical
     provenance = link.supporting_locations or link.supporting_spans
@@ -83,4 +114,48 @@ def _headline_eligible(link: EvidenceLink) -> bool:
     return requirement.kind in {"tool", "framework", "language", "platform"}
 
 
-__all__ = ["plan_placements"]
+def _proposal_record(action: PlacementAction) -> ProposalRecord:
+    link = action.link
+    canonical = link.requirement.canonical
+    locations = link.supporting_locations or ((link.resume_location,) if link.resume_location else ())
+    if not locations and link.supporting_spans:
+        locations = link.supporting_spans
+    stable_id = ":".join(
+        (
+            action.operation,
+            action.target,
+            canonical,
+            re.sub(r"\s+", "-", action.term.strip().casefold()),
+        )
+    )
+    return ProposalRecord(
+        id=stable_id,
+        operation=action.operation,
+        target=action.target,
+        requirement_canonicals=(canonical,),
+        requirement_weight=link.requirement.weight,
+        evidence_tier=link.tier,
+        evidence_locations=tuple(locations),
+        surface_to_use=action.term,
+        word_delta=_word_count(action.rendered_text) - _word_count(_replaced_text(action)),
+        status=ProposalStatus.NOT_EVALUATED,
+        gate_code=None,
+        gate_detail="",
+        score_before=None,
+        score_after=None,
+        score_delta=None,
+        # The optimizer writes the actual batch and iteration as it evaluates
+        # this proposal. -1 means the planner emitted it but no batch reached it.
+        batch_index=-1,
+        iteration=0,
+    )
+
+
+def _replaced_text(action: PlacementAction) -> str:
+    """Return source text replaced by an in-place operation, if any."""
+    if action.operation in {"surface_variant", "weave_bullet"}:
+        return action.link.resume_span
+    return ""
+
+
+__all__ = ["plan_placements", "plan_placements_with_inventory", "proposal_inventory"]

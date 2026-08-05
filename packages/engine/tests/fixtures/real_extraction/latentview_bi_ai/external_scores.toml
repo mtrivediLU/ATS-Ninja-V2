@@ -1,0 +1,5 @@
+# Historical external Jobscan measurements, retained for calibration only.
+provider = "jobscan"
+base = 75
+ats_ninja = 73
+manual = 83

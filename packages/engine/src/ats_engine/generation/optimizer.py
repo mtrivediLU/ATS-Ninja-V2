@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Iterable
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
-from ats_engine.generation.integration_planner import plan_placements
+from ats_engine.generation.diagnostics import GateCode, ProposalRecord, ProposalStatus, RunDiagnostics, _word_count
+from ats_engine.generation.integration_planner import plan_placements, proposal_inventory
 from ats_engine.generation.planning import rewrite_summary
 from ats_engine.generation.resume import generate_resume_text
 from ats_engine.kit.contract import ArtifactKind, DocumentState, OptimizationRejection, OptimizationTrace
@@ -59,6 +61,138 @@ class ResumeGateContext:
     identity_findings: tuple[ValidationFinding, ...] = ()
 
 
+@dataclass(slots=True)
+class _ProposalRecorder:
+    """Mutable assembly helper for the immutable public diagnostics contract."""
+
+    records: dict[str, ProposalRecord]
+    ids_by_label: dict[str, str]
+
+    @classmethod
+    def from_inventory(
+        cls,
+        actions: list[PlacementAction],
+        inventory: tuple[ProposalRecord, ...],
+    ) -> _ProposalRecorder:
+        if len(actions) != len(inventory):
+            raise AssertionError("proposal inventory must have one record per planner action")
+        labels = [_action_label(action) for action in actions]
+        if len(set(labels)) != len(labels):
+            raise AssertionError("planner actions must have stable unique labels")
+        return cls(
+            records={record.id: record for record in inventory},
+            ids_by_label={label: record.id for label, record in zip(labels, inventory, strict=True)},
+        )
+
+    def reject(
+        self,
+        action: PlacementAction,
+        *,
+        code: GateCode,
+        detail: str,
+        score_before: float | None,
+        score_after: float | None,
+        iteration: int,
+    ) -> None:
+        self._set(
+            action,
+            ProposalStatus.REJECTED,
+            code=code,
+            detail=detail,
+            score_before=score_before,
+            score_after=score_after,
+            iteration=iteration,
+        )
+
+    def accept(
+        self,
+        actions: Iterable[PlacementAction],
+        *,
+        score_before: float,
+        score_after: float,
+        iteration: int,
+    ) -> None:
+        for action in actions:
+            self._set(
+                action,
+                ProposalStatus.ACCEPTED,
+                code=None,
+                detail="",
+                score_before=score_before,
+                score_after=score_after,
+                iteration=iteration,
+            )
+
+    def schedule(self, actions: Iterable[PlacementAction], *, batch_index: int, iteration: int) -> None:
+        """Record the actual optimizer batch that reached each proposal."""
+        for action in actions:
+            record_id = self.ids_by_label[_action_label(action)]
+            record = self.records[record_id]
+            self.records[record_id] = replace(record, batch_index=batch_index, iteration=iteration)
+
+    def rollback(self, *, detail: str) -> None:
+        for record_id, record in self.records.items():
+            if record.status is ProposalStatus.ACCEPTED:
+                self.records[record_id] = replace(
+                    record,
+                    status=ProposalStatus.ROLLED_BACK,
+                    gate_code=GateCode.FINAL_PLAN_SCORE_REGRESSION,
+                    gate_detail=detail,
+                )
+
+    def is_recorded(self, action: PlacementAction) -> bool:
+        return self.records[self.ids_by_label[_action_label(action)]].status is not ProposalStatus.NOT_EVALUATED
+
+    def finalize_unevaluated(self) -> None:
+        """Give every proposal no batch ever reached a real terminal status.
+
+        A run can return before the evaluation loop starts (source-projection
+        failure, source score regression) or stop the loop early (iteration
+        cap, score plateau) while planner actions remain unscheduled. Both are
+        legitimate outcomes, not evaluator bugs, but ``NOT_EVALUATED`` is not
+        a terminal status -- it exists only to detect a proposal the recorder
+        never reached. Finalize is the one place that closes it out.
+        """
+        for record_id, record in self.records.items():
+            if record.status is ProposalStatus.NOT_EVALUATED:
+                self.records[record_id] = replace(
+                    record,
+                    status=ProposalStatus.REJECTED,
+                    gate_code=GateCode.RUN_CONCLUDED_BEFORE_EVALUATION,
+                    gate_detail="optimize() returned before this proposal was scheduled into a batch",
+                )
+
+    def _set(
+        self,
+        action: PlacementAction,
+        status: ProposalStatus,
+        *,
+        code: GateCode | None,
+        detail: str,
+        score_before: float | None,
+        score_after: float | None,
+        iteration: int,
+    ) -> None:
+        record_id = self.ids_by_label[_action_label(action)]
+        record = self.records[record_id]
+        # A bisection may have already rejected this exact proposal.  Preserve
+        # that specific finding instead of overwriting it with the enclosing
+        # batch's generic score result.
+        if record.status is not ProposalStatus.NOT_EVALUATED:
+            return
+        delta = score_after - score_before if score_before is not None and score_after is not None else None
+        self.records[record_id] = replace(
+            record,
+            status=status,
+            gate_code=code,
+            gate_detail=detail,
+            score_before=score_before,
+            score_after=score_after,
+            score_delta=delta,
+            iteration=iteration,
+        )
+
+
 def optimize(
     profile: Profile,
     jd_profile: JDProfile,
@@ -102,6 +236,9 @@ def optimize(
         unreachable_terms=[link.requirement.canonical for link in links if link.tier == "missing"],
         delivery_state=DocumentState.GENERATED_WITH_FALLBACK,
     )
+    actions = _dedupe_actions(plan_placements(links, profile, jd_profile))
+    inventory = proposal_inventory(actions)
+    recorder = _ProposalRecorder.from_inventory(actions, inventory)
     source_findings = validate_resume_plan_findings(
         source_plan,
         profile,
@@ -115,11 +252,13 @@ def optimize(
         trace.delivery_state = DocumentState.NEEDS_INPUT_REVIEW
         trace.fallback_reason = "The source projection could not preserve every protected resume fact."
         trace.rejected_actions.append(
-            OptimizationRejection(
+            _rejection(
                 action="source_content_plan",
                 reason=_finding_reason(source_blockers),
+                code=GateCode.SOURCE_PROJECTION_FAILURE,
             )
         )
+        _finalize_diagnostics(trace, recorder, source_plan, source_plan, requirements)
         return source_plan, trace
 
     accepted: list[PlacementAction] = []
@@ -131,15 +270,17 @@ def optimize(
     if current_score.score + 0.001 < original.score:
         trace.delivery_state = DocumentState.NEEDS_INPUT_REVIEW
         trace.rejected_actions.append(
-            OptimizationRejection(
+            _rejection(
                 action="source_content_plan",
                 reason="source projection scored below raw resume; input extraction requires review",
+                code=GateCode.SOURCE_PROJECTION_FAILURE,
             )
         )
         trace.fallback_reason = (
             "The structured source projection did not preserve the original ATS score; "
             "review the extracted resume before delivery."
         )
+        _finalize_diagnostics(trace, recorder, source_plan, source_plan, requirements)
         return source_plan, trace
 
     # Deterministic quality proposals preserve the source summary and use only
@@ -211,12 +352,12 @@ def optimize(
             accepted_quality=accepted_quality,
         )
 
-    actions = _dedupe_actions(plan_placements(links, profile, jd_profile))
     for offset in range(0, len(actions), _BATCH_SIZE):
         if trace.iterations >= _MAX_ITERATIONS:
             break
         batch = actions[offset : offset + _BATCH_SIZE]
         trace.iterations += 1
+        recorder.schedule(batch, batch_index=offset // _BATCH_SIZE, iteration=trace.iterations)
         candidate_plan, candidate_actions, rejected = _accept_safe_actions(
             current_plan,
             accepted,
@@ -232,15 +373,45 @@ def optimize(
         candidate_score = _score_plan(candidate_plan, source, requirements, links, candidate_actions)
         if candidate_score.score > current_score.score:
             newly_accepted = candidate_actions[len(accepted) :]
+            recorder.accept(
+                newly_accepted,
+                score_before=current_score.score,
+                score_after=candidate_score.score,
+                iteration=trace.iterations,
+            )
             current_plan = candidate_plan
             accepted = candidate_actions
             current_score = candidate_score
             trace.score_path.append(current_score.score)
             trace.accepted_actions.extend(_action_label(action) for action in newly_accepted)
         else:
+            rejected_by_label = {rejection.action: rejection for rejection in rejected}
             for action in batch:
+                rejection = rejected_by_label.get(_action_label(action))
+                if rejection is not None:
+                    recorder.reject(
+                        action,
+                        code=rejection.code or GateCode.VALIDATION_FINDING,
+                        detail=rejection.reason,
+                        score_before=current_score.score,
+                        score_after=candidate_score.score,
+                        iteration=trace.iterations,
+                    )
+                    continue
                 trace.rejected_actions.append(
-                    OptimizationRejection(action=_action_label(action), reason="score did not strictly improve")
+                    _rejection(
+                        action=_action_label(action),
+                        reason="score did not strictly improve",
+                        code=GateCode.SCORE_DID_NOT_STRICTLY_IMPROVE,
+                    )
+                )
+                recorder.reject(
+                    action,
+                    code=GateCode.SCORE_DID_NOT_STRICTLY_IMPROVE,
+                    detail="score did not strictly improve",
+                    score_before=current_score.score,
+                    score_after=candidate_score.score,
+                    iteration=trace.iterations,
                 )
         if len(trace.score_path) >= 2 and trace.score_path[-1] - trace.score_path[-2] < 0.5:
             break
@@ -258,29 +429,42 @@ def optimize(
     final_score = _score_plan(current_plan, source, requirements, links, accepted)
     if final_score.score + 0.001 < original.score:
         trace.rejected_actions.append(
-            OptimizationRejection(action="final_plan", reason="would regress below original source score")
+            _rejection(
+                action="final_plan",
+                reason="would regress below original source score",
+                code=GateCode.FINAL_PLAN_SCORE_REGRESSION,
+            )
         )
         _record_source_rollback(
             trace,
             source_score,
             reason="No safe evidence-backed improvement was accepted; delivered the source projection.",
         )
+        recorder.rollback(detail=trace.fallback_reason)
+        _finalize_diagnostics(trace, recorder, source_plan, source_plan, requirements)
         return source_plan, trace
 
     # A delivered document must never state a JD-relevant term less often than
     # the candidate's own source did.  This is checked once more at the end
     # because the summary and bullet rewrites above take a different path into
     # the plan than the batched placements do.
-    final_regressions = guard.regressions(generate_resume_text(current_plan))
+    current_plan_text = generate_resume_text(current_plan)
+    final_regressions = guard.regressions(current_plan_text)
     if final_regressions:
         trace.rejected_actions.append(
-            OptimizationRejection(action="final_plan", reason=final_regressions[0].describe())
+            _rejection(
+                action="final_plan",
+                reason=final_regressions[0].describe(),
+                code=GateCode.PROTECTED_FACT_LOSS,
+            )
         )
         _record_source_rollback(
             trace,
             source_score,
             reason="Tailoring would have weakened a job-relevant term; delivered the protected source projection.",
         )
+        recorder.rollback(detail=trace.fallback_reason)
+        _finalize_diagnostics(trace, recorder, source_plan, source_plan, requirements)
         return source_plan, trace
 
     final_findings = validate_resume_plan_findings(
@@ -293,7 +477,11 @@ def optimize(
     final_blockers = _optimization_blockers(final_findings)
     if final_blockers:
         trace.rejected_actions.append(
-            OptimizationRejection(action="final_plan", reason=_finding_reason(final_blockers))
+            _rejection(
+                action="final_plan",
+                reason=_finding_reason(final_blockers),
+                code=_gate_code_for_findings(final_blockers),
+            )
         )
         _record_source_rollback(
             trace,
@@ -301,6 +489,8 @@ def optimize(
             reason="Tailoring proposals failed validation; delivered the protected source projection.",
         )
         trace.calibration_suppressed = _calibrated_codes(source_findings)
+        recorder.rollback(detail=trace.fallback_reason)
+        _finalize_diagnostics(trace, recorder, source_plan, source_plan, requirements)
         return source_plan, trace
 
     trace.accepted_actions = [*accepted_quality, *[_action_label(action) for action in accepted]]
@@ -313,6 +503,14 @@ def optimize(
     else:
         trace.delivery_state = DocumentState.GENERATED_WITH_FALLBACK
         trace.fallback_reason = "No safe evidence-backed improvement was accepted; delivered the source projection."
+    _finalize_diagnostics(
+        trace,
+        recorder,
+        source_plan,
+        current_plan,
+        requirements,
+        precomputed_delivered_text=current_plan_text,
+    )
     return current_plan, trace
 
 
@@ -341,23 +539,28 @@ def _optimize_pr21_compat(
         delivery_state=DocumentState.GENERATED_WITH_FALLBACK,
         fallback_reason="PR-21 compatibility path delivered the source projection.",
     )
+    actions = _dedupe_actions(plan_placements(links, profile, jd_profile))
+    inventory = proposal_inventory(actions)
+    recorder = _ProposalRecorder.from_inventory(actions, inventory)
     if not requirements or not links:
+        _finalize_diagnostics(trace, recorder, source_plan, source_plan, requirements)
         return source_plan, trace
 
-    actions = _dedupe_actions(plan_placements(links, profile, jd_profile))
     accepted: list[PlacementAction] = []
     current_plan = source_plan
     current_score = _score_plan(current_plan, source, requirements, links, accepted)
     source_score = current_score
     if current_score.score + 0.001 < original.score:
         trace.rejected_actions.append(
-            OptimizationRejection(
+            _rejection(
                 action="source_content_plan",
                 reason="source projection scored below raw resume; retained PR-21 source-content fallback",
+                code=GateCode.SOURCE_PROJECTION_FAILURE,
             )
         )
         if current_score.score != original.score:
             trace.score_path.append(current_score.score)
+        _finalize_diagnostics(trace, recorder, source_plan, source_plan, requirements)
         return source_plan, trace
 
     context = ResumeGateContext()
@@ -366,6 +569,7 @@ def _optimize_pr21_compat(
             break
         batch = actions[offset : offset + _BATCH_SIZE]
         trace.iterations += 1
+        recorder.schedule(batch, batch_index=offset // _BATCH_SIZE, iteration=trace.iterations)
         candidate_plan, candidate_actions, rejected = _accept_safe_actions(
             current_plan,
             accepted,
@@ -380,14 +584,44 @@ def _optimize_pr21_compat(
         trace.rejected_actions.extend(rejected)
         candidate_score = _score_plan(candidate_plan, source, requirements, links, candidate_actions)
         if candidate_score.score > current_score.score:
+            recorder.accept(
+                candidate_actions[len(accepted) :],
+                score_before=current_score.score,
+                score_after=candidate_score.score,
+                iteration=trace.iterations,
+            )
             current_plan = candidate_plan
             accepted = candidate_actions
             current_score = candidate_score
             trace.score_path.append(current_score.score)
         else:
+            rejected_by_label = {rejection.action: rejection for rejection in rejected}
             for action in batch:
+                rejection = rejected_by_label.get(_action_label(action))
+                if rejection is not None:
+                    recorder.reject(
+                        action,
+                        code=rejection.code or GateCode.VALIDATION_FINDING,
+                        detail=rejection.reason,
+                        score_before=current_score.score,
+                        score_after=candidate_score.score,
+                        iteration=trace.iterations,
+                    )
+                    continue
                 trace.rejected_actions.append(
-                    OptimizationRejection(action=_action_label(action), reason="score did not strictly improve")
+                    _rejection(
+                        action=_action_label(action),
+                        reason="score did not strictly improve",
+                        code=GateCode.SCORE_DID_NOT_STRICTLY_IMPROVE,
+                    )
+                )
+                recorder.reject(
+                    action,
+                    code=GateCode.SCORE_DID_NOT_STRICTLY_IMPROVE,
+                    detail="score did not strictly improve",
+                    score_before=current_score.score,
+                    score_after=candidate_score.score,
+                    iteration=trace.iterations,
                 )
         if len(trace.score_path) >= 2 and trace.score_path[-1] - trace.score_path[-2] < 0.5:
             break
@@ -402,13 +636,19 @@ def _optimize_pr21_compat(
     final_score = _score_plan(current_plan, source, requirements, links, accepted)
     if final_score.score + 0.001 < original.score:
         trace.rejected_actions.append(
-            OptimizationRejection(action="final_plan", reason="would regress below original source score")
+            _rejection(
+                action="final_plan",
+                reason="would regress below original source score",
+                code=GateCode.FINAL_PLAN_SCORE_REGRESSION,
+            )
         )
         _record_source_rollback(
             trace,
             source_score,
             reason="PR-21 compatibility path rolled back to the source projection.",
         )
+        recorder.rollback(detail=trace.fallback_reason)
+        _finalize_diagnostics(trace, recorder, source_plan, source_plan, requirements)
         return source_plan, trace
 
     trace.accepted_actions = [_action_label(action) for action in accepted]
@@ -417,6 +657,7 @@ def _optimize_pr21_compat(
     if accepted or final_score.score > original.score + 0.001:
         trace.delivery_state = DocumentState.GENERATED
         trace.fallback_reason = ""
+    _finalize_diagnostics(trace, recorder, source_plan, current_plan, requirements)
     return current_plan, trace
 
 
@@ -619,21 +860,28 @@ def _accept_quality_candidate(
         )
         if outcome.fatal or outcome.repaired or outcome.rejected:
             trace.rejected_actions.append(
-                OptimizationRejection(
+                _rejection(
                     action=label,
                     reason="truth gate rejected an unsupported candidate-specific summary claim",
+                    code=GateCode.TRUTH_GATE_REJECTION,
                 )
             )
             return current, current_score
     findings = validate_resume_plan_findings(candidate, profile, requirements, (), context)
     blockers = _optimization_blockers(findings)
     if blockers:
-        trace.rejected_actions.append(OptimizationRejection(action=label, reason=_finding_reason(blockers)))
+        trace.rejected_actions.append(
+            _rejection(action=label, reason=_finding_reason(blockers), code=_gate_code_for_findings(blockers))
+        )
         return current, current_score
     candidate_score = _score_plan(candidate, source, requirements, links, [])
     if candidate_score.score + 0.001 < current_score.score:
         trace.rejected_actions.append(
-            OptimizationRejection(action=label, reason="quality proposal would reduce ATS v2 score")
+            _rejection(
+                action=label,
+                reason="quality proposal would reduce ATS v2 score",
+                code=GateCode.QUALITY_SCORE_REGRESSION,
+            )
         )
         return current, current_score
     accepted_quality.append(label)
@@ -731,7 +979,13 @@ def _accept_safe_actions(
         return (
             plan,
             accepted,
-            [OptimizationRejection(action=_action_label(action), reason=reason)],
+            [
+                _rejection(
+                    action=_action_label(action),
+                    reason=reason,
+                    code=_gate_code_for_findings(blockers) if blockers else GateCode.PROTECTED_FACT_LOSS,
+                )
+            ],
         )
     midpoint = len(pending) // 2
     left_plan, left_actions, left_rejected = _accept_safe_actions(
@@ -1083,6 +1337,88 @@ def _optimization_blockers(
 def _finding_reason(findings: Iterable[ValidationFinding]) -> str:
     values = list(findings)
     return "; ".join(f"{finding.code}: {finding.detail}" for finding in values[:2])
+
+
+def _rejection(*, action: str, reason: str, code: GateCode) -> OptimizationRejection:
+    """Create a legacy-compatible rejection with its stable structured code."""
+    return OptimizationRejection(action=action, reason=reason, code=code)
+
+
+def _gate_code_for_findings(findings: Iterable[ValidationFinding]) -> GateCode:
+    """Classify actual validation findings without changing their gate behavior."""
+    codes = {finding.code.casefold() for finding in findings}
+    if any("stuff" in code for code in codes):
+        return GateCode.STUFFING
+    if any("natural" in code or "style" in code for code in codes):
+        return GateCode.NATURALNESS_STYLE_REJECTION
+    if any("missing" in code or "fidelity" in code or "preserv" in code for code in codes):
+        return GateCode.PROTECTED_FACT_LOSS
+    return GateCode.VALIDATION_FINDING
+
+
+def _relevant_terms_per_100_words(text: str, requirements: list[RequirementTerm]) -> float:
+    words = _word_count(text)
+    if words == 0:
+        return 0.0
+    canonicals = {requirement.canonical for requirement in requirements if requirement.canonical}
+    visible = sum(contains_fact(text, canonical) for canonical in canonicals)
+    return visible / (words / 100)
+
+
+def _finalize_diagnostics(
+    trace: OptimizationTrace,
+    recorder: _ProposalRecorder,
+    source_plan: ResumePlan,
+    delivered_plan: ResumePlan,
+    requirements: list[RequirementTerm],
+    *,
+    precomputed_delivered_text: str | None = None,
+) -> None:
+    """Persist one and only one terminal record for every planner action.
+
+    ``precomputed_delivered_text`` lets a caller that already rendered
+    ``delivered_plan`` for an earlier check (for example the final
+    preservation-guard pass) hand that text back in instead of paying for a
+    second identical render.
+    """
+    recorder.finalize_unevaluated()
+    proposals = tuple(recorder.records.values())
+    if len(proposals) != len(recorder.ids_by_label) or len({record.id for record in proposals}) != len(proposals):
+        raise AssertionError("every planner-emitted action must have exactly one proposal record")
+    if any(record.status is ProposalStatus.NOT_EVALUATED for record in proposals):
+        raise AssertionError("every proposal must reach a terminal status before finalize")
+
+    source_text = generate_resume_text(source_plan)
+    if delivered_plan is source_plan:
+        delivered_text = source_text
+    elif precomputed_delivered_text is not None:
+        delivered_text = precomputed_delivered_text
+    else:
+        delivered_text = generate_resume_text(delivered_plan)
+    statuses = {status.value: 0 for status in ProposalStatus}
+    gates = {code.value: 0 for code in GateCode}
+    operations: dict[str, int] = {}
+    for record in proposals:
+        statuses[record.status.value] += 1
+        if record.status is ProposalStatus.REJECTED and record.gate_code is not None:
+            gates[record.gate_code.value] += 1
+        if record.status is ProposalStatus.ACCEPTED:
+            operations[record.operation] = operations.get(record.operation, 0) + 1
+    trace.diagnostics = RunDiagnostics(
+        proposals=proposals,
+        proposals_by_status={key: value for key, value in sorted(statuses.items()) if value},
+        rejections_by_gate={key: value for key, value in sorted(gates.items()) if value},
+        accepted_by_operation=dict(sorted(operations.items())),
+        source_word_count=_word_count(source_text),
+        delivered_word_count=_word_count(delivered_text),
+        word_delta=_word_count(delivered_text) - _word_count(source_text),
+        relevant_terms_per_100_words_before=_relevant_terms_per_100_words(source_text, requirements),
+        relevant_terms_per_100_words_after=_relevant_terms_per_100_words(delivered_text, requirements),
+        score_path=tuple(trace.score_path),
+        iterations=trace.iterations,
+        source_projection_sha256=hashlib.sha256(source_text.encode("utf-8")).hexdigest(),
+        delivered_sha256=hashlib.sha256(delivered_text.encode("utf-8")).hexdigest(),
+    )
 
 
 def _calibrated_codes(findings: Iterable[ValidationFinding]) -> list[str]:
