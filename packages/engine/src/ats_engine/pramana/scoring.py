@@ -413,17 +413,40 @@ def _looks_like_unknown_heading(line: str) -> bool:
 
 
 def _experience_bullets(lines: list[str]) -> dict[tuple[int, int], str]:
-    """Index deterministic renderer bullets by their placement-action target."""
+    """Index deterministic renderer bullets by their placement-action target.
+
+    Two entry-heading shapes are recognized: the labelled wire format's
+    ``Company: X`` line, and the delivered layout's unlabelled
+    ``Employer · Location`` line (``generation/delivered_layout.py``). The
+    delivered layout carries no explicit label, so its heading is recognized
+    positionally instead -- the first non-blank, non-bullet line since either
+    the section started or a blank line last separated two entries, which is
+    exactly how every renderer lays consecutive entries out. Without this, a
+    delivered (non-labelled) multi-entry resume never advances past experience
+    index 0: every bullet in every job collapses onto the first one, so a
+    placement action targeting any later job's bullet can never resolve
+    during provenance scoring (``_has_resolved_placement`` below), silently
+    zeroing that requirement's credit regardless of the bullet's own content.
+    """
     indexed: dict[tuple[int, int], str] = {}
     experience_index = -1
     bullet_index = 0
+    awaiting_new_entry = True
     for line in lines:
+        if not line.strip():
+            awaiting_new_entry = True
+            continue
         if line.lstrip().casefold().startswith("company:"):
             experience_index += 1
             bullet_index = 0
+            awaiting_new_entry = False
             continue
         match = _BULLET.match(line)
         if match is None:
+            if awaiting_new_entry:
+                experience_index += 1
+                bullet_index = 0
+            awaiting_new_entry = False
             continue
         if experience_index < 0:
             # This supports a conventional plain-text experience section while
@@ -431,6 +454,7 @@ def _experience_bullets(lines: list[str]) -> dict[tuple[int, int], str]:
             experience_index = 0
         indexed[(experience_index, bullet_index)] = match.group("text")
         bullet_index += 1
+        awaiting_new_entry = False
     return indexed
 
 
@@ -467,11 +491,23 @@ def _has_resolved_placement(
 
 
 def _placement_target_text(structured: _StructuredResume, target: str) -> str:
-    """Return only the declared structured target for one placement action."""
+    """Return only the declared structured target for one placement action.
+
+    A skills-tier SURFACE_VARIANT action's target is the granular
+    ``skills:<group-index>:<item-index>`` location its evidence link resolved
+    to (see ``rachana/operations.py``), not the bare ``"skills"`` every other
+    skills-targeted operation uses. Provenance resolution is already only as
+    precise as "somewhere inside the declared section" -- the bare-``skills``
+    and ``experience:N:bullet:M`` cases below check a whole region too, never
+    a sub-span within it -- so any ``skills`` prefix resolves to the same
+    whole section text.
+    """
     if target == "headline":
         return structured.headline
-    if target in {"summary", "skills"}:
-        return structured.sections.get(target, "")
+    if target == "summary":
+        return structured.sections.get("summary", "")
+    if target == "skills" or target.startswith("skills:"):
+        return structured.sections.get("skills", "")
     match = _EXPERIENCE_TARGET.fullmatch(target)
     if match is None:
         return ""
