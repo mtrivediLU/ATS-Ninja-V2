@@ -163,6 +163,14 @@ def result_to_dict(result: BenchmarkResult) -> dict[str, Any]:
             "before": diagnostics.relevant_terms_per_100_words_before,
             "after": diagnostics.relevant_terms_per_100_words_after,
         },
+        "pramana_coverage": {
+            "before": diagnostics.pramana_coverage_before,
+            "after": diagnostics.pramana_coverage_after,
+        },
+        "jd_surface_adoption": {
+            "before": diagnostics.jd_surface_adoption_before,
+            "after": diagnostics.jd_surface_adoption_after,
+        },
         "proposals": [
             {
                 "id": item.id,
@@ -171,6 +179,9 @@ def result_to_dict(result: BenchmarkResult) -> dict[str, Any]:
                 "status": item.status.value,
                 "gate_code": item.gate_code.value if item.gate_code is not None else None,
                 "score_delta": item.score_delta,
+                "coverage_delta": item.coverage_delta,
+                "adoption_delta": item.adoption_delta,
+                "density_delta": item.density_delta,
             }
             for item in diagnostics.proposals
         ],
@@ -194,6 +205,10 @@ def result_to_dict(result: BenchmarkResult) -> dict[str, Any]:
     }
 
 
+def _format_delta(value: float | None) -> str:
+    return f"{value:+.4f}" if value is not None else "-"
+
+
 def format_report(results: tuple[BenchmarkResult, ...]) -> str:
     """Format a stable, human-readable report with all proposal records."""
     lines: list[str] = []
@@ -210,6 +225,10 @@ def format_report(results: tuple[BenchmarkResult, ...]) -> str:
                 "  relevant_terms_per_100_words: "
                 f"{data['relevant_terms_per_100_words']['before']:.3f} -> "
                 f"{data['relevant_terms_per_100_words']['after']:.3f}",
+                "  pramana_coverage: "
+                f"{data['pramana_coverage']['before']:.4f} -> {data['pramana_coverage']['after']:.4f}",
+                "  jd_surface_adoption: "
+                f"{data['jd_surface_adoption']['before']:.4f} -> {data['jd_surface_adoption']['after']:.4f}",
                 f"  sha256 source_projection: {result.source_sha256}",
                 f"  sha256 delivered: {result.delivered_sha256}",
                 f"  counts by operation: {json.dumps(data['counts']['by_operation'], sort_keys=True)}",
@@ -223,7 +242,10 @@ def format_report(results: tuple[BenchmarkResult, ...]) -> str:
                 "    "
                 f"{proposal['id']} | {proposal['operation']} | {proposal['target']} | "
                 f"{proposal['status']} | {proposal['gate_code'] or '-'} | "
-                f"{proposal['score_delta'] if proposal['score_delta'] is not None else '-'}"
+                f"score={proposal['score_delta'] if proposal['score_delta'] is not None else '-'} | "
+                f"coverage={_format_delta(proposal['coverage_delta'])} | "
+                f"adoption={_format_delta(proposal['adoption_delta'])} | "
+                f"density={_format_delta(proposal['density_delta'])}"
             )
         if result.external_scores is not None:
             external = result.external_scores

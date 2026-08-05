@@ -36,6 +36,13 @@ class EngineSettings:
             optimizer. This is a one-release rollout switch; disabling it uses
             the retained PR-21 score-only optimizer while keeping detector
             correctness, grounding, and additive wire-contract fixes in place.
+        optimizer_policy: Selects the placement-action acceptance rule inside
+            the delivery-first optimizer (has no effect when delivery_first is
+            False). ``"pareto"`` accepts a proposal that improves PRAMANA
+            coverage, JD-surface adoption, or density without regressing any
+            of the three beyond tolerance -- see ``generation.optimizer``.
+            ``"legacy"`` is a rollback switch that retains the original
+            strict-PRAMANA-score-improvement rule exactly.
     """
 
     ollama_base_url: str = DEFAULT_OLLAMA_BASE_URL
@@ -46,6 +53,7 @@ class EngineSettings:
     llm_request_timeout: float = 120.0
     tailoring_v2: bool = True
     delivery_first: bool = True
+    optimizer_policy: str = "pareto"
 
     @classmethod
     def from_env(cls, environ: dict[str, str] | None = None) -> EngineSettings:
@@ -61,4 +69,5 @@ class EngineSettings:
             llm_request_timeout=float(env.get("ATS_ENGINE_LLM_TIMEOUT", 120.0)),
             tailoring_v2=(env.get("ENGINE_TAILORING_V2", "1").strip().lower() not in {"0", "false", "no", "off"}),
             delivery_first=(env.get("ENGINE_DELIVERY_FIRST", "1").strip().lower() not in {"0", "false", "no", "off"}),
+            optimizer_policy=(env.get("ENGINE_OPTIMIZER_POLICY", "pareto").strip().lower() or "pareto"),
         )

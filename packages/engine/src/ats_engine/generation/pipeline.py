@@ -157,6 +157,7 @@ def run_pipeline(
                 gate_context=gate_context,
                 accept_generated_prose=prose is not None,
                 delivery_first=resolved_settings.delivery_first,
+                optimizer_policy=resolved_settings.optimizer_policy,
             )
             result.metadata["optimization_trace"] = optimization_trace
             result.metadata["resume_gate_context"] = gate_context
