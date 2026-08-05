@@ -125,6 +125,9 @@ class RequirementTerm:
     # weight an explicit title mention differently from body requirements.
     # Older constructors and serialized artifacts remain valid via the default.
     provenance: tuple[str, ...] = ("body",)
+    # When a structured JD list states a parent concept and named members,
+    # retain that relation without changing legacy consumers.
+    parent_canonical: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

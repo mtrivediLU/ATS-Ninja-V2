@@ -20,6 +20,7 @@ from ats_engine.parsing.vocab import (
     normalize_term,
     vocabulary_entry,
 )
+from ats_engine.pramana.list_parser import ListMember, parse_structured_lists
 
 _REQUIRED_HEADINGS = (
     "required qualifications",
@@ -726,6 +727,7 @@ class _Candidate:
     line_index: int
     start: int
     provenance: str = "body"
+    parent_canonical: str | None = None
 
 
 _TITLE_BLOCKLIST = frozenset(
@@ -979,7 +981,11 @@ def _vocabulary_candidates(section_line: _SectionLine) -> list[_Candidate]:
     matches = _longest_non_overlapping(find_vocabulary_matches(section_line.text))
     title_spans = inline_title_spans(section_line.text)
     return [
-        _candidate_from_entry(match, section_line)
+        _candidate_from_entry(
+            match,
+            section_line,
+            parent_canonical=_parent_canonical_for_span(section_line.text, match.start, match.end),
+        )
         for match in matches
         if not any(begin <= match.start < end for begin, end in title_spans)
     ]
@@ -999,7 +1005,12 @@ def _longest_non_overlapping(matches: list[VocabularyMatch]) -> list[VocabularyM
     return sorted(selected, key=lambda item: (item.start, item.end, item.entry.canonical))
 
 
-def _candidate_from_entry(match: VocabularyMatch, section_line: _SectionLine) -> _Candidate:
+def _candidate_from_entry(
+    match: VocabularyMatch,
+    section_line: _SectionLine,
+    *,
+    parent_canonical: str | None = None,
+) -> _Candidate:
     entry = match.entry
     return _Candidate(
         canonical=entry.canonical,
@@ -1013,7 +1024,31 @@ def _candidate_from_entry(match: VocabularyMatch, section_line: _SectionLine) ->
         jd_evidence_line=section_line.text,
         line_index=section_line.index,
         start=match.start,
+        parent_canonical=parent_canonical,
     )
+
+
+def _parent_canonical_for_span(line: str, start: int, end: int) -> str | None:
+    relations = parse_structured_lists(line)
+    containing = [
+        relation
+        for relation in relations
+        if any(child.start <= start and end <= child.end for child in relation.children)
+    ]
+    if not containing:
+        return None
+    relation = max(containing, key=lambda item: item.parent.start)
+    return _canonical_parent(relation.parent)
+
+
+def _canonical_parent(parent: ListMember) -> str | None:
+    entry = vocabulary_entry(parent.text)
+    if entry is not None:
+        return entry.canonical
+    matches = _longest_non_overlapping(find_vocabulary_matches(parent.text))
+    if matches:
+        return matches[-1].entry.canonical
+    return normalize_term(parent.text) or None
 
 
 def _weight_for(entry: VocabularyEntry, section: str) -> float:
@@ -1046,10 +1081,15 @@ def _mined_candidates(
     # "AI Tooling Platforms" into requirements the user was told he lacked.
     content = section_line.content
     offset = section_line.label_end
-    values: list[tuple[str, int]] = []
-    values.extend((item, start + offset) for item, start in _parenthetical_items(content))
-    values.extend((item, start + offset) for item, start in _cue_phrase_items(content))
-    values.extend((token, match.start() + offset) for token, match in _capitalized_product_tokens_with_matches(content))
+    values: list[tuple[str, int, str | None]] = []
+    for relation in parse_structured_lists(content):
+        values.append((relation.parent.text, relation.parent.start + offset, None))
+        parent_canonical = _canonical_parent(relation.parent)
+        values.extend((child.text, child.start + offset, parent_canonical or None) for child in relation.children)
+    values.extend((item, start + offset, None) for item, start in _cue_phrase_items(content))
+    values.extend(
+        (token, match.start() + offset, None) for token, match in _capitalized_product_tokens_with_matches(content)
+    )
 
     # Standards are admitted from the whole line: a label such as
     # "Accessibility: Section 508" still names a real, checkable standard.
@@ -1079,7 +1119,7 @@ def _mined_candidates(
         )
 
     title_spans = inline_title_spans(section_line.text)
-    for raw_value, start in values:
+    for raw_value, start, parent_canonical in values:
         # A mined token lying inside an inline title announcement is the name of
         # the vacancy, not a requirement.
         if any(begin <= start < end for begin, end in title_spans):
@@ -1109,6 +1149,7 @@ def _mined_candidates(
                 jd_evidence_line=section_line.text,
                 line_index=section_line.index,
                 start=start,
+                parent_canonical=parent_canonical,
             )
         )
     return candidates
@@ -1126,30 +1167,6 @@ def inline_title_spans(line: str) -> list[tuple[int, int]]:
 def _standard_items(line: str) -> list[tuple[str, int]]:
     """Named standards and versioned frameworks stated anywhere in *line*."""
     return [(match.group(0).strip(), match.start()) for match in _STANDARD_RE.finditer(line)]
-
-
-def _parenthetical_items(line: str) -> list[tuple[str, int]]:
-    """Expand a parenthetical enumeration into its individual members.
-
-    ``Python (BeautifulSoup, Scrapy, Selenium, or Playwright)`` names four
-    distinct tools, and a candidate who knows Scrapy but not Playwright matches
-    the posting differently from one who knows neither. The leading
-    conjunction of the final member is stripped so ``or Playwright`` becomes
-    ``Playwright``.
-    """
-
-    items: list[tuple[str, int]] = []
-    for match in re.finditer(r"\(([^()]{2,180})\)", line):
-        content = match.group(1)
-        offset = match.start(1)
-        for item_match in re.finditer(r"[^,;/]+", content):
-            raw = item_match.group(0)
-            conjunction = re.match(r"\s*(?:or|and)\s+", raw, flags=re.IGNORECASE)
-            start = item_match.start() + (conjunction.end() if conjunction else 0)
-            item = raw[conjunction.end() :].strip() if conjunction else raw.strip()
-            if item:
-                items.append((item, offset + start))
-    return items
 
 
 def _cue_phrase_items(line: str) -> list[tuple[str, int]]:
@@ -1275,6 +1292,17 @@ def _to_requirements(candidates: list[_Candidate], jd_text: str) -> list[Require
         )
         for candidate in capped
     }
+    parent_by_canonical = {
+        candidate.canonical: next(
+            (
+                item.parent_canonical
+                for item in candidates
+                if item.canonical == candidate.canonical and item.parent_canonical
+            ),
+            None,
+        )
+        for candidate in capped
+    }
     return [
         RequirementTerm(
             canonical=candidate.canonical,
@@ -1288,6 +1316,7 @@ def _to_requirements(candidates: list[_Candidate], jd_text: str) -> list[Require
             jd_evidence_line=candidate.jd_evidence_line,
             jd_occurrences=_count_jd_occurrences(jd_text, candidate),
             provenance=provenance_by_canonical[candidate.canonical],
+            parent_canonical=parent_by_canonical[candidate.canonical],
         )
         for candidate in capped
     ]
