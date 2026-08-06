@@ -42,6 +42,10 @@ class GateCode(StrEnum):
     QUALITY_SCORE_REGRESSION = "quality_score_regression"
     TRUTH_GATE_REJECTION = "truth_gate_rejection"
     RUN_CONCLUDED_BEFORE_EVALUATION = "run_concluded_before_evaluation"
+    # SURFACE_VARIANT's three fail-closed causes (rachana.operations).
+    SURFACE_VARIANT_SUBSTRING_HAZARD = "surface_variant_substring_hazard"
+    SURFACE_VARIANT_FACT_RISK = "surface_variant_fact_risk"
+    SURFACE_VARIANT_TEXT_DRIFTED = "surface_variant_text_drifted"
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +69,20 @@ class ProposalRecord:
     score_delta: float | None
     batch_index: int
     iteration: int
+    # Additive (Step 3): the pareto policy's own objective deltas for this
+    # proposal, in ats_engine.rachana.objectives.ScoreVector units. Plain
+    # floats rather than a ScoreVector -- that module imports _word_count
+    # from here, so importing it back would be circular. None on every
+    # proposal never evaluated under the pareto policy (legacy runs, or a
+    # proposal a batch never reached), never a fabricated zero.
+    coverage_delta: float | None = None
+    adoption_delta: float | None = None
+    density_delta: float | None = None
+    # Additive (Step 3 follow-up): placement_reinforcement's own delta, kept
+    # alongside the three above rather than folded in, for the same reason
+    # they are three separate fields rather than one -- a reviewer auditing
+    # why a proposal was accepted needs to see which objective actually moved.
+    placement_delta: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +102,20 @@ class RunDiagnostics:
     iterations: int
     source_projection_sha256: str = ""
     delivered_sha256: str = ""
+    # Additive (Step 3): run-level before/after for the pareto policy's other
+    # two objectives (density's before/after already exists above as
+    # relevant_terms_per_100_words_*). 0.0 on a legacy run or a persisted kit
+    # from before this field existed -- indistinguishable from "measured and
+    # flat," which is why these are reported alongside, not instead of, the
+    # per-proposal deltas above.
+    pramana_coverage_before: float = 0.0
+    pramana_coverage_after: float = 0.0
+    jd_surface_adoption_before: float = 0.0
+    jd_surface_adoption_after: float = 0.0
+    # Additive (Step 3 follow-up): run-level before/after for the fourth
+    # pareto objective, placement_reinforcement (see ats_engine.rachana.objectives).
+    placement_reinforcement_before: float = 0.0
+    placement_reinforcement_after: float = 0.0
 
     @classmethod
     def empty(cls) -> RunDiagnostics:

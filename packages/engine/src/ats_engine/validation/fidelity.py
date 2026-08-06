@@ -471,8 +471,10 @@ def bullet_fidelity_findings(
             )
         )
 
+    evidence_vocabulary = _vocabulary_alias_canonicals(evidence_text)
     for entity in extract_named_entities(candidate):
-        if not _contains_fact(evidence_text, entity):
+        entity_vocabulary = _vocabulary_alias_canonicals(entity)
+        if not _contains_fact(evidence_text, entity) and not entity_vocabulary & evidence_vocabulary:
             findings.append(
                 _finding(
                     FIDELITY_UNSUPPORTED_NAMED_ENTITY,
@@ -761,6 +763,23 @@ def _protected_vocabulary_facts(text: str) -> tuple[tuple[str, str], ...]:
 
 def _protected_vocabulary_canonicals(text: str) -> set[str]:
     return {canonical for canonical, _surface in _protected_vocabulary_facts(text)}
+
+
+def _vocabulary_alias_canonicals(text: str) -> set[str]:
+    """Every vocabulary canonical with a registered surface anywhere in *text*.
+
+    Unlike :func:`_protected_vocabulary_facts` (tool/methodology kinds only,
+    used for the *missing*-content direction), this covers every vocabulary
+    kind. The *unsupported*-entity check must recognize a candidate's own
+    alias spelling of any JD-relevant term the vocabulary knows about --
+    ``ReactJS``/``React``, ``front-end``/``frontend``, ``GenAI``/``Generative
+    AI`` -- not only the technology/methodology subset. This is exact
+    alias identity via the vocabulary registry, never a fuzzy or semantic
+    match: a term absent from the registry (an employer, a metric, a
+    fabricated skill with no registered alias) falls straight back to the
+    literal ``_contains_fact`` check, unaffected.
+    """
+    return {match.entry.canonical for match in find_vocabulary_matches(text or "")}
 
 
 def _responsibility_facts(text: str) -> tuple[tuple[str, str], ...]:

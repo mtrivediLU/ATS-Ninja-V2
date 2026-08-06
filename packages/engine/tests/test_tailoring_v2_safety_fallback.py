@@ -14,7 +14,7 @@ from ats_engine.kit.contract import DocumentState
 from ats_engine.models import Mode, PlanDecision
 from ats_engine.parsing.job_description import parse_jd
 from ats_engine.parsing.resume import build_profile
-from ats_engine.scoring.ats_v2 import AtsScoreV2
+from ats_engine.pramana.contract import PramanaScore
 
 _ZERO_REQUIREMENT_RESUME = """Avery Doe
 PROFESSIONAL EXPERIENCE
@@ -113,13 +113,24 @@ Required qualifications:
         )
     ]
 
-    scores = iter(
-        (
-            AtsScoreV2(score=80.0, base_score=80.0, density_penalty=0.0, placement_bonus=0.0),
-            AtsScoreV2(score=79.0, base_score=79.0, density_penalty=0.0, placement_bonus=0.0),
-        )
+    # optimize()'s own current_score now goes through _evaluate_plan, which
+    # calls PRAMANA's score_resume directly (Step 3, so it can also derive
+    # the pareto objective vector from the same pass) rather than through the
+    # score_resume_v2 shim this used to patch. original is still computed via
+    # score_resume_v2, which holds its own separate score_resume reference in
+    # scoring/ats_v2.py and is deliberately left genuine: a real resume/JD
+    # pair's real score is comfortably above the single low value forced here.
+    low_score = PramanaScore(
+        score=1.0,
+        keyword_score=1.0,
+        title_alignment=0.0,
+        placement_bonus=0.0,
+        stuffing_penalty=0.0,
+        confidence="high",
+        required_coverage=1.0,
+        preferred_coverage=1.0,
     )
-    monkeypatch.setattr(optimizer_module, "score_resume_v2", lambda *args, **kwargs: next(scores))
+    monkeypatch.setattr(optimizer_module, "score_resume", lambda *args, **kwargs: low_score)
 
     plan, trace = optimize(profile, jd_profile, requirements, links, unsafe_base_plan)
 

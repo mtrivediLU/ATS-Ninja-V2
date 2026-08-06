@@ -57,6 +57,48 @@ def test_named_entities_respect_punctuation_boundaries_and_shared_canonicalizer(
     assert bullet_fidelity_findings("CI/CD & Reliability", "CI/CD & Reliability") == ()
 
 
+def test_unsupported_named_entity_check_recognizes_vocabulary_alias_identity() -> None:
+    """A candidate's own spelling of a term the source already proves is not
+    an "unsupported named entity" merely because it differs from the
+    employer's exact surface. This is exactly the gap SURFACE_VARIANT's
+    literal substitution exposes (see ``rachana/operations.py``): PRAMANA
+    already credits "ReactJS" as "React" via the vocabulary; the fidelity
+    gate must agree, not veto the substitution as fabrication.
+    """
+    source = "Built dashboards using React for the internal tools team."
+    candidate = "Built dashboards using ReactJS for the internal tools team."
+
+    findings = bullet_fidelity_findings(source, candidate)
+
+    assert not any(finding.code == FIDELITY_UNSUPPORTED_NAMED_ENTITY for finding in findings)
+
+
+def test_unsupported_named_entity_check_still_rejects_an_unrelated_product() -> None:
+    """Alias identity only: a distinct vocabulary entry is never treated as
+    support for a different one, even in the same product family."""
+    source = "Built dashboards using React for the internal tools team."
+    candidate = "Built mobile apps using ReactNative for the internal tools team."
+
+    findings = bullet_fidelity_findings(source, candidate)
+
+    unsupported = next(finding for finding in findings if finding.code == FIDELITY_UNSUPPORTED_NAMED_ENTITY)
+    assert unsupported.fact == "ReactNative"
+
+
+def test_unsupported_named_entity_check_still_rejects_an_unproven_vocabulary_term() -> None:
+    """Being *in* the vocabulary is not enough. "MongoDB" is a registered
+    entry, but nothing in this source proves it via any of its own
+    registered aliases -- the alias-identity fix must not be mistaken for "any
+    vocabulary word is automatically supported"."""
+    source = "Built dashboards using React for the internal tools team."
+    candidate = "Built dashboards using MongoDB for the internal tools team."
+
+    findings = bullet_fidelity_findings(source, candidate)
+
+    unsupported = next(finding for finding in findings if finding.code == FIDELITY_UNSUPPORTED_NAMED_ENTITY)
+    assert unsupported.fact == "MongoDB"
+
+
 def test_raw_bullet_retention_scans_experience_only() -> None:
     source = """Professional Experience
 - Built billing reporting for finance users.

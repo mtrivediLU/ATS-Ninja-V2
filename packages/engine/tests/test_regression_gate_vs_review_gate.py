@@ -22,7 +22,7 @@ from __future__ import annotations
 import ats_engine.generation.optimizer as optimizer_module
 from ats_engine.kit.contract import DocumentState, KitState
 from ats_engine.kit.orchestrator import generate_application_kit
-from ats_engine.scoring.ats_v2 import AtsScoreV2
+from ats_engine.pramana.contract import PramanaScore
 
 _RESUME = """Avery Doe
 TECHNICAL SKILLS
@@ -52,13 +52,22 @@ def test_a_corrupted_source_projection_is_withheld_not_delivered_with_a_warning(
     ``completed``, and the resume artifact carries no text/document -- it is
     withheld, not delivered quietly with a warning attached.
     """
-    scores = iter(
-        (
-            AtsScoreV2(score=80.0, base_score=80.0, density_penalty=0.0, placement_bonus=0.0),
-            AtsScoreV2(score=79.0, base_score=79.0, density_penalty=0.0, placement_bonus=0.0),
-        )
+    # current_score now goes through _evaluate_plan's direct score_resume call
+    # (Step 3), not the score_resume_v2 shim this used to patch; original is
+    # computed via score_resume_v2's own separate score_resume reference and
+    # is deliberately left genuine -- comfortably above the low value forced
+    # here, so the "source scored below raw resume" comparison still fires.
+    low_score = PramanaScore(
+        score=1.0,
+        keyword_score=1.0,
+        title_alignment=0.0,
+        placement_bonus=0.0,
+        stuffing_penalty=0.0,
+        confidence="high",
+        required_coverage=1.0,
+        preferred_coverage=1.0,
     )
-    monkeypatch.setattr(optimizer_module, "score_resume_v2", lambda *args, **kwargs: next(scores))
+    monkeypatch.setattr(optimizer_module, "score_resume", lambda *args, **kwargs: low_score)
 
     kit = generate_application_kit(
         resume_text=_RESUME,

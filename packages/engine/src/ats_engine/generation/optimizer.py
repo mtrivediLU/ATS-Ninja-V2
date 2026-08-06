@@ -24,8 +24,17 @@ from ats_engine.models import (
     ResumePlan,
 )
 from ats_engine.parsing.vocab import normalize_term
-from ats_engine.rachana.preservation import PreservationGuard, build_guard
-from ats_engine.scoring.ats_v2 import AtsScoreV2, score_resume_v2
+from ats_engine.pramana.scoring import score_resume
+from ats_engine.rachana.objectives import ScoreVector, relevant_terms_per_100_words, score_vector
+from ats_engine.rachana.operations import (
+    SurfaceVariantMatch,
+    SurfaceVariantRejection,
+    SurfaceVariantResult,
+    find_surface_variant,
+    substitute_surface_variant,
+)
+from ats_engine.rachana.preservation import PreservationGuard, build_guard, count_occurrences
+from ats_engine.scoring.ats_v2 import AtsScoreV2, project_ats_v2, score_resume_v2
 from ats_engine.validation.calibration import (
     CalibrationProfile,
     apply_calibration,
@@ -46,6 +55,14 @@ from ats_engine.validation.stuffing import (
 
 _BATCH_SIZE = 8
 _MAX_ITERATIONS = 4
+# The legacy policy's plateau break (a PRAMANA-score stall) does not apply
+# under pareto (see the loop below), so the iteration cap becomes the only
+# remaining bound on how many actions get a chance to run. Doubled rather
+# than left at the legacy value so that removing the plateau break does not
+# quietly turn the cap into a new, tighter, unintended ceiling: at
+# _BATCH_SIZE=8 this covers up to 64 planner-emitted actions instead of 32,
+# comfortably above every real fixture measured for this change (21-27).
+_PARETO_MAX_ITERATIONS = 8
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +110,8 @@ class _ProposalRecorder:
         score_before: float | None,
         score_after: float | None,
         iteration: int,
+        objectives_before: ScoreVector | None = None,
+        objectives_after: ScoreVector | None = None,
     ) -> None:
         self._set(
             action,
@@ -102,6 +121,8 @@ class _ProposalRecorder:
             score_before=score_before,
             score_after=score_after,
             iteration=iteration,
+            objectives_before=objectives_before,
+            objectives_after=objectives_after,
         )
 
     def accept(
@@ -111,6 +132,8 @@ class _ProposalRecorder:
         score_before: float,
         score_after: float,
         iteration: int,
+        objectives_before: ScoreVector | None = None,
+        objectives_after: ScoreVector | None = None,
     ) -> None:
         for action in actions:
             self._set(
@@ -121,6 +144,8 @@ class _ProposalRecorder:
                 score_before=score_before,
                 score_after=score_after,
                 iteration=iteration,
+                objectives_before=objectives_before,
+                objectives_after=objectives_after,
             )
 
     def schedule(self, actions: Iterable[PlacementAction], *, batch_index: int, iteration: int) -> None:
@@ -172,6 +197,8 @@ class _ProposalRecorder:
         score_before: float | None,
         score_after: float | None,
         iteration: int,
+        objectives_before: ScoreVector | None = None,
+        objectives_after: ScoreVector | None = None,
     ) -> None:
         record_id = self.ids_by_label[_action_label(action)]
         record = self.records[record_id]
@@ -181,6 +208,17 @@ class _ProposalRecorder:
         if record.status is not ProposalStatus.NOT_EVALUATED:
             return
         delta = score_after - score_before if score_before is not None and score_after is not None else None
+        coverage_delta: float | None
+        adoption_delta: float | None
+        density_delta: float | None
+        placement_delta: float | None
+        if objectives_before is not None and objectives_after is not None:
+            coverage_delta = objectives_after.pramana_coverage - objectives_before.pramana_coverage
+            adoption_delta = objectives_after.jd_surface_adoption - objectives_before.jd_surface_adoption
+            density_delta = objectives_after.density - objectives_before.density
+            placement_delta = objectives_after.placement_reinforcement - objectives_before.placement_reinforcement
+        else:
+            coverage_delta = adoption_delta = density_delta = placement_delta = None
         self.records[record_id] = replace(
             record,
             status=status,
@@ -190,6 +228,10 @@ class _ProposalRecorder:
             score_after=score_after,
             score_delta=delta,
             iteration=iteration,
+            coverage_delta=coverage_delta,
+            adoption_delta=adoption_delta,
+            density_delta=density_delta,
+            placement_delta=placement_delta,
         )
 
 
@@ -203,14 +245,21 @@ def optimize(
     gate_context: ResumeGateContext | None = None,
     accept_generated_prose: bool = False,
     delivery_first: bool = True,
+    optimizer_policy: str = "pareto",
 ) -> tuple[ResumePlan, OptimizationTrace]:
     """Apply safe quality and score actions without ever regressing ATS v2.
 
     Candidate-authored content is the delivery floor. Quality-only changes
     (headline, summary, individually validated provider rewrites) may be
-    accepted at an equal score; keyword-placement actions must strictly improve
-    the authoritative ATS v2 score. Failed placement batches are bisected so one
-    unsafe proposal cannot discard unrelated safe work.
+    accepted at an equal score regardless of policy -- quality proposals are
+    about prose, not keyword placement, and are out of the pareto policy's
+    scope. Keyword-placement actions are gated by ``optimizer_policy``:
+    ``"pareto"`` (the default) accepts a proposal that improves PRAMANA
+    coverage, JD-surface adoption, or density without regressing any of the
+    three beyond tolerance (see ``_pareto_verdict``); ``"legacy"`` requires a
+    strict PRAMANA score improvement, exactly as before this policy existed.
+    Failed placement batches are bisected either way so one unsafe proposal
+    cannot discard unrelated safe work.
     """
     if not delivery_first:
         return _optimize_pr21_compat(
@@ -263,7 +312,14 @@ def optimize(
 
     accepted: list[PlacementAction] = []
     current_plan = source_plan
-    current_score = _score_plan(current_plan, source, requirements, links, accepted)
+    current_evaluation = _evaluate_plan(current_plan, source, requirements, links, accepted)
+    current_score = current_evaluation.ats_score
+    current_objectives = current_evaluation.objectives
+    # A stable snapshot for _finalize_diagnostics: every rollback below
+    # delivers source_plan, whose own objectives never change, regardless of
+    # what current_objectives is reassigned to while the loop is exploring
+    # (and later discarding) placement batches.
+    initial_objectives = current_objectives
     source_score = current_score
     accepted_quality: list[str] = []
 
@@ -280,7 +336,15 @@ def optimize(
             "The structured source projection did not preserve the original ATS score; "
             "review the extracted resume before delivery."
         )
-        _finalize_diagnostics(trace, recorder, source_plan, source_plan, requirements)
+        _finalize_diagnostics(
+            trace,
+            recorder,
+            source_plan,
+            source_plan,
+            requirements,
+            initial_objectives=initial_objectives,
+            final_objectives=initial_objectives,
+        )
         return source_plan, trace
 
     # Deterministic quality proposals preserve the source summary and use only
@@ -352,8 +416,9 @@ def optimize(
             accepted_quality=accepted_quality,
         )
 
+    max_iterations = _PARETO_MAX_ITERATIONS if optimizer_policy == "pareto" else _MAX_ITERATIONS
     for offset in range(0, len(actions), _BATCH_SIZE):
-        if trace.iterations >= _MAX_ITERATIONS:
+        if trace.iterations >= max_iterations:
             break
         batch = actions[offset : offset + _BATCH_SIZE]
         trace.iterations += 1
@@ -370,50 +435,78 @@ def optimize(
             guard,
         )
         trace.rejected_actions.extend(rejected)
-        candidate_score = _score_plan(candidate_plan, source, requirements, links, candidate_actions)
-        if candidate_score.score > current_score.score:
-            newly_accepted = candidate_actions[len(accepted) :]
+        # A bisected-out action never reaches the score/pareto comparison
+        # below at all -- _accept_safe_actions already rejected it on hard-
+        # gate grounds. Recording that here, unconditionally, is what stops
+        # it from falling through to finalize_unevaluated() and being
+        # mislabeled "run concluded before evaluation" whenever the *rest* of
+        # the batch goes on to be accepted (see the crowdplat/CGI proof in
+        # test_bisected_out_actions_are_never_mislabeled_as_unevaluated).
+        bisected_out = {rejection.action: rejection for rejection in rejected}
+        for action in batch:
+            rejection = bisected_out.get(_action_label(action))
+            if rejection is not None:
+                recorder.reject(
+                    action,
+                    code=rejection.code or GateCode.VALIDATION_FINDING,
+                    detail=rejection.reason,
+                    score_before=current_score.score,
+                    score_after=None,
+                    iteration=trace.iterations,
+                )
+        survivors = candidate_actions[len(accepted) :]
+        candidate_evaluation = _evaluate_plan(candidate_plan, source, requirements, links, candidate_actions)
+        candidate_score = candidate_evaluation.ats_score
+        if optimizer_policy == "pareto":
+            accept_batch = _pareto_verdict(current_objectives, candidate_evaluation.objectives)
+            reject_reason = "no objective (PRAMANA coverage, JD-surface adoption, density) improved beyond tolerance"
+        else:
+            accept_batch = candidate_score.score > current_score.score
+            reject_reason = "score did not strictly improve"
+        if accept_batch:
             recorder.accept(
-                newly_accepted,
+                survivors,
                 score_before=current_score.score,
                 score_after=candidate_score.score,
                 iteration=trace.iterations,
+                objectives_before=current_objectives,
+                objectives_after=candidate_evaluation.objectives,
             )
             current_plan = candidate_plan
             accepted = candidate_actions
             current_score = candidate_score
+            current_objectives = candidate_evaluation.objectives
             trace.score_path.append(current_score.score)
-            trace.accepted_actions.extend(_action_label(action) for action in newly_accepted)
+            trace.accepted_actions.extend(_action_label(action) for action in survivors)
         else:
-            rejected_by_label = {rejection.action: rejection for rejection in rejected}
-            for action in batch:
-                rejection = rejected_by_label.get(_action_label(action))
-                if rejection is not None:
-                    recorder.reject(
-                        action,
-                        code=rejection.code or GateCode.VALIDATION_FINDING,
-                        detail=rejection.reason,
-                        score_before=current_score.score,
-                        score_after=candidate_score.score,
-                        iteration=trace.iterations,
-                    )
-                    continue
+            for action in survivors:
                 trace.rejected_actions.append(
                     _rejection(
                         action=_action_label(action),
-                        reason="score did not strictly improve",
+                        reason=reject_reason,
                         code=GateCode.SCORE_DID_NOT_STRICTLY_IMPROVE,
                     )
                 )
                 recorder.reject(
                     action,
                     code=GateCode.SCORE_DID_NOT_STRICTLY_IMPROVE,
-                    detail="score did not strictly improve",
+                    detail=reject_reason,
                     score_before=current_score.score,
                     score_after=candidate_score.score,
                     iteration=trace.iterations,
+                    objectives_before=current_objectives,
+                    objectives_after=candidate_evaluation.objectives,
                 )
-        if len(trace.score_path) >= 2 and trace.score_path[-1] - trace.score_path[-2] < 0.5:
+        # A PRAMANA plateau does not mean there is no work left under pareto:
+        # a batch can legitimately move density or JD-surface adoption while
+        # leaving PRAMANA's own score untouched (that is the point of
+        # SURFACE_VARIANT). Only the legacy scalar policy treats a stalled
+        # score as a reason to stop early.
+        if (
+            optimizer_policy == "legacy"
+            and len(trace.score_path) >= 2
+            and trace.score_path[-1] - trace.score_path[-2] < 0.5
+        ):
             break
 
     # The accepted-action expression above intentionally records exactly the
@@ -441,7 +534,15 @@ def optimize(
             reason="No safe evidence-backed improvement was accepted; delivered the source projection.",
         )
         recorder.rollback(detail=trace.fallback_reason)
-        _finalize_diagnostics(trace, recorder, source_plan, source_plan, requirements)
+        _finalize_diagnostics(
+            trace,
+            recorder,
+            source_plan,
+            source_plan,
+            requirements,
+            initial_objectives=initial_objectives,
+            final_objectives=initial_objectives,
+        )
         return source_plan, trace
 
     # A delivered document must never state a JD-relevant term less often than
@@ -464,7 +565,15 @@ def optimize(
             reason="Tailoring would have weakened a job-relevant term; delivered the protected source projection.",
         )
         recorder.rollback(detail=trace.fallback_reason)
-        _finalize_diagnostics(trace, recorder, source_plan, source_plan, requirements)
+        _finalize_diagnostics(
+            trace,
+            recorder,
+            source_plan,
+            source_plan,
+            requirements,
+            initial_objectives=initial_objectives,
+            final_objectives=initial_objectives,
+        )
         return source_plan, trace
 
     final_findings = validate_resume_plan_findings(
@@ -490,7 +599,15 @@ def optimize(
         )
         trace.calibration_suppressed = _calibrated_codes(source_findings)
         recorder.rollback(detail=trace.fallback_reason)
-        _finalize_diagnostics(trace, recorder, source_plan, source_plan, requirements)
+        _finalize_diagnostics(
+            trace,
+            recorder,
+            source_plan,
+            source_plan,
+            requirements,
+            initial_objectives=initial_objectives,
+            final_objectives=initial_objectives,
+        )
         return source_plan, trace
 
     trace.accepted_actions = [*accepted_quality, *[_action_label(action) for action in accepted]]
@@ -510,6 +627,8 @@ def optimize(
         current_plan,
         requirements,
         precomputed_delivered_text=current_plan_text,
+        initial_objectives=initial_objectives,
+        final_objectives=current_objectives,
     )
     return current_plan, trace
 
@@ -822,7 +941,7 @@ def validate_resume_plan_findings(
     stuffing = apply_calibration(
         validate_resume_stuffing_findings(
             actions=action_list,
-            summary=plan.summary,
+            summary=_without_targeting(plan.summary, plan.jd_profile),
             bullets=[bullet for experience in plan.experience for bullet in experience.bullets],
             skill_groups=plan.skill_groups,
             requirements=requirements,
@@ -958,7 +1077,7 @@ def _accept_safe_actions(
     if guard is None:
         guard = build_guard(source, requirements)
     candidate_actions = [*accepted, *pending]
-    candidate = _apply_actions(plan, pending, profile)
+    candidate, surface_variant_failures = _apply_actions(plan, pending, profile)
     findings = validate_resume_plan_findings(
         candidate,
         profile,
@@ -971,10 +1090,23 @@ def _accept_safe_actions(
     # already has a blocker is rejected regardless, so only pay for the term
     # check when the batch would otherwise be accepted.
     regressions = [] if blockers else guard.regressions(generate_resume_text(candidate))
-    if not blockers and not regressions:
+    if not blockers and not regressions and not surface_variant_failures:
         return candidate, candidate_actions, []
     if len(pending) == 1:
         action = pending[0]
+        if surface_variant_failures:
+            failure = surface_variant_failures[0]
+            return (
+                plan,
+                accepted,
+                [
+                    _rejection(
+                        action=_action_label(action),
+                        reason=failure.rejection.detail,
+                        code=_surface_variant_gate_code(failure.rejection.reason),
+                    )
+                ],
+            )
         reason = _finding_reason(blockers) if blockers else regressions[0].describe()
         return (
             plan,
@@ -1013,7 +1145,17 @@ def _accept_safe_actions(
     return right_plan, right_actions, [*left_rejected, *right_rejected]
 
 
-def _apply_actions(base: ResumePlan, actions: list[PlacementAction], profile: Profile) -> ResumePlan:
+@dataclass(frozen=True, slots=True)
+class _SurfaceVariantFailure:
+    """One surface_variant action that failed closed while applying a batch."""
+
+    action: PlacementAction
+    rejection: SurfaceVariantRejection
+
+
+def _apply_actions(
+    base: ResumePlan, actions: list[PlacementAction], profile: Profile
+) -> tuple[ResumePlan, list[_SurfaceVariantFailure]]:
     plan = deepcopy(base)
     summary_links = [action.link for action in actions if action.target == "summary"]
     _apply_summary(plan, summary_links)
@@ -1021,8 +1163,74 @@ def _apply_actions(base: ResumePlan, actions: list[PlacementAction], profile: Pr
     _apply_headline(plan, [action for action in actions if action.target == "headline"])
     # Bullet actions are source-order annotations only. A direct source bullet
     # already carries the phrase; forcing a paraphrase creates fact-loss risk.
+    # surface_variant is the one exception: it substitutes only the
+    # candidate's own already-present spelling, never a paraphrase.
+    failures = _apply_surface_variants(plan, [action for action in actions if action.operation == "surface_variant"])
     plan.placement_actions = list(actions)
-    return plan
+    return plan, failures
+
+
+def _apply_surface_variants(plan: ResumePlan, actions: list[PlacementAction]) -> list[_SurfaceVariantFailure]:
+    failures: list[_SurfaceVariantFailure] = []
+    for action in actions:
+        variant = find_surface_variant(action.link)
+        if variant is None:
+            # Eligibility was re-checked and no longer holds -- for example a
+            # sibling action in this same batch already touched this exact
+            # field. Nothing to substitute is not a hazard.
+            continue
+        outcome = _substitute_in_plan(plan, action.link.resume_location, variant)
+        if isinstance(outcome, SurfaceVariantRejection):
+            failures.append(_SurfaceVariantFailure(action=action, rejection=outcome))
+    return failures
+
+
+def _substitute_in_plan(
+    plan: ResumePlan, location: str, variant: SurfaceVariantMatch
+) -> SurfaceVariantResult | SurfaceVariantRejection | None:
+    """Apply *variant* to whichever field *location* names, or None if unrecognized."""
+    if location == "summary":
+        outcome = substitute_surface_variant(plan.summary, variant)
+        if isinstance(outcome, SurfaceVariantResult):
+            plan.summary = outcome.text
+        return outcome
+    if location.startswith("skills"):
+        return _substitute_in_skills(plan, variant)
+    bullet_match = re.match(r"^experience:(\d+):bullet:(\d+)$", location)
+    if bullet_match is not None:
+        exp_index, bullet_index = int(bullet_match.group(1)), int(bullet_match.group(2))
+        if exp_index < len(plan.experience) and bullet_index < len(plan.experience[exp_index].bullets):
+            bullets = plan.experience[exp_index].bullets
+            outcome = substitute_surface_variant(bullets[bullet_index], variant)
+            if isinstance(outcome, SurfaceVariantResult):
+                bullets[bullet_index] = outcome.text
+            return outcome
+    return None
+
+
+def _substitute_in_skills(
+    plan: ResumePlan, variant: SurfaceVariantMatch
+) -> SurfaceVariantResult | SurfaceVariantRejection:
+    for group_index, (heading, items) in enumerate(plan.skill_groups):
+        for item_index, item in enumerate(items):
+            outcome = substitute_surface_variant(item, variant)
+            if isinstance(outcome, SurfaceVariantResult) and outcome.changed:
+                new_items = list(items)
+                new_items[item_index] = outcome.text
+                plan.skill_groups[group_index] = (heading, new_items)
+                return outcome
+    # Nothing changed anywhere. Either some entry already states the JD
+    # surface (idempotent success -- a sibling action, or a prior run,
+    # already did this), or the candidate's own spelling is no longer
+    # present anywhere in skills (fail closed).
+    for _heading, items in plan.skill_groups:
+        for item in items:
+            if count_occurrences(item, variant.target_surface) > 0:
+                return SurfaceVariantResult(text=item, changed=False)
+    return SurfaceVariantRejection(
+        reason="text_drifted",
+        detail="the candidate's own spelling is no longer present in any skills entry",
+    )
 
 
 def _apply_summary(plan: ResumePlan, links: list[EvidenceLink]) -> None:
@@ -1126,6 +1334,33 @@ def _with_targeting(summary: str, jd_profile: JDProfile) -> str:
     if clause.casefold() in normalized_summary:
         return summary.strip()
     return " ".join(part for part in (summary.strip(), clause) if part)
+
+
+def _without_targeting(summary: str, jd_profile: JDProfile) -> str:
+    """The candidate-authored summary text, for anti-stuffing measurement only.
+
+    Inverse of ``_with_targeting``. That clause is JD title context the
+    engine appends -- "never candidate history" per its own docstring -- so
+    counting its terms toward the candidate's own keyword-stuffing budget is a
+    category error, not a real repetition. Left unfixed, a JD title that
+    repeats a term the candidate already uses near the stuffing ceiling (for
+    example a title containing "Java" when the candidate's resume already
+    states "Java" four times) pushes the *engine's own* text over the limit
+    and then blocks every placement proposal because of it -- a defect that
+    exists identically with zero proposals applied, since it is entirely a
+    property of the source projection. The clause stays in the delivered and
+    *scored* summary (that is its intended target-title signal); it is
+    excluded only from the text this anti-stuffing measurement counts.
+    """
+    title = jd_profile.title.strip()
+    if not title or title == "Target Role":
+        return summary
+    clean_title = title.replace("–", "-").replace("—", "-")
+    clause = f"Targeting {clean_title} opportunities."
+    stripped = summary.strip()
+    if stripped.casefold().endswith(clause.casefold()):
+        return stripped[: len(stripped) - len(clause)].strip()
+    return stripped
 
 
 def _v2_plan_decisions(
@@ -1356,13 +1591,12 @@ def _gate_code_for_findings(findings: Iterable[ValidationFinding]) -> GateCode:
     return GateCode.VALIDATION_FINDING
 
 
-def _relevant_terms_per_100_words(text: str, requirements: list[RequirementTerm]) -> float:
-    words = _word_count(text)
-    if words == 0:
-        return 0.0
-    canonicals = {requirement.canonical for requirement in requirements if requirement.canonical}
-    visible = sum(contains_fact(text, canonical) for canonical in canonicals)
-    return visible / (words / 100)
+def _surface_variant_gate_code(reason: str) -> GateCode:
+    return {
+        "substring_hazard": GateCode.SURFACE_VARIANT_SUBSTRING_HAZARD,
+        "fact_risk": GateCode.SURFACE_VARIANT_FACT_RISK,
+        "text_drifted": GateCode.SURFACE_VARIANT_TEXT_DRIFTED,
+    }[reason]
 
 
 def _finalize_diagnostics(
@@ -1373,13 +1607,19 @@ def _finalize_diagnostics(
     requirements: list[RequirementTerm],
     *,
     precomputed_delivered_text: str | None = None,
+    initial_objectives: ScoreVector | None = None,
+    final_objectives: ScoreVector | None = None,
 ) -> None:
     """Persist one and only one terminal record for every planner action.
 
     ``precomputed_delivered_text`` lets a caller that already rendered
     ``delivered_plan`` for an earlier check (for example the final
     preservation-guard pass) hand that text back in instead of paying for a
-    second identical render.
+    second identical render. ``initial_objectives``/``final_objectives`` are
+    None on every path that never evaluates the pareto policy's objectives at
+    all (the legacy policy, ``_optimize_pr21_compat``, or a return before
+    ``optimize()`` computes them) -- callers that have them pass them in
+    rather than this function recomputing a third PRAMANA pass.
     """
     recorder.finalize_unevaluated()
     proposals = tuple(recorder.records.values())
@@ -1412,12 +1652,22 @@ def _finalize_diagnostics(
         source_word_count=_word_count(source_text),
         delivered_word_count=_word_count(delivered_text),
         word_delta=_word_count(delivered_text) - _word_count(source_text),
-        relevant_terms_per_100_words_before=_relevant_terms_per_100_words(source_text, requirements),
-        relevant_terms_per_100_words_after=_relevant_terms_per_100_words(delivered_text, requirements),
+        relevant_terms_per_100_words_before=relevant_terms_per_100_words(source_text, requirements),
+        relevant_terms_per_100_words_after=relevant_terms_per_100_words(delivered_text, requirements),
         score_path=tuple(trace.score_path),
         iterations=trace.iterations,
         source_projection_sha256=hashlib.sha256(source_text.encode("utf-8")).hexdigest(),
         delivered_sha256=hashlib.sha256(delivered_text.encode("utf-8")).hexdigest(),
+        pramana_coverage_before=initial_objectives.pramana_coverage if initial_objectives is not None else 0.0,
+        pramana_coverage_after=final_objectives.pramana_coverage if final_objectives is not None else 0.0,
+        jd_surface_adoption_before=(initial_objectives.jd_surface_adoption if initial_objectives is not None else 0.0),
+        jd_surface_adoption_after=final_objectives.jd_surface_adoption if final_objectives is not None else 0.0,
+        placement_reinforcement_before=(
+            initial_objectives.placement_reinforcement if initial_objectives is not None else 0.0
+        ),
+        placement_reinforcement_after=(
+            final_objectives.placement_reinforcement if final_objectives is not None else 0.0
+        ),
     )
 
 
@@ -1447,6 +1697,40 @@ def _dedupe_findings(findings: Iterable[ValidationFinding]) -> tuple[ValidationF
     return tuple(result)
 
 
+@dataclass(frozen=True, slots=True)
+class _PlanEvaluation:
+    """One PRAMANA pass, projected two ways.
+
+    ``ats_score`` is the legacy scalar gate every existing caller (quality
+    proposals, the final floor checks, ``_optimize_pr21_compat``) still uses.
+    ``objectives`` is the pareto policy's vector. Both are views of the same
+    underlying ``PramanaScore``, computed once, so neither policy pays for a
+    second PRAMANA pass over the same text.
+    """
+
+    ats_score: AtsScoreV2
+    objectives: ScoreVector
+
+
+def _evaluate_plan(
+    plan: ResumePlan,
+    source: str,
+    requirements: list[RequirementTerm],
+    links: list[EvidenceLink],
+    actions: list[PlacementAction],
+) -> _PlanEvaluation:
+    text = generate_resume_text(plan)
+    pramana = score_resume(
+        text,
+        requirements,
+        links,
+        source_resume_text=source,
+        tailored=True,
+        placements=actions,
+    )
+    return _PlanEvaluation(ats_score=project_ats_v2(pramana), objectives=score_vector(text, requirements, pramana))
+
+
 def _score_plan(
     plan: ResumePlan,
     source: str,
@@ -1461,6 +1745,70 @@ def _score_plan(
         source_resume_text=source,
         tailored=True,
         placements=actions,
+    )
+
+
+# Per-objective tolerance for the pareto policy, each sized to that
+# objective's own scale (ats_engine.rachana.objectives.ScoreVector):
+# pramana_coverage and jd_surface_adoption are 0..1 fractions, so 0.01 is a
+# real, integer-count-level change with headroom above floating-point noise.
+# density is measured in relevant terms per 100 words; in a ~1000-word resume
+# one additional distinct canonical becoming visible moves it by roughly 0.1,
+# so 0.02 is well below a real single-term change but well above noise.
+_COVERAGE_TOLERANCE = 0.01
+_ADOPTION_TOLERANCE = 0.01
+_DENSITY_TOLERANCE = 0.02
+# placement_reinforcement is PRAMANA's own placement_bonus, a 0..4 integer
+# count (see ScoreVector.placement_reinforcement). Its values are exact
+# floats with no accumulated rounding, so 0.5 is simply "at least one whole
+# reinforcement," not noise headroom.
+_PLACEMENT_TOLERANCE = 0.5
+
+
+def _pareto_verdict(before: ScoreVector, after: ScoreVector) -> bool:
+    """Whether *after* is acceptable relative to *before* under the pareto policy.
+
+    Order matches the brief: (1) hard gates are checked by the caller before
+    this is ever consulted, and are not repeated here; (2) reject any
+    regression beyond tolerance on any objective; (3) accept only if at least
+    one objective improves beyond its own threshold.
+
+    ``placement_reinforcement`` (see ``ScoreVector``) is a fourth objective
+    alongside the brief's original three. Without it, pareto has no way to
+    see the one thing PRAMANA's own ``_placement_bonus`` rewards -- a term
+    reinforced in both skills and a bullet -- so it rejected every action
+    legacy accepted on that basis alone, as a flat, zero-objective-movement
+    candidate (see the CrowdPlat measurement in the PR description). That is
+    a real, safe, useful signal a scalar acceptance rule can see and a
+    three-objective vector structurally cannot; giving pareto its own view of
+    it is the fix, not a reason to fall back to the scalar rule.
+
+    Point 4 of the brief ("among non-dominated candidates, prefer...") is a
+    tie-break for choosing among *several* alternative candidates for the
+    same slot. The planner never proposes more than one action per
+    requirement per location, so there is no such set to rank here -- this
+    function only ever compares one candidate against its immediate
+    predecessor, and there is nothing to break a tie between. An earlier
+    version of this function used point 4's ordering to accept genuinely flat
+    candidates (no regression, but nothing over threshold either); measured
+    against the real fixtures, that let batches that added words without any
+    real improvement accumulate across iterations until the summary tripped
+    the stuffing budget and the whole run rolled back to the source
+    projection -- worse than rejecting them outright. Flat candidates are
+    rejected, matching point 3's threshold literally.
+    """
+    if (
+        after.pramana_coverage < before.pramana_coverage - _COVERAGE_TOLERANCE
+        or after.jd_surface_adoption < before.jd_surface_adoption - _ADOPTION_TOLERANCE
+        or after.density < before.density - _DENSITY_TOLERANCE
+        or after.placement_reinforcement < before.placement_reinforcement - _PLACEMENT_TOLERANCE
+    ):
+        return False
+    return (
+        after.pramana_coverage > before.pramana_coverage + _COVERAGE_TOLERANCE
+        or after.jd_surface_adoption > before.jd_surface_adoption + _ADOPTION_TOLERANCE
+        or after.density > before.density + _DENSITY_TOLERANCE
+        or after.placement_reinforcement > before.placement_reinforcement + _PLACEMENT_TOLERANCE
     )
 
 

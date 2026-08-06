@@ -4,6 +4,7 @@ import copy
 import json
 import re
 
+from ats_engine.config import EngineSettings
 from ats_engine.kit.change_actions import ChangeAction, apply_change_actions
 from ats_engine.kit.contract import ChangeStatus, ChangeType
 from ats_engine.kit.orchestrator import generate_application_kit
@@ -122,6 +123,16 @@ def test_valid_smaller_cover_change_is_accepted() -> None:
 
 
 def test_resume_completeness_holds_after_actions() -> None:
+    # Pinned to legacy: under the default pareto policy, this fixture's
+    # initial optimize() call accepts a different set of placement actions
+    # (measured directly), and no bullet in that different set ends up both
+    # reversible and genuinely rewritten by _ReviewableBulletProvider. This
+    # test's own claim -- rejecting a rewritten bullet restores the candidate
+    # original losslessly -- is about the reject/restore mechanism, not about
+    # which policy chose to weave that bullet in the first place. Re-verified
+    # after the Step 3 follow-up's fixes: removing this pin still fails here
+    # too (the picked "reversible" bullet is byte-identical original/tailored,
+    # measured directly), so the pin remains required.
     provider = _ReviewableBulletProvider()
     kit = generate_application_kit(
         resume_text=SYNTHETIC_RESUME,
@@ -130,6 +141,7 @@ def test_resume_completeness_holds_after_actions() -> None:
         extraction_provider=provider,
         prose_provider=provider,
         include_resume=True,
+        settings=EngineSettings(optimizer_policy="legacy"),
     )
     # Reject an actually rewritten bullet: the candidate original is restored,
     # so no fact is lost and the action remains a meaningful reversible delta.

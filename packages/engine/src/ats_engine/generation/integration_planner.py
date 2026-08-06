@@ -6,6 +6,7 @@ import re
 
 from ats_engine.generation.diagnostics import ProposalRecord, ProposalStatus, _word_count
 from ats_engine.models import EvidenceLink, JDProfile, PlacementAction, Profile
+from ats_engine.rachana.operations import SurfaceVariantMatch, find_surface_variant
 
 _PLACEABLE_TIERS = frozenset({"A", "B", "C", "cert", "variant"})
 
@@ -49,7 +50,7 @@ def plan_placements(
         headline_links.extend(link for link in supported if _headline_eligible(link) and link not in headline_links)
         headline_links = headline_links[:3]
     for link in headline_links:
-        actions.append(_action(link, "headline", "surface_variant"))
+        actions.append(_action(link, "headline", "headline_mention"))
 
     # A bullet is eligible only where the resolver found direct experience
     # evidence. The optimizer deliberately uses this action only for safe
@@ -63,6 +64,17 @@ def plan_placements(
             continue
         bullet_counts[link.resume_location] = count + 1
         actions.append(_action(link, link.resume_location, "weave_bullet"))
+
+    # SURFACE_VARIANT: the candidate's own authored text (summary, skills, or
+    # a bullet) already states this exact requirement in a vocabulary-
+    # registered spelling other than the employer's -- substitute the
+    # employer's literal surface in place. One evidence link resolves to one
+    # source location, so this naturally proposes at most one substitution
+    # per requirement without an artificial cap.
+    for link in supported:
+        variant = find_surface_variant(link)
+        if variant is not None:
+            actions.append(_surface_variant_action(link, variant))
     return actions
 
 
@@ -103,6 +115,18 @@ def _action(link: EvidenceLink, target: str, operation: str) -> PlacementAction:
         target=target,
         operation=operation,
         rendered_text=term,
+        grounded_by=" | ".join(provenance) if provenance else (link.resume_location or link.resume_span),
+    )
+
+
+def _surface_variant_action(link: EvidenceLink, variant: SurfaceVariantMatch) -> PlacementAction:
+    provenance = link.supporting_locations or link.supporting_spans
+    return PlacementAction(
+        term=variant.target_surface,
+        link=link,
+        target=link.resume_location,
+        operation="surface_variant",
+        rendered_text=variant.target_surface,
         grounded_by=" | ".join(provenance) if provenance else (link.resume_location or link.resume_span),
     )
 
@@ -152,8 +176,17 @@ def _proposal_record(action: PlacementAction) -> ProposalRecord:
 
 
 def _replaced_text(action: PlacementAction) -> str:
-    """Return source text replaced by an in-place operation, if any."""
-    if action.operation in {"surface_variant", "weave_bullet"}:
+    """Return source text replaced by an in-place operation, if any.
+
+    ``surface_variant`` replaces only the candidate's own matched spelling
+    (a word or short phrase), never the whole evidence span it was found in
+    -- re-deriving it here keeps this in one place with the operation itself
+    rather than duplicating the match.
+    """
+    if action.operation == "surface_variant":
+        variant = find_surface_variant(action.link)
+        return variant.original if variant is not None else ""
+    if action.operation == "weave_bullet":
         return action.link.resume_span
     return ""
 

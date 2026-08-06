@@ -1273,6 +1273,18 @@ Languages: SQL
             "rewrite_summary",
             lambda *_args, **_kwargs: floor.summary,
         )
+        # This test's claim is about bisection/truth-gating correctness --
+        # fabricated prose is isolated and rejected without losing unrelated
+        # safe placements -- not about which policy decides "safe". Pinned to
+        # legacy explicitly: under the pareto policy, these specific
+        # placements are already fully credited elsewhere in the rendered
+        # text, so none of PRAMANA coverage/JD-surface adoption/density move
+        # for them -- correctly rejected by pareto's own rule, not a bisection
+        # failure, and orthogonal to what this test is proving. Re-verified
+        # after adding a fourth pareto objective, placement_reinforcement
+        # (Step 3 follow-up): these placements do not create a dual
+        # skills-and-bullet reinforcement either, so the pin is still
+        # required -- confirmed by removing it and observing this test fail.
         _delivered, direct_trace = optimize(
             profile,
             jd_profile,
@@ -1281,6 +1293,7 @@ Languages: SQL
             attack_plan,
             gate_context=build_resume_gate_context(profile, attack_plan),
             accept_generated_prose=True,
+            optimizer_policy="legacy",
         )
 
     assert "ai:summary" not in direct_trace.accepted_actions
@@ -1360,7 +1373,7 @@ def test_accepted_bridge_is_explicit_in_reviewable_plan_decision(
         rendered_text=link.surface_to_use or link.requirement.surface,
         grounded_by=" | ".join(link.supporting_locations),
     )
-    candidate = optimizer_module._apply_actions(source_plan, [action], profile)
+    candidate, _surface_variant_failures = optimizer_module._apply_actions(source_plan, [action], profile)
 
     decisions = optimizer_module._v2_plan_decisions(
         [],
@@ -1403,12 +1416,12 @@ def test_failed_action_batch_bisects_and_keeps_safe_sibling(
         base: ResumePlan,
         actions: list[PlacementAction],
         _profile: Profile,
-    ) -> ResumePlan:
+    ) -> tuple[ResumePlan, list[object]]:
         candidate = deepcopy(base)
         candidate.placement_actions = [*base.placement_actions, *actions]
         if any(action.target == "unsafe" for action in actions):
             candidate.experience[0].company = ""
-        return candidate
+        return candidate, []
 
     monkeypatch.setattr(optimizer_module, "_apply_actions", corrupt_only_unsafe)
     plan, actions, rejected = optimizer_module._accept_safe_actions(
@@ -1448,11 +1461,11 @@ def test_all_unsafe_actions_deliver_validated_source_floor(
         base: ResumePlan,
         actions: list[PlacementAction],
         _profile: Profile,
-    ) -> ResumePlan:
+    ) -> tuple[ResumePlan, list[object]]:
         candidate = deepcopy(base)
         if actions:
             candidate.experience[0].company = ""
-        return candidate
+        return candidate, []
 
     target_title = jd_profile.title.replace("–", "-").replace("—", "-")
     source_summary = f"{profile.source_summary} Targeting {target_title} opportunities."

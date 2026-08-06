@@ -68,10 +68,17 @@ def score_resume_v2(
         jd_title=jd_title,
         parse_confidence=parse_confidence,
     )
-    return _project(result)
+    return project_ats_v2(result)
 
 
-def _project(result: PramanaScore) -> AtsScoreV2:
+def project_ats_v2(result: PramanaScore) -> AtsScoreV2:
+    """Project an already-computed PRAMANA result onto the stable v2 shape.
+
+    Exposed so a caller that needs more than one view of the same PRAMANA
+    pass (for example the optimizer's objective vector alongside its legacy
+    acceptance score) can share one ``score_resume`` call instead of scoring
+    the same text twice.
+    """
     matched: list[str] = []
     missing: list[str] = []
     required_matched = required_total = preferred_matched = preferred_total = 0
@@ -111,4 +118,4 @@ def _project(result: PramanaScore) -> AtsScoreV2:
     )
 
 
-__all__ = ["AtsScoreV2", "score_resume_v2"]
+__all__ = ["AtsScoreV2", "project_ats_v2", "score_resume_v2"]

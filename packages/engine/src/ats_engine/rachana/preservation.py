@@ -31,6 +31,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from ats_engine.models import RequirementTerm
+from ats_engine.parsing.vocab import find_vocabulary_matches, vocabulary_entry
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +106,20 @@ def _best_count(text: str, requirement: RequirementTerm) -> int:
     return max((count_occurrences(text, form) for form in _forms(requirement)), default=0)
 
 
+def _canonical_occurrence_counts(text: str) -> dict[str, int]:
+    """Every vocabulary canonical's occurrence count in *text*, alias-merged.
+
+    One :func:`find_vocabulary_matches` pass already resolves overlaps by
+    longest-match, so counting its results is a faithful "how many times does
+    this canonical appear, in *any* of its registered spellings" count -- not
+    a per-literal-string count.
+    """
+    counts: dict[str, int] = {}
+    for match in find_vocabulary_matches(text or ""):
+        counts[match.entry.canonical] = counts.get(match.entry.canonical, 0) + 1
+    return counts
+
+
 @dataclass(frozen=True, slots=True)
 class PreservationGuard:
     """A guard with the source side already measured.
@@ -119,12 +134,23 @@ class PreservationGuard:
 
     # term -> (display form, source occurrences), only for terms present in the source.
     _expected: tuple[tuple[str, str, int], ...]
+    # The subset of ``_expected`` keys that are a vocabulary canonical rather
+    # than a literal surface string -- see ``regressions`` below.
+    _vocabulary_backed: frozenset[str] = frozenset()
 
     def regressions(self, candidate_text: str) -> list[TermRegression]:
+        canonical_counts = _canonical_occurrence_counts(candidate_text) if self._vocabulary_backed else {}
         found = [
             TermRegression(term=display, source_count=expected, candidate_count=actual)
             for term, display, expected in self._expected
-            if (actual := count_occurrences(candidate_text, term)) < expected
+            if (
+                actual := (
+                    canonical_counts.get(term, 0)
+                    if term in self._vocabulary_backed
+                    else count_occurrences(candidate_text, term)
+                )
+            )
+            < expected
         ]
         found.sort(key=lambda item: item.term.casefold())
         return found
@@ -139,13 +165,34 @@ def build_guard(source_text: str, requirements: Iterable[RequirementTerm]) -> Pr
     Only terms the source actually contains are retained: a term the candidate
     never had cannot regress, and demanding one would be an instruction to
     fabricate.
+
+    A vocabulary-backed requirement (``ats_engine.parsing.vocab``) is floored
+    on its *canonical's* total alias-merged presence, not on whichever single
+    literal spelling happens to dominate the source. Literal, per-form
+    counting made every SURFACE_VARIANT substitution look like a regression
+    by construction: the source is authored in the candidate's own spelling,
+    so that spelling was always going to be the single most-common literal
+    form, and replacing one occurrence of it with the employer's registered
+    alias would drop that one form's count even though the term's real,
+    canonical presence never changed. A requirement with no vocabulary entry
+    (a custom JD phrase) keeps exactly the prior literal-form behavior.
     """
 
     requirements = list(requirements)
+    canonical_counts = _canonical_occurrence_counts(source_text)
     expected: dict[str, tuple[str, int]] = {}
+    vocabulary_backed: set[str] = set()
 
     for requirement in requirements:
         display = requirement.surface or requirement.canonical
+        entry = vocabulary_entry(requirement.canonical)
+        if entry is not None:
+            count = canonical_counts.get(entry.canonical, 0)
+            if count:
+                key = entry.canonical.casefold()
+                expected[key] = (display, count)
+                vocabulary_backed.add(key)
+            continue
         best_form, best_count = "", 0
         for form in _forms(requirement):
             count = count_occurrences(source_text, form)
@@ -164,7 +211,8 @@ def build_guard(source_text: str, requirements: Iterable[RequirementTerm]) -> Pr
     # The key is casefolded for dedupe, but counting is case-insensitive anyway,
     # so the folded form is a faithful search term.
     return PreservationGuard(
-        _expected=tuple(sorted((term, display, count) for term, (display, count) in expected.items()))
+        _expected=tuple(sorted((term, display, count) for term, (display, count) in expected.items())),
+        _vocabulary_backed=frozenset(vocabulary_backed),
     )
 
 
