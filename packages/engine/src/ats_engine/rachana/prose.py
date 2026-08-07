@@ -198,7 +198,10 @@ class ProseRejection:
 # --------------------------------------------------------------------------- #
 # The evidence graph
 # --------------------------------------------------------------------------- #
-def build_evidence_nodes(profile: Profile) -> tuple[EvidenceNode, ...]:
+def build_evidence_nodes(
+    profile: Profile,
+    delivered: Mapping[str, str] | None = None,
+) -> tuple[EvidenceNode, ...]:
     """Issue the closed set of citable evidence nodes for *profile*.
 
     Ids are derived from the candidate's own structure, not from a counter, so
@@ -206,22 +209,42 @@ def build_evidence_nodes(profile: Profile) -> tuple[EvidenceNode, ...]:
     ``exp3:bullet1`` still means the bullet it meant when it was cached (which
     is why ``EVIDENCE_GRAPH_VERSION`` participates in the cache key).
 
+    ``delivered`` maps a node id to the text that field currently holds in the
+    plan being rewritten, and it is what makes a rewrite citable at all. By the
+    time prose runs, the summary carries a targeting clause and any accepted
+    ``mention_summary`` terms, and a bullet may carry a ``surface_variant``
+    substitution -- content the source profile does not contain. Every one of
+    those additions was already admitted by the placement provenance gate and
+    ``validate_resume_plan_findings`` before it reached the plan, so it *is*
+    approved evidence; without it a rewrite could never cite the very text it is
+    re-expressing, and every proposal would be refused for asserting terms its
+    own field already states. Measured on the CGI fixture, that is exactly what
+    happened: the rewrite was refused for "Angular", a term the delivered summary
+    already stated.
+
+    Nothing widens here. The set of citable *ids* is unchanged, and a rewrite
+    still cannot introduce anything absent from every node.
+
     Tier-C ("working knowledge only") skills are issued as nodes but marked, so
     :func:`validate_proposal` can refuse to let one become claimed substance --
     the same rule the deterministic summary path has always applied.
     """
+    current = dict(delivered or {})
     nodes: list[EvidenceNode] = []
-    if profile.source_summary.strip():
-        nodes.append(EvidenceNode(node_id="summary", kind="summary", text=profile.source_summary.strip()))
+    summary_text = (current.get("summary") or profile.source_summary).strip()
+    if summary_text:
+        nodes.append(EvidenceNode(node_id="summary", kind="summary", text=summary_text))
     for role_index, experience in enumerate(profile.experiences):
         for bullet_index, bullet in enumerate(experience.bullets):
-            if not bullet.strip():
+            node_id = f"exp{role_index}:bullet{bullet_index}"
+            text = (current.get(node_id) or bullet).strip()
+            if not text:
                 continue
             nodes.append(
                 EvidenceNode(
-                    node_id=f"exp{role_index}:bullet{bullet_index}",
+                    node_id=node_id,
                     kind="bullet",
-                    text=bullet.strip(),
+                    text=text,
                     employer=experience.company.strip(),
                     role_index=role_index,
                 )
