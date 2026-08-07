@@ -28,7 +28,7 @@ for a stated reason:
 
 Bullet REORDER is implemented (``rachana.reordering``) but not applied; see
 ``generation.optimizer._apply_reordering`` for the measured reason.
-
+"""
 
 from __future__ import annotations
 
@@ -42,9 +42,7 @@ from ats_engine.models import Mode
 
 FIXTURES = Path(__file__).parent / "fixtures" / "real_extraction"
 
-# Captured from this branch after the Step 3 follow-up (CGI stuffing fix,
-# CrowdPlat placement_reinforcement objective, fidelity/preservation/provenance
-# alias-awareness fixes).
+# Recaptured from this branch; see the module docstring for what moved and why.
 GOLDENS = {
     "cgi_fullstack_java_angular": {
         "actions": [

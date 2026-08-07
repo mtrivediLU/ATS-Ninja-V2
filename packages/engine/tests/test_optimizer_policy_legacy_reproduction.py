@@ -1,4 +1,12 @@
-"""``optimizer_policy="legacy"`` keeps its own decision rule unchanged.
+"""Legacy policy reproduction.
+
+Note on ``weave_bullet``: those labels were removed from the goldens below when
+that operation was reclassified as ``ProposalStatus.NO_OP``. The reclassification
+is a *reporting* correction and is deliberately policy-independent -- the
+operation never modified the document under either policy. Legacy's own decision
+rule, the actions it accepts, its score path, and its delivered text are all
+unchanged; only no-ops stopped being counted as accepted changes.
+``optimizer_policy="legacy"`` keeps its own decision rule unchanged.
 
 Planning now also emits surface_variant proposals regardless of policy (see
 generation/integration_planner.py), so this is not a no-op claim: the legacy
@@ -90,9 +98,6 @@ LEGACY_GOLDENS = {
             "headline_mention:headline:ChatGPT",
             "headline_mention:headline:Claude",
             "headline_mention:headline:GenAI",
-            "weave_bullet:experience:0:bullet:2:GenAI",
-            "weave_bullet:experience:2:bullet:0:SQL",
-            "weave_bullet:experience:0:bullet:2:AI assistants",
         ],
         "score": 50.67,
         "sha256": "6701e19a687f522c9231f9f353d4999ff642ed31d5563ffe8c0b00b232056051",
