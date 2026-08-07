@@ -24,6 +24,18 @@ were dropped for genuine reasons worth recording:
   carried three targeted placements and was refused by the per-bullet stuffing
   budget.
 
+One retained edit is still refused at the document level, and is left in place
+deliberately because that refusal is worth exercising: on CGI and LatentView the
+``secure communication between services`` -> ``secure service communication``
+rewrite of ``exp2:bullet0`` reduces ``jd_surface_adoption``, so
+``_prose_regression`` rejects it. The edit is truthful; it is simply not free.
+
+Where this double has no edit for a field it returns ``""``, which the engine
+correctly treats as an unparseable reply and falls back from. Those records
+appear as ``prose_malformed_response`` in the diagnostics: that is the double
+declining to propose rather than a model emitting broken JSON, and it exercises
+the deterministic-fallback path either way.
+
 The identity follows the corrected test-double pattern (a fresh ``uuid4`` per
 instance, never ``id(self)``): the disk cache is keyed on
 ``(provider.identity, prompt)``, and ``id()`` is unique only among *live*
