@@ -266,7 +266,12 @@ def validate_pipeline_result(result: PipelineResult, profile: Profile | None = N
         profile = build_profile(result.parsed_input.resume_text)
     errors: list[str] = []
     errors.extend(f"extraction_suspect: {warning}" for warning in profile.extraction_warnings)
-    errors.extend(validate_completeness(result, profile))
+    # The plan's own removal ledger is what makes an accepted PRUNE legible to
+    # the completeness gate. It is not taken on trust: every entry is verified
+    # against the source profile and the rendered text inside the gate, and an
+    # unledgered disappearance still fails and still withholds the resume.
+    removed = list(result.resume_plan.removed_content) if result.resume_plan is not None else []
+    errors.extend(validate_completeness(result, profile, removed))
     # Non-fatal by design (the "contact:" prefix is not in FATAL_MARKERS): a
     # syntactically odd contact field is worth a review warning, not a
     # withheld artifact — the reviewed text is never rewritten or guessed.

@@ -32,7 +32,7 @@ from ats_engine.kit.contract import (
     WeightedKeyword,
 )
 from ats_engine.kit.grounding import EvidenceContext, GroundingOutcome, build_evidence_context, ground_text
-from ats_engine.models import EvidenceLink, JDProfile, PlacementAction, Profile
+from ats_engine.models import EvidenceLink, JDProfile, PlacementAction, Profile, RemovedContent
 from ats_engine.parsing.job_description import parse_jd
 from ats_engine.parsing.resume import build_profile
 from ats_engine.parsing.vocab import normalize_term
@@ -393,7 +393,7 @@ def _rebuild_resume(
     # fatal (an unusable or lossy resume must never persist); style + anti-stuffing
     # + JD-echo are warnings, matching initial generation's severity.
     errors = _structural_errors(text, latex, job_description)
-    errors.extend(resume_completeness_errors(text, profile))
+    errors.extend(resume_completeness_errors(text, profile, _removal_ledger(resume.change_ledger)))
     # The untouched units were already fully validated on delivery. Revalidate
     # every unit changed by this atomic action against its immutable ledger
     # baseline instead of re-running a raw-source heuristic over unrelated,
@@ -590,6 +590,25 @@ def _apply_validation(
         repaired_claims=repaired,
         rejected_claims=rejected,
     )
+
+
+def _removal_ledger(ledger: list[ChangeRecord]) -> list[RemovedContent]:
+    """The bullet removals currently *in effect* in a persisted revision.
+
+    A rebuild must present the same verified ledger the initial render did, or
+    completeness would read an accepted prune as a silent loss and refuse to
+    persist the revision. Only records whose removal is still in effect count:
+    once the user rejects an omission, ``_effective_record`` restores the
+    original bullet, the text is on the page again, and excusing it would make
+    the ledger's own claim false (which completeness independently rejects).
+    """
+    return [
+        RemovedContent(kind="bullet", location=record.id, original_text=record.original_text)
+        for record in ledger
+        if record.change_type is ChangeType.BULLET
+        and record.operation is ChangeOperation.OMITTED
+        and not _effective_record(record).strip()
+    ]
 
 
 def _effective_record(record: ChangeRecord | None) -> str:
