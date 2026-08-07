@@ -23,6 +23,7 @@ from copy import deepcopy
 from functools import cache
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import fitz
 import pytest
@@ -822,10 +823,19 @@ class _ResponseProvider:
     def __init__(self, response: str) -> None:
         self.response = response
         self.calls: list[str] = []
+        # id(self) is only unique among currently-live objects: once this
+        # instance is garbage-collected, CPython is free to hand its address
+        # to an unrelated object in a later test, and generate_json's
+        # disk-persisted cache is keyed on (identity, prompt). Two tests that
+        # build the same prompt from the same fixture would then collide on
+        # an id()-based identity and one could silently read back the other's
+        # cached response instead of calling its own mock. A fresh uuid4 per
+        # instance can never collide with a previous instance's identity.
+        self._identity = f"delivery-first-response:{uuid4().hex}"
 
     @property
     def identity(self) -> str:
-        return f"delivery-first-response:{id(self)}"
+        return self._identity
 
     def complete(self, prompt: str) -> str:
         self.calls.append(prompt)
@@ -836,10 +846,14 @@ class _RaisingProvider:
     def __init__(self, error: Exception) -> None:
         self.error = error
         self.calls = 0
+        # See _ResponseProvider: id(self) is reuse-prone across tests once
+        # the previous instance is collected, which can poison the shared
+        # disk cache keyed on (identity, prompt).
+        self._identity = f"delivery-first-raising:{uuid4().hex}"
 
     @property
     def identity(self) -> str:
-        return f"delivery-first-raising:{id(self)}"
+        return self._identity
 
     def complete(self, _prompt: str) -> str:
         self.calls += 1

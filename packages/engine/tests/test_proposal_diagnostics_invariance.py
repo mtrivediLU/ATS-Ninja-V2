@@ -72,6 +72,55 @@ action below with that label reflects the rename only.
 Each golden was captured from this branch via a disposable measurement
 script (not copied from any brief), then cross-checked against
 ``python -m ats_engine.bench --json``.
+
+``delivered_word_count``/``relevant_terms_per_100_words`` golden addendum:
+the latter is this codebase's "density" -- see ``RunDiagnostics`` and
+``rachana.objectives.ScoreVector.density``, the same function
+(``relevant_terms_per_100_words``) applied to the same requirement set: the
+count of distinct requirement canonicals visibly expressed, per 100 words.
+Both were captured from ``trace.diagnostics`` on this branch, then compared
+against the same two fixture files run through ``origin/main`` (commit
+``4800900``, predating Step 1 through this follow-up entirely -- the state
+before any of the tailoring-engine work in this docstring existed) via a
+disposable ``git worktree`` with ``PYTHONPATH`` pointed at its own
+``packages/engine/src``, mirroring the method already used to verify the CGI
+golden hash. The override was confirmed genuine rather than a stale cache by
+checking that ``ats_engine.__file__`` resolves inside the worktree, that
+``ats_engine.rachana.operations`` (SURFACE_VARIANT's module) cannot import
+there at all, and that the two runs' ``accepted_actions`` differ materially
+rather than coincidentally matching:
+
+* CGI: main delivers 1002 words at density 1.497006 (0 accepted actions on
+  main -- the stuffing-block bug held it at zero even there, so delivered
+  text equals source verbatim) versus this branch's 1004 words at density
+  1.494024. **Density fell, -0.0030.** The distinct-canonical count behind
+  the ratio is unchanged at 15 in both runs (15/1002*100 == 15/1004*100 up to
+  the word-count difference); the fall is denominator dilution from this
+  branch's own +2 net delivered words -- the footprint of 17 now-accepted,
+  gate-passed actions where main accepted none -- not a coverage loss.
+  Flagged rather than resolved, per instruction: no engine code changed to
+  produce or address this number.
+* CrowdPlat: main delivers 997 words at density 0.501505 (8 actions: a
+  pre-rename ``surface_variant:headline:*`` -- today's ``headline_mention`` --
+  plus mostly the same APIs/Python/communication placements as this branch's
+  own golden above) versus this branch's 999 words at density 0.500501.
+  **Density fell, -0.0010.** Same root cause: the distinct-canonical count
+  is unchanged at 5 in both runs; main's 8 actions and this branch's 8 cover
+  materially the same requirements through a slightly different operation
+  mix (a ``quality:summary`` rewrite here versus an extra ``mention_summary``
+  there), and this branch's version is 2 words longer. Flagged, not
+  baselined, for the same reason as CGI.
+* LatentView: main delivers 1003 words at density 0.997009 (9 actions)
+  versus this branch's 1003 words at density 0.997009. **Unchanged.** Main's
+  9 actions are a strict subset of this branch's 17 (the same 3 headline
+  mentions and the same 3 ``weave_bullet`` insertions, pre-rename); this
+  branch's 4 additional ``weave_bullet`` insertions and 4 SURFACE_VARIANT
+  substitutions net to exactly zero combined word delta on this fixture.
+
+CGI and CrowdPlat's falls are reported, not adjudicated: nothing above should
+be read as "the regression is fine," only as "this is what was measured, and
+why, without changing engine code to move it." See the PR discussion for the
+disposition.
 """
 
 from __future__ import annotations
@@ -112,6 +161,8 @@ GOLDENS = {
         ],
         "score": 43.44,
         "sha256": "516de792a643e5c43f5e9e3e5d7cc23a6ea0cc30ae565eef537557764e217cc0",
+        "delivered_word_count": 1004,
+        "relevant_terms_per_100_words": 1.4940239043824703,
     },
     "crowdplat_web_scraper": {
         "actions": [
@@ -126,6 +177,8 @@ GOLDENS = {
         ],
         "score": 16.83,
         "sha256": "401a0be48b943f1f09213234a94c34100a9db1bf686a64dc5d36f5b687c13c33",
+        "delivered_word_count": 999,
+        "relevant_terms_per_100_words": 0.5005005005005005,
     },
     "latentview_bi_ai": {
         "actions": [
@@ -149,12 +202,14 @@ GOLDENS = {
         ],
         "score": 50.67,
         "sha256": "928f9005effaf547b7878802469afbdda0c919a48ebbc10922f45c8ed4e5a7de",
+        "delivered_word_count": 1003,
+        "relevant_terms_per_100_words": 0.9970089730807578,
     },
 }
 
 
 @pytest.mark.parametrize("case", sorted(GOLDENS))
-def test_fixture_tailoring_matches_step3_followup_baseline(case: str) -> None:
+def test_fixture_tailoring_matches_step3_rebaseline(case: str) -> None:
     result = run_pipeline(
         resume_text=(FIXTURES / "candidate_resume.pymupdf.txt").read_text(encoding="utf-8"),
         job_description=(FIXTURES / case / "job_description.txt").read_text(encoding="utf-8"),
@@ -167,3 +222,5 @@ def test_fixture_tailoring_matches_step3_followup_baseline(case: str) -> None:
     assert trace.accepted_actions == golden["actions"]
     assert trace.score_path[-1] == pytest.approx(golden["score"])
     assert hashlib.sha256(result.resume_text.encode("utf-8")).hexdigest() == golden["sha256"]
+    assert trace.diagnostics.delivered_word_count == golden["delivered_word_count"]
+    assert trace.diagnostics.relevant_terms_per_100_words_after == pytest.approx(golden["relevant_terms_per_100_words"])
