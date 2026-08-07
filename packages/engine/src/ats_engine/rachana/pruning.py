@@ -48,7 +48,13 @@ import re
 from dataclasses import dataclass
 
 from ats_engine.models import EvidenceLink, Experience, RequirementTerm
-from ats_engine.rachana.facts import ImmutableFactSet, extract_credential_ids, extract_metrics, extract_team_facts
+from ats_engine.rachana.facts import (
+    ImmutableFactSet,
+    extract_credential_ids,
+    extract_metrics,
+    extract_proper_nouns,
+    extract_team_facts,
+)
 from ats_engine.validation.fidelity import contains_fact, extract_named_entities
 
 # Content floors. A resume that tailors itself down to a stub is a worse
@@ -117,30 +123,6 @@ def bullet_body(text: str) -> str:
     if separator and tail.strip() and len(head.split()) <= _LABEL_MAX_WORDS:
         return tail.strip()
     return text
-
-
-# Capitalized tokens that open a sentence are grammar, not proper nouns.
-_SENTENCE_START = re.compile(r"(?:^|[.!?;]\s+)\s*")
-_CAPITALIZED = re.compile(r"\b[A-Z][A-Za-z0-9&./-]*\b")
-
-
-def _proper_nouns(body: str) -> list[str]:
-    """Sentence-internal capitalized tokens: the bare-client-name backstop.
-
-    ``extract_named_entities`` is tuned for multi-token brands and does not
-    report a lone capitalized word mid-sentence -- measured, it returns
-    nothing at all for "...an application for Vale across sites". That is
-    exactly the "named client" the brief protects, so a removal cannot rely on
-    the entity extractor alone.
-
-    Sentence-initial tokens are excluded because capitalization there carries
-    no information ("Deployed and validated the system..."). Everything else
-    capitalized mid-sentence is treated as a possible proper noun, which is
-    deliberately over-broad: the only cost of a false positive here is that a
-    bullet is *kept*, and keeping candidate content is always the safe error.
-    """
-    starts = {match.end() for match in _SENTENCE_START.finditer(body)}
-    return [match.group(0) for match in _CAPITALIZED.finditer(body) if match.start() not in starts]
 
 
 def _requirement_hits(text: str, requirements: list[RequirementTerm]) -> list[str]:
@@ -278,7 +260,7 @@ def check_prune(
     body = bullet_body(text)
     seen: set[str] = set()
     unevidenced: list[str] = []
-    for entity in (*extract_named_entities(body), *_proper_nouns(body)):
+    for entity in (*extract_named_entities(body), *extract_proper_nouns(body)):
         key = entity.casefold()
         if key in seen or contains_fact(others, entity):
             continue

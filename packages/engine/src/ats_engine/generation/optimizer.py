@@ -8,6 +8,7 @@ from collections.abc import Iterable
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 
+from ats_engine.caching.content_hash import ContentHashCache
 from ats_engine.generation.diagnostics import GateCode, ProposalRecord, ProposalStatus, RunDiagnostics, _word_count
 from ats_engine.generation.integration_planner import plan_placements, proposal_inventory
 from ats_engine.generation.planning import rewrite_summary
@@ -26,16 +27,39 @@ from ats_engine.models import (
 )
 from ats_engine.parsing.vocab import normalize_term
 from ats_engine.pramana.scoring import score_resume
+from ats_engine.providers.base import LLMProvider
 from ats_engine.rachana.facts import build_fact_set
 from ats_engine.rachana.objectives import ScoreVector, relevant_terms_per_100_words, score_vector
 from ats_engine.rachana.operations import (
+    ProseOutcome,
     SurfaceVariantMatch,
     SurfaceVariantRejection,
     SurfaceVariantResult,
     find_surface_variant,
+    propose_bullet_rewrite,
+    propose_summary_rewrite,
     substitute_surface_variant,
 )
 from ats_engine.rachana.preservation import PreservationGuard, build_guard, count_occurrences
+from ats_engine.rachana.prose import (
+    BULLET_REWRITE,
+    REJECT_CROSS_EMPLOYER,
+    REJECT_EVIDENCE_OUT_OF_SCOPE,
+    REJECT_FACT_LOSS,
+    REJECT_MALFORMED,
+    REJECT_MISSING_CITATION,
+    REJECT_NEW_FACTS,
+    REJECT_NO_PROVIDER,
+    REJECT_SCHEMA,
+    REJECT_TEXT_UNCHANGED,
+    REJECT_UNKNOWN_NODE,
+    REJECT_UNSUPPORTED_CLAIM,
+    REJECT_WORD_GROWTH,
+    SUMMARY_REWRITE,
+    EvidenceNode,
+    ProseRejection,
+    build_evidence_nodes,
+)
 from ats_engine.rachana.pruning import (
     REJECT_PROTECTED_FACT,
     REJECT_ROLE_FLOOR,
@@ -130,6 +154,79 @@ class _ProposalRecorder:
                     status=ProposalStatus.NO_OP,
                     gate_detail=("provenance only: the bullet already states this term, so no delivered text changed"),
                 )
+
+    def record_prose(
+        self,
+        *,
+        operation: str,
+        target: str,
+        attempt: int,
+        status: ProposalStatus,
+        code: GateCode | None,
+        detail: str,
+        cited: tuple[str, ...],
+        proposed_text: str,
+        word_delta: int,
+        score_before: float | None = None,
+        score_after: float | None = None,
+        objectives_before: ScoreVector | None = None,
+        objectives_after: ScoreVector | None = None,
+    ) -> None:
+        """Register one prose attempt as a first-class proposal record.
+
+        A prose rewrite is not a ``PlacementAction`` -- it changes wording rather
+        than placing a term -- so it never enters the planner inventory and is
+        registered here instead. It still lands in exactly the same
+        ``RunDiagnostics.proposals`` tuple as every other proposal, with the
+        same objective deltas, which is what puts a model's attempt in the
+        benchmark histogram beside the deterministic operations rather than in a
+        parallel report of its own.
+
+        ``attempt`` is part of the id so the first proposal and its one repair
+        are both retained: a reviewer needs to see what the model proposed *and*
+        what it proposed after being told why that failed.
+
+        ``evidence_locations`` carries the cited node ids, and ``surface_to_use``
+        the proposed text, so the diagnostics record is self-contained enough to
+        audit the claim without re-running the engine.
+        """
+        record_id = f"{operation}:{target}:attempt{attempt}"
+        if record_id in self.records:
+            raise AssertionError(f"duplicate prose proposal id: {record_id}")
+        delta = score_after - score_before if score_before is not None and score_after is not None else None
+        if objectives_before is not None and objectives_after is not None:
+            coverage: float | None = objectives_after.pramana_coverage - objectives_before.pramana_coverage
+            adoption: float | None = objectives_after.jd_surface_adoption - objectives_before.jd_surface_adoption
+            density: float | None = objectives_after.density - objectives_before.density
+            placement: float | None = (
+                objectives_after.placement_reinforcement - objectives_before.placement_reinforcement
+            )
+        else:
+            coverage = adoption = density = placement = None
+        self.records[record_id] = ProposalRecord(
+            id=record_id,
+            operation=operation,
+            target=target,
+            requirement_canonicals=(),
+            requirement_weight=0.0,
+            evidence_tier="cited",
+            evidence_locations=cited,
+            surface_to_use=proposed_text,
+            word_delta=word_delta,
+            status=status,
+            gate_code=code,
+            gate_detail=detail,
+            score_before=score_before,
+            score_after=score_after,
+            score_delta=delta,
+            batch_index=-1,
+            iteration=-1,
+            coverage_delta=coverage,
+            adoption_delta=adoption,
+            density_delta=density,
+            placement_delta=placement,
+        )
+        self.ids_by_label[record_id] = record_id
 
     @classmethod
     def from_inventory(
@@ -293,6 +390,8 @@ def optimize(
     delivery_first: bool = True,
     optimizer_policy: str = "pareto",
     word_budget: int = 950,
+    prose_provider: LLMProvider | None = None,
+    prose_cache: ContentHashCache | None = None,
 ) -> tuple[ResumePlan, OptimizationTrace]:
     """Apply safe quality and score actions without ever regressing ATS v2.
 
@@ -307,6 +406,14 @@ def optimize(
     strict PRAMANA score improvement, exactly as before this policy existed.
     Failed placement batches are bisected either way so one unsafe proposal
     cannot discard unrelated safe work.
+
+    ``prose_provider`` enables the two evidence-cited prose operations
+    (``rachana.prose``). They run last, after pruning and reordering, against the
+    document the reader would otherwise receive, and are accepted through the
+    same pareto policy and recorded in the same ledger as everything else. With
+    ``prose_provider=None`` -- every test, every deterministic run, and every
+    deployment without a reachable model -- nothing about this function's
+    behavior changes at all.
     """
     if not delivery_first:
         return _optimize_pr21_compat(
@@ -570,8 +677,9 @@ def optimize(
     # improvement rule exactly"; a removal never improves that scalar, so
     # running it there would either do nothing or quietly redefine what the
     # rollback reproduces. Concentration is the pareto policy's mandate.
+    removals: list[RemovedContent] = []
     if optimizer_policy == "pareto":
-        current_plan, current_objectives, _removals, pruned_labels = _apply_pruning(
+        current_plan, current_objectives, removals, pruned_labels = _apply_pruning(
             current_plan,
             profile=profile,
             requirements=requirements,
@@ -600,6 +708,33 @@ def optimize(
             trace=trace,
         )
         pruned_labels = [*pruned_labels, *reorder_labels]
+
+        # Prose rewriting runs last, against the document the reader would
+        # otherwise receive: expression quality is judged on the final placed,
+        # pruned, reordered text, not on an intermediate nobody sees. Gated to
+        # the pareto policy for the same reason pruning is -- the legacy policy
+        # is documented as reproducing the original strict-PRAMANA rule exactly,
+        # and admitting a new operation there would quietly redefine what the
+        # rollback switch rolls back to.
+        if prose_provider is not None:
+            current_plan, current_objectives, prose_labels = _apply_prose_rewrites(
+                current_plan,
+                profile=profile,
+                jd_profile=jd_profile,
+                requirements=requirements,
+                links=links,
+                source=source,
+                accepted=accepted,
+                objectives=current_objectives,
+                removals=removals,
+                context=context,
+                guard=guard,
+                trace=trace,
+                recorder=recorder,
+                provider=prose_provider,
+                cache=prose_cache,
+            )
+            pruned_labels = [*pruned_labels, *prose_labels]
 
     # The accepted-action expression above intentionally records exactly the
     # action list present in the final plan below, avoiding an untrusted
@@ -2274,6 +2409,637 @@ def _apply_reordering(
             )
         return plan, []
     return candidate, labels
+
+
+_PROSE_GATE_CODES: dict[str, GateCode] = {
+    REJECT_NO_PROVIDER: GateCode.PROSE_PROVIDER_UNAVAILABLE,
+    REJECT_MALFORMED: GateCode.PROSE_MALFORMED_RESPONSE,
+    REJECT_SCHEMA: GateCode.PROSE_SCHEMA_VIOLATION,
+    REJECT_UNKNOWN_NODE: GateCode.PROSE_UNKNOWN_EVIDENCE_NODE,
+    REJECT_MISSING_CITATION: GateCode.PROSE_MISSING_CITATION,
+    REJECT_UNSUPPORTED_CLAIM: GateCode.PROSE_UNSUPPORTED_CLAIM,
+    REJECT_CROSS_EMPLOYER: GateCode.PROSE_CROSS_EMPLOYER_EVIDENCE,
+    REJECT_EVIDENCE_OUT_OF_SCOPE: GateCode.PROSE_EVIDENCE_OUT_OF_SCOPE,
+    REJECT_NEW_FACTS: GateCode.PROSE_NEW_FACTS_DECLARED,
+    REJECT_FACT_LOSS: GateCode.PROSE_FACT_LOSS,
+    REJECT_WORD_GROWTH: GateCode.PROSE_WORD_GROWTH,
+    REJECT_TEXT_UNCHANGED: GateCode.PROSE_TEXT_UNCHANGED,
+}
+
+
+def _prose_gate_code(reason: str) -> GateCode:
+    """Map a prose-contract rejection reason to its stable diagnostics code."""
+    return _PROSE_GATE_CODES[reason]
+
+
+# See `_PRUNE_MIN_DENSITY_GAIN_RATIO` for the derivation of this figure: a
+# relative gain of 0.5% is scale-free across fixtures with different numerators
+# and implies a materially sized change (~5 words in a 1000-word document).
+# Applied to the prose pass as a whole rather than to each rewrite -- see
+# `_prose_improvement`.
+_PROSE_MIN_DENSITY_GAIN_RATIO = 0.005
+
+
+def _prose_regression(before: ScoreVector, after: ScoreVector) -> str:
+    """Why this one rewrite is unsafe, or "" if it costs nothing.
+
+    Applied per rewrite, and *stricter* than ``_pareto_verdict`` where the two
+    differ: ``pramana_coverage`` may not fall at all rather than merely within
+    tolerance, because coverage is what the resume is credited for and a
+    re-wording has no business costing any of it. The other three objectives keep
+    pareto's own regression tolerances, so a rewrite cannot quietly undo a
+    placement or dilute the document.
+
+    This is only the *no-harm* half of acceptance. Whether the rewriting was
+    worth doing at all is ``_prose_improvement``'s question.
+    """
+    if after.pramana_coverage < before.pramana_coverage:
+        return "rewrite would reduce PRAMANA coverage"
+    if after.jd_surface_adoption < before.jd_surface_adoption - _ADOPTION_TOLERANCE:
+        return "rewrite would reduce JD-surface adoption"
+    if after.placement_reinforcement < before.placement_reinforcement - _PLACEMENT_TOLERANCE:
+        return "rewrite would reduce placement reinforcement"
+    if after.density < before.density - _DENSITY_TOLERANCE:
+        return "rewrite would reduce density"
+    if (
+        after.word_count < before.word_count
+        or after.pramana_coverage > before.pramana_coverage + _COVERAGE_TOLERANCE
+        or after.jd_surface_adoption > before.jd_surface_adoption + _ADOPTION_TOLERANCE
+        or after.placement_reinforcement > before.placement_reinforcement + _PLACEMENT_TOLERANCE
+    ):
+        return ""
+    return (
+        "rewrite changed wording without shortening the document or raising any objective, so it is pure "
+        f"churn ({before.word_count} -> {after.word_count} words, density {before.density:.4f} -> "
+        f"{after.density:.4f})"
+    )
+
+
+def _prose_improvement(before: ScoreVector, after: ScoreVector) -> str:
+    """Why the whole prose pass was not worth keeping, or "" if it was.
+
+    Judged on the accumulated pass rather than on each rewrite, and the reason is
+    arithmetic rather than convenience. ``_pareto_verdict``'s density threshold is
+    *absolute* (``_DENSITY_TOLERANCE`` = 0.02), sized for an additive action that
+    makes one more canonical visible and moves density by roughly 0.1. Re-wording
+    one twenty-five-word bullet inside a ~950-word document cannot move density
+    by that much: with fifteen visible canonicals, clearing 0.02 would require
+    shedding about twelve words from that one bullet, which no honest
+    proposition-preserving rewrite can do. Measured on the real fixtures, the
+    strict truth and fidelity gates leave a good rewrite one to four words of
+    slack each.
+
+    So per-rewrite the threshold is unmeetable, while the pass as a whole moves a
+    real amount -- the same distinction ``_apply_reordering`` already draws when
+    it judges every skill reorder as one candidate. Individual *safety* is still
+    per rewrite (``_prose_regression`` plus the truth, fidelity, preservation,
+    completeness, and ledger gates); only the "was this worth doing" verdict is
+    taken on the accumulated result, and if it fails, the entire pass is
+    discarded and the candidate's own wording is delivered.
+
+    A pass qualifies on an integer-level improvement to coverage, adoption, or
+    placement reinforcement (pareto's own thresholds, unchanged), or on concision:
+    the document is genuinely shorter and density rose by a relative
+    ``_PROSE_MIN_DENSITY_GAIN_RATIO``. Anything else is churn -- it makes the diff
+    noisy and the ledger untrustworthy while buying the candidate nothing.
+    """
+    if (
+        after.pramana_coverage > before.pramana_coverage + _COVERAGE_TOLERANCE
+        or after.jd_surface_adoption > before.jd_surface_adoption + _ADOPTION_TOLERANCE
+        or after.placement_reinforcement > before.placement_reinforcement + _PLACEMENT_TOLERANCE
+    ):
+        return ""
+    if after.word_count < before.word_count and after.density >= before.density * (1.0 + _PROSE_MIN_DENSITY_GAIN_RATIO):
+        return ""
+    return (
+        "the prose pass improved nothing measurable: no objective rose beyond its threshold and the document "
+        f"did not concentrate by {_PROSE_MIN_DENSITY_GAIN_RATIO:.1%} "
+        f"({before.density:.4f} -> {after.density:.4f}, {before.word_count} -> {after.word_count} words)"
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _ProseTarget:
+    """One field a prose rewrite may be proposed for.
+
+    An *address*, deliberately carrying no copy of the field's text: the text is
+    always read back through ``candidate_text_for`` against the live plan. Two
+    representations of "the original text" in one struct is exactly the shape
+    that made an earlier version of the ledger check compare the wrong pair.
+    """
+
+    operation: str
+    target: str
+    location_id: str
+    role_index: int
+    bullet_index: int
+
+
+# How many bullets one run will ask a model to re-word. A bound, not a target:
+# every provider call is latency and cost, a resume has twenty of them, and the
+# reader's attention is on the most relevant few. Six covers more than the most
+# relevant role on every real fixture (their roles hold 2-5 bullets each) while
+# keeping a run to at most 1 + 6 targets and therefore at most 14 provider
+# calls, counting each target's one bounded repair.
+_PROSE_MAX_BULLET_TARGETS = 6
+
+
+def _prose_targets(plan: ResumePlan, profile: Profile, requirements: list[RequirementTerm]) -> list[_ProseTarget]:
+    """The summary plus the most JD-relevant live bullets, in reading order.
+
+    Bullets are addressed by their *source* index, matching the change-ledger id
+    (``resume::expN::bulletM``) and every other index-keyed mechanism in the
+    engine. Emptied slots are skipped: an accepted PRUNE already removed that
+    content, and rewriting a removal would be incoherent.
+
+    Only bullets that already express a JD requirement are candidates, ranked by
+    how many distinct requirements they express. That is the inverse of the
+    pruning screen, and deliberately so: pruning removes bullets with *no*
+    relevance, rewriting sharpens the ones that carry it. A bullet that is not
+    selected is not a rejection and records no gate -- it is simply not the kind
+    of content this operation improves, exactly as ``pruning.screen_bullet``
+    returning None is not a rejection.
+    """
+    targets: list[_ProseTarget] = []
+    if profile.source_summary.strip() and plan.summary.strip():
+        targets.append(
+            _ProseTarget(
+                operation=SUMMARY_REWRITE,
+                target="resume:summary",
+                location_id="resume::summary",
+                role_index=-1,
+                bullet_index=-1,
+            )
+        )
+    canonicals = {requirement.canonical for requirement in requirements if requirement.canonical}
+    ranked: list[tuple[int, int, int, _ProseTarget]] = []
+    for role_index, entry in enumerate(plan.experience):
+        for bullet_index, bullet in enumerate(entry.bullets):
+            if not bullet.strip():
+                continue
+            hits = sum(1 for canonical in canonicals if contains_fact(bullet, canonical))
+            if not hits:
+                continue
+            ranked.append(
+                (
+                    -hits,
+                    role_index,
+                    bullet_index,
+                    _ProseTarget(
+                        operation=BULLET_REWRITE,
+                        target=f"experience:{role_index}:bullet:{bullet_index}",
+                        location_id=f"resume::exp{role_index}::bullet{bullet_index}",
+                        role_index=role_index,
+                        bullet_index=bullet_index,
+                    ),
+                )
+            )
+    # Most relevant first for selection, then back into reading order so the run
+    # is reproducible and the ledger reads top-to-bottom.
+    ranked.sort(key=lambda item: item[:3])
+    selected = sorted(ranked[:_PROSE_MAX_BULLET_TARGETS], key=lambda item: (item[1], item[2]))
+    targets.extend(item[3] for item in selected)
+    return targets
+
+
+def _shifted_by_pruning(target: _ProseTarget, removals: list[RemovedContent]) -> str:
+    """Why this bullet must not be rewritten alongside an accepted prune, or "".
+
+    **The finding this guard exists for.** ``PlacementAction`` addresses evidence
+    positionally as ``experience:<i>:bullet:<j>``, and PRAMANA resolves that
+    against the *re-parsed rendered document*
+    (``pramana.scoring._experience_bullets``). No renderer emits an emptied
+    bullet, so an accepted PRUNE at index k shifts the rendered index of every
+    later bullet in that role down by one while the action still carries the
+    source index. Measured directly: with three bullets and index 1 pruned, an
+    action targeting ``experience:0:bullet:2`` resolves to ``None`` instead of the
+    bullet it names.
+
+    Two things follow, and they are different:
+
+    * The shift is **not caused by rewriting**. A rewrite changes text, not the
+      bullet count, so it cannot move any index. The shift is PRUNE's, it exists
+      on ``main`` today, and it is latent rather than active: measured across all
+      three real fixtures, no accepted bullet-targeted placement currently sits
+      after a removal in its own role. ``_prune_verdict`` also refuses any
+      removal that costs PRAMANA coverage, which is what a lost provenance
+      resolution costs, so a shift that *matters* is already rejected there.
+    * What the shift can still do is resolve a placement against the wrong
+      bullet. Rewriting a bullet in that region would mean the engine editing one
+      bullet while a placement is credited against another under the same
+      address.
+
+    The brief requires choosing: fix the interaction, or refuse to co-apply.
+    Fixing it correctly means content-addressed placement provenance, which is a
+    change to PRUNE and to the scorer's evidence resolution -- both explicitly
+    out of scope for this step, and the same prerequisite that keeps bullet
+    REORDER disabled. So this **refuses to co-apply**: a bullet whose rendered
+    index has shifted is not rewritten, and the refusal is recorded under its own
+    gate code rather than being silently skipped.
+    """
+    if target.operation != BULLET_REWRITE:
+        return ""
+    for item in removals:
+        match = re.fullmatch(r"experience:(\d+):bullet:(\d+)", item.location)
+        if match is None:
+            continue
+        role_index, bullet_index = int(match.group(1)), int(match.group(2))
+        if role_index == target.role_index and bullet_index < target.bullet_index:
+            return (
+                f"an accepted prune at experience:{role_index}:bullet:{bullet_index} shifted this bullet's "
+                "rendered index, so positional placement provenance would no longer address it"
+            )
+    return ""
+
+
+def _delivered_texts(plan: ResumePlan) -> dict[str, str]:
+    """What each citable field currently holds, keyed by evidence-node id."""
+    delivered = {"summary": plan.summary}
+    for role_index, entry in enumerate(plan.experience):
+        for bullet_index, bullet in enumerate(entry.bullets):
+            delivered[f"exp{role_index}:bullet{bullet_index}"] = bullet
+    return delivered
+
+
+def _with_prose(plan: ResumePlan, target: _ProseTarget, text: str) -> ResumePlan:
+    """A copy of *plan* with *target*'s field replaced by *text*."""
+    candidate = deepcopy(plan)
+    if target.operation == SUMMARY_REWRITE:
+        candidate.summary = text
+    else:
+        candidate.experience[target.role_index].bullets[target.bullet_index] = text
+    return candidate
+
+
+def _candidate_authored_text(profile: Profile, target: _ProseTarget) -> str:
+    """The candidate's own wording for the field *target* names."""
+    if target.operation == SUMMARY_REWRITE:
+        return profile.source_summary
+    if 0 <= target.role_index < len(profile.experiences):
+        bullets = profile.experiences[target.role_index].bullets
+        if 0 <= target.bullet_index < len(bullets):
+            return bullets[target.bullet_index]
+    return ""
+
+
+def _prose_is_ledgered(
+    candidate: ResumePlan,
+    profile: Profile,
+    target: _ProseTarget,
+    accepted: list[PlacementAction],
+) -> bool:
+    """Whether the change ledger records this rewrite reversibly and visibly.
+
+    Checked rather than assumed. ``kit.change_ledger`` builds every user-facing
+    change from ``ResumePlan.plan_decisions``, and ``kit.change_actions`` restores
+    a rejected rewrite from that record's ``original_text`` -- so a rewrite with
+    no decision would be an *invisible, irreversible* edit to candidate-authored
+    prose. That is the exact failure that got bullet sorting removed from
+    ``_select_experience``, and the reason a rewrite the ledger cannot express is
+    refused here rather than delivered.
+
+    Two properties are required, and the second is the load-bearing one:
+
+    * a decision exists for this location, carrying the rewritten text as what was
+      delivered -- so the change is *visible*; and
+    * its ``original_text`` is the **candidate's own authored wording**, not any
+      intermediate and emphatically not the model's -- so the change is
+      *reversible to something the candidate actually wrote*.
+
+    The second is checked against the profile rather than against the text this
+    rewrite replaced, because the ledger's own semantics are "restore what the
+    candidate wrote", not "undo the last edit". A summary that already carries a
+    targeting clause and accepted placement terms still reverts to the
+    candidate's source summary, which is the correct behavior and the reason an
+    earlier version of this check misfired on every fixture.
+    """
+    authored = _candidate_authored_text(profile, target)
+    delivered = candidate_text_for(candidate, target)
+    if not authored.strip():
+        return False
+    decisions = _v2_plan_decisions(candidate.plan_decisions, candidate, profile, accepted)
+    for decision in decisions:
+        if decision.location_id != target.location_id:
+            continue
+        return (
+            decision.operation in {"rewritten", "added"}
+            and decision.tailored_text.strip() == delivered.strip()
+            and decision.original_text.strip() == authored.strip()
+        )
+    return False
+
+
+def candidate_text_for(plan: ResumePlan, target: _ProseTarget) -> str:
+    """Read back whatever *plan* currently holds at *target*."""
+    if target.operation == SUMMARY_REWRITE:
+        return plan.summary
+    return plan.experience[target.role_index].bullets[target.bullet_index]
+
+
+def _apply_prose_rewrites(
+    plan: ResumePlan,
+    *,
+    profile: Profile,
+    jd_profile: JDProfile,
+    requirements: list[RequirementTerm],
+    links: list[EvidenceLink],
+    source: str,
+    accepted: list[PlacementAction],
+    objectives: ScoreVector,
+    removals: list[RemovedContent],
+    context: ResumeGateContext,
+    guard: PreservationGuard,
+    trace: OptimizationTrace,
+    recorder: _ProposalRecorder,
+    provider: LLMProvider,
+    cache: ContentHashCache | None,
+) -> tuple[ResumePlan, ScoreVector, list[str]]:
+    """Propose an evidence-cited rewrite for each field, accepting one at a time.
+
+    Same shape as ``_apply_pruning``, and for the same reason: one candidate at a
+    time, each independently re-scored and re-validated, so a rejected rewrite
+    can never discard unrelated accepted work and every refusal names the gate
+    that fired. Model prose is untrusted text (``AGENTS.md`` §2), so a proposal
+    that has already satisfied the structured contract still has to survive:
+
+    * the deterministic truth gate (``kit.grounding.ground_text``) -- and here
+      *any* repair counts as a rejection, because repaired prose is prose the
+      gate had to edit, and an edited rewrite is not the rewrite that was cited;
+    * ``_prose_regression``, so no accepted rewrite costs coverage, adoption,
+      placement reinforcement, or density;
+    * the preservation guard, the removal-aware completeness gate, and the full
+      plan validation gate, i.e. exactly what the delivered document faces;
+    * the change ledger, which must be able to express the rewrite reversibly.
+
+    Then, once, the accumulated pass faces ``_prose_improvement``: if the
+    rewriting bought nothing measurable, the whole pass is discarded and the
+    candidate's own wording is delivered. See that function for why materiality is
+    judged on the pass and safety per rewrite.
+
+    Nothing is repaired, softened, or partially applied. Every failure leaves the
+    candidate's own wording in place.
+    """
+    current = plan
+    current_objectives = objectives
+    labels: list[str] = []
+    fact_set = build_fact_set(profile)
+    accepted_ids: list[str] = []
+
+    for target in _prose_targets(current, profile, requirements):
+        original_text = candidate_text_for(current, target)
+        # Rebuilt per target rather than once, so a node reflects any rewrite
+        # already accepted in this pass. A stale graph would let a later rewrite
+        # cite text no longer on the page.
+        nodes: tuple[EvidenceNode, ...] = build_evidence_nodes(profile, _delivered_texts(current))
+        blocked = _shifted_by_pruning(target, removals)
+        if blocked:
+            trace.rejected_actions.append(
+                _rejection(
+                    action=f"{target.operation}:{target.target}",
+                    reason=blocked,
+                    code=GateCode.PROSE_PRUNE_INDEX_SHIFT,
+                )
+            )
+            recorder.record_prose(
+                operation=target.operation,
+                target=target.target,
+                attempt=0,
+                status=ProposalStatus.REJECTED,
+                code=GateCode.PROSE_PRUNE_INDEX_SHIFT,
+                detail=blocked,
+                cited=(),
+                proposed_text="",
+                word_delta=0,
+            )
+            continue
+
+        if target.operation == SUMMARY_REWRITE:
+            outcome = propose_summary_rewrite(
+                provider,
+                original_text=original_text,
+                profile=profile,
+                requirements=requirements,
+                target_title=jd_profile.title,
+                nodes=nodes,
+                fact_set=fact_set,
+                cache=cache,
+            )
+        else:
+            outcome = propose_bullet_rewrite(
+                provider,
+                role_index=target.role_index,
+                bullet_index=target.bullet_index,
+                original_text=original_text,
+                profile=profile,
+                requirements=requirements,
+                nodes=nodes,
+                fact_set=fact_set,
+                cache=cache,
+            )
+        _record_prose_attempts(recorder, target, outcome)
+        proposal = outcome.proposal
+        if proposal is None:
+            _reject_prose(trace, target, outcome.rejection)
+            continue
+
+        candidate = _with_prose(current, target, proposal.proposed_text)
+        verdict = _prose_document_verdict(
+            candidate,
+            current=current,
+            profile=profile,
+            requirements=requirements,
+            links=links,
+            source=source,
+            accepted=accepted,
+            objectives=current_objectives,
+            removals=removals,
+            context=context,
+            guard=guard,
+            target=target,
+        )
+        cited = proposal.cited_node_ids()
+        word_delta = _word_count(proposal.proposed_text) - _word_count(original_text)
+        if verdict.code is not None:
+            trace.rejected_actions.append(
+                _rejection(
+                    action=f"{target.operation}:{target.target}",
+                    reason=verdict.detail,
+                    code=verdict.code,
+                )
+            )
+            recorder.record_prose(
+                operation=target.operation,
+                target=target.target,
+                attempt=len(outcome.attempts),
+                status=ProposalStatus.REJECTED,
+                code=verdict.code,
+                detail=verdict.detail,
+                cited=cited,
+                proposed_text=proposal.proposed_text,
+                word_delta=word_delta,
+                objectives_before=current_objectives,
+                objectives_after=verdict.objectives,
+            )
+            continue
+
+        recorder.record_prose(
+            operation=target.operation,
+            target=target.target,
+            attempt=len(outcome.attempts),
+            status=ProposalStatus.ACCEPTED,
+            code=None,
+            detail=f"cited {', '.join(cited)}",
+            cited=cited,
+            proposed_text=proposal.proposed_text,
+            word_delta=word_delta,
+            objectives_before=current_objectives,
+            objectives_after=verdict.objectives,
+        )
+        accepted_ids.append(f"{target.operation}:{target.target}:attempt{len(outcome.attempts)}")
+        current = candidate
+        if verdict.objectives is not None:
+            current_objectives = verdict.objectives
+        labels.append(f"{target.operation}:{target.target}")
+
+    if not labels:
+        return plan, objectives, []
+    churn = _prose_improvement(objectives, current_objectives)
+    if churn:
+        # The pass bought nothing. Discard all of it and demote every record from
+        # ACCEPTED so the diagnostics never claim a change the reader will not
+        # see -- the same honesty rule `reclassify_no_ops` enforces for
+        # weave_bullet.
+        for label in labels:
+            trace.rejected_actions.append(_rejection(action=label, reason=churn, code=GateCode.PROSE_NO_OBJECTIVE_GAIN))
+        for record_id in accepted_ids:
+            recorder.records[record_id] = replace(
+                recorder.records[record_id],
+                status=ProposalStatus.REJECTED,
+                gate_code=GateCode.PROSE_NO_OBJECTIVE_GAIN,
+                gate_detail=churn,
+            )
+        return plan, objectives, []
+    return current, current_objectives, labels
+
+
+def _record_prose_attempts(recorder: _ProposalRecorder, target: _ProseTarget, outcome: ProseOutcome) -> None:
+    """Record every *failed* contract attempt, so a refused model proposal is visible.
+
+    The accepted (or document-gate-rejected) attempt is recorded by the caller
+    with its objective deltas attached, so it is skipped here to keep exactly one
+    terminal record per attempt.
+    """
+    for attempt in outcome.attempts:
+        if attempt.rejection is None:
+            continue
+        recorder.record_prose(
+            operation=target.operation,
+            target=target.target,
+            attempt=attempt.index,
+            status=ProposalStatus.REJECTED,
+            code=_prose_gate_code(attempt.rejection.reason),
+            detail=attempt.rejection.detail,
+            cited=(),
+            proposed_text=attempt.proposed_text,
+            word_delta=0,
+        )
+
+
+def _reject_prose(trace: OptimizationTrace, target: _ProseTarget, rejection: ProseRejection | None) -> None:
+    if rejection is None:
+        return
+    trace.rejected_actions.append(
+        _rejection(
+            action=f"{target.operation}:{target.target}",
+            reason=rejection.detail,
+            code=_prose_gate_code(rejection.reason),
+        )
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _ProseVerdict:
+    """The document-level outcome for one contract-valid prose proposal."""
+
+    code: GateCode | None
+    detail: str
+    objectives: ScoreVector | None
+
+
+def _prose_document_verdict(
+    candidate: ResumePlan,
+    *,
+    current: ResumePlan,
+    profile: Profile,
+    requirements: list[RequirementTerm],
+    links: list[EvidenceLink],
+    source: str,
+    accepted: list[PlacementAction],
+    objectives: ScoreVector,
+    removals: list[RemovedContent],
+    context: ResumeGateContext,
+    guard: PreservationGuard,
+    target: _ProseTarget,
+) -> _ProseVerdict:
+    """Run every delivered-document gate against a rewritten candidate."""
+    proposed = candidate_text_for(candidate, target)
+    grounding = ground_text(
+        proposed,
+        artifact=ArtifactKind.RESUME,
+        context=build_evidence_context(profile, candidate.jd_profile),
+        id_prefix=f"prose-{target.operation}",
+        granularity="prose" if target.operation == SUMMARY_REWRITE else "span",
+    )
+    if grounding.fatal or grounding.repaired or grounding.rejected:
+        return _ProseVerdict(
+            code=GateCode.PROSE_TRUTH_GATE_REJECTION,
+            detail="truth gate found an unsupported candidate-specific claim in the rewritten text",
+            objectives=None,
+        )
+
+    evaluation = _evaluate_plan(candidate, source, requirements, links, accepted)
+    regression = _prose_regression(objectives, evaluation.objectives)
+    if regression:
+        return _ProseVerdict(code=GateCode.PROSE_NO_OBJECTIVE_GAIN, detail=regression, objectives=evaluation.objectives)
+
+    candidate_text = generate_resume_text(candidate)
+    regressions = guard.regressions(candidate_text)
+    if regressions:
+        return _ProseVerdict(
+            code=GateCode.PROSE_PROTECTED_FACT_LOSS,
+            detail=regressions[0].describe(),
+            objectives=evaluation.objectives,
+        )
+    completeness = resume_completeness_errors(candidate_text, profile, removals)
+    if completeness:
+        return _ProseVerdict(
+            code=GateCode.PROSE_VALIDATION_FINDING, detail=completeness[0], objectives=evaluation.objectives
+        )
+    findings = _optimization_blockers(
+        validate_resume_plan_findings(candidate, profile, requirements, accepted, context)
+    )
+    if findings:
+        return _ProseVerdict(
+            code=GateCode.PROSE_VALIDATION_FINDING,
+            detail=_finding_reason(findings),
+            objectives=evaluation.objectives,
+        )
+    if not _prose_is_ledgered(candidate, profile, target, accepted):
+        return _ProseVerdict(
+            code=GateCode.PROSE_UNLEDGERED_REWRITE,
+            detail=(
+                f"the change ledger cannot express this rewrite reversibly at {target.location_id}, "
+                "so it would be an invisible edit to candidate-authored prose"
+            ),
+            objectives=evaluation.objectives,
+        )
+    if generate_resume_text(current) == candidate_text:
+        return _ProseVerdict(
+            code=GateCode.PROSE_TEXT_UNCHANGED,
+            detail="rewrite produced an identical delivered document",
+            objectives=evaluation.objectives,
+        )
+    return _ProseVerdict(code=None, detail="", objectives=evaluation.objectives)
 
 
 def _dedupe_actions(actions: list[PlacementAction]) -> list[PlacementAction]:

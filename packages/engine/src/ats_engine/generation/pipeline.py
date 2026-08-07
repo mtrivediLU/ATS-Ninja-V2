@@ -4,6 +4,7 @@ import re
 from dataclasses import asdict
 from typing import Any, cast
 
+from ats_engine.caching.content_hash import default_cache
 from ats_engine.config import EngineSettings
 from ats_engine.evidence.quality_report import build_ats_quality_report
 from ats_engine.generation.answers import generate_answers_text
@@ -159,6 +160,13 @@ def run_pipeline(
                 delivery_first=resolved_settings.delivery_first,
                 optimizer_policy=resolved_settings.optimizer_policy,
                 word_budget=resolved_settings.resume_word_budget,
+                prose_provider=prose,
+                # The cache is built from *these* settings rather than left to
+                # `providers.base`'s env-derived default, so a caller that
+                # constructs `EngineSettings(llm_cache_enabled=False)` in-process
+                # actually gets caching disabled for prose proposals instead of
+                # silently inheriting the process environment's answer.
+                prose_cache=default_cache(resolved_settings),
             )
             result.metadata["optimization_trace"] = optimization_trace
             result.metadata["resume_gate_context"] = gate_context

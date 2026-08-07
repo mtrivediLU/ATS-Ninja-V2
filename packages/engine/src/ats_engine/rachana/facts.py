@@ -114,6 +114,37 @@ def extract_credential_ids(text: str) -> frozenset[str]:
     return frozenset(match.group(0) for match in CREDENTIAL_ID_PATTERN.finditer(text or ""))
 
 
+# Capitalized tokens that open a sentence are grammar, not proper nouns.
+_SENTENCE_START = re.compile(r"(?:^|[.!?;]\s+)\s*")
+_CAPITALIZED = re.compile(r"\b[A-Z][A-Za-z0-9&./-]*\b")
+
+
+def extract_proper_nouns(text: str) -> list[str]:
+    """Sentence-internal capitalized tokens: the bare-client-name backstop.
+
+    ``validation.fidelity.extract_named_entities`` is tuned for multi-token
+    brands and does not report a lone capitalized word mid-sentence --
+    measured, it returns nothing at all for "...an application for Vale across
+    sites". That is exactly the named client a removal must never take with it
+    and a rewrite must never invent, so neither operation can rely on the
+    entity extractor alone.
+
+    Sentence-initial tokens are excluded because capitalization there carries
+    no information ("Deployed and validated the system..."). Everything else
+    capitalized mid-sentence is treated as a possible proper noun, which is
+    deliberately over-broad: in ``rachana.pruning`` the only cost of a false
+    positive is that a bullet is *kept*, and in ``rachana.prose`` it is that a
+    rewrite is refused. Both are the safe error.
+
+    Moved here from ``rachana.pruning`` unchanged, for the same reason the
+    team-size and credential-id patterns live here: "what counts as a checkable
+    fact" must have exactly one definition shared by the operation that may not
+    remove one and the operation that may not invent one.
+    """
+    starts = {match.end() for match in _SENTENCE_START.finditer(text or "")}
+    return [match.group(0) for match in _CAPITALIZED.finditer(text or "") if match.start() not in starts]
+
+
 def build_fact_set(profile: Profile) -> ImmutableFactSet:
     """Lock the checkable facts of *profile*."""
 
