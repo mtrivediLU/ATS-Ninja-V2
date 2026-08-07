@@ -625,16 +625,22 @@ def validate_proposal(
         lost = unsupported_tokens(original_text, proposal.proposed_text, facts)
     else:
         lost = lost_immutable_facts(original_text, proposal.proposed_text, facts)
-        if not lost and proposed_words < MIN_SUMMARY_WORDS:
-            # Checked here rather than beside the word budget above so a
-            # fabricated or uncited claim is reported as such: a rewrite that is
-            # merely too short is the least specific thing that can be wrong
-            # with it, and the histogram should name the real cause.
-            lost = [f"substance: {proposed_words} words is below the {MIN_SUMMARY_WORDS}-word summary floor"]
     if lost:
         return ProseRejection(
             reason=REJECT_FACT_LOSS,
             detail=f"proposed text drops {', '.join(lost)} stated by the source text",
+        )
+    if proposal.operation == SUMMARY_REWRITE and proposed_words < MIN_SUMMARY_WORDS:
+        # Checked after the citation gates, not beside the word budget above, so
+        # a fabricated or uncited claim is reported as such: a rewrite that is
+        # merely too short is the least specific thing that can be wrong with
+        # it, and the histogram should name the real cause.
+        return ProseRejection(
+            reason=REJECT_FACT_LOSS,
+            detail=(
+                f"proposed summary is {proposed_words} words, below the {MIN_SUMMARY_WORDS}-word floor, "
+                "so it has dropped substance rather than re-expressed it"
+            ),
         )
 
     # 6. A bullet rewrite additionally faces the authoritative shared bullet
