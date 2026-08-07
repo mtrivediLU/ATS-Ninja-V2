@@ -59,6 +59,29 @@ class GateCode(StrEnum):
     PRUNE_NO_DENSITY_GAIN = "prune_no_density_gain"
     PRUNE_COVERAGE_REGRESSION = "prune_coverage_regression"
     PRUNE_COMPLETENESS_VIOLATION = "prune_completeness_violation"
+    # SUMMARY_REWRITE / BULLET_REWRITE (rachana.prose). One code per distinct
+    # refusal so the histogram shows what the model proposed and what refused
+    # it, rather than a single opaque "prose rejected" bucket. The first group
+    # is the structured contract; the second is this engine's ordinary
+    # document-level gates applied to a rewritten field.
+    PROSE_PROVIDER_UNAVAILABLE = "prose_provider_unavailable"
+    PROSE_MALFORMED_RESPONSE = "prose_malformed_response"
+    PROSE_SCHEMA_VIOLATION = "prose_schema_violation"
+    PROSE_UNKNOWN_EVIDENCE_NODE = "prose_unknown_evidence_node"
+    PROSE_MISSING_CITATION = "prose_missing_citation"
+    PROSE_UNSUPPORTED_CLAIM = "prose_unsupported_claim"
+    PROSE_CROSS_EMPLOYER_EVIDENCE = "prose_cross_employer_evidence"
+    PROSE_EVIDENCE_OUT_OF_SCOPE = "prose_evidence_out_of_scope"
+    PROSE_NEW_FACTS_DECLARED = "prose_new_facts_declared"
+    PROSE_FACT_LOSS = "prose_fact_loss"
+    PROSE_WORD_GROWTH = "prose_word_growth"
+    PROSE_TEXT_UNCHANGED = "prose_text_unchanged"
+    PROSE_NO_OBJECTIVE_GAIN = "prose_no_objective_gain"
+    PROSE_TRUTH_GATE_REJECTION = "prose_truth_gate_rejection"
+    PROSE_VALIDATION_FINDING = "prose_validation_finding"
+    PROSE_PROTECTED_FACT_LOSS = "prose_protected_fact_loss"
+    PROSE_UNLEDGERED_REWRITE = "prose_unledgered_rewrite"
+    PROSE_PRUNE_INDEX_SHIFT = "prose_prune_index_shift"
 
 
 @dataclass(frozen=True, slots=True)
