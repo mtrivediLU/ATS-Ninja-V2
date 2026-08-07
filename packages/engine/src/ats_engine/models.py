@@ -303,6 +303,27 @@ class PlanDecision:
     matched_keywords: list[str] = field(default_factory=list)
 
 
+@dataclass(frozen=True, slots=True)
+class RemovedContent:
+    """One piece of source content deliberately removed by an accepted operation.
+
+    This is the *ledger* half of the completeness contract. ``validation.
+    completeness`` refuses to let source content disappear from a rendered
+    resume; a ``PRUNE`` deliberately removes a bullet, which without a record
+    is indistinguishable from the silent loss that gate exists to catch.
+
+    Carrying ``original_text`` verbatim is what makes the removal reversible
+    and auditable rather than merely permitted: the completeness check
+    verifies that the named text really was in the source and really is gone
+    from the render, so a ledger entry can excuse exactly the removal it
+    describes and nothing else.
+    """
+
+    kind: str  # "bullet"
+    location: str  # "experience:<entry>:bullet:<index>"
+    original_text: str
+
+
 @dataclass(slots=True)
 class ResumePlan:
     contacts: ContactInfo
@@ -328,6 +349,11 @@ class ResumePlan:
     evidence_links: list[EvidenceLink] = field(default_factory=list)
     placement_actions: list[PlacementAction] = field(default_factory=list)
     remaining_sections: list[tuple[str, list[str]]] = field(default_factory=list)
+    # Content this plan deliberately removed, with the source text intact so the
+    # removal is reversible and completeness can verify (not merely trust) it.
+    # Empty on every plan that removes nothing, which is every plan built
+    # outside the optimizer's pruning phase.
+    removed_content: list[RemovedContent] = field(default_factory=list)
 
 
 @dataclass(slots=True)

@@ -23,6 +23,10 @@ class ProposalStatus(StrEnum):
     """Terminal disposition of one planner-emitted placement proposal."""
 
     ACCEPTED = "accepted"
+    # Evaluated, applied, and provably changed no delivered text. Distinct from
+    # ACCEPTED so an operation that cannot alter the document is never counted
+    # as a change to it (see WEAVE_BULLET_OPERATION in generation.optimizer).
+    NO_OP = "no_op"
     REJECTED = "rejected"
     ROLLED_BACK = "rolled_back"
     SUPERSEDED = "superseded"
@@ -46,6 +50,15 @@ class GateCode(StrEnum):
     SURFACE_VARIANT_SUBSTRING_HAZARD = "surface_variant_substring_hazard"
     SURFACE_VARIANT_FACT_RISK = "surface_variant_fact_risk"
     SURFACE_VARIANT_TEXT_DRIFTED = "surface_variant_text_drifted"
+    # PRUNE's fail-closed causes (rachana.pruning). One per distinct
+    # protection, so the benchmark histogram names which one held.
+    PRUNE_UNIQUE_EVIDENCE = "prune_unique_evidence"
+    PRUNE_PROTECTED_FACT = "prune_protected_fact"
+    PRUNE_UNEVIDENCED_ENTITY = "prune_unevidenced_entity"
+    PRUNE_ROLE_FLOOR = "prune_role_floor"
+    PRUNE_NO_DENSITY_GAIN = "prune_no_density_gain"
+    PRUNE_COVERAGE_REGRESSION = "prune_coverage_regression"
+    PRUNE_COMPLETENESS_VIOLATION = "prune_completeness_violation"
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,6 +129,11 @@ class RunDiagnostics:
     # pareto objective, placement_reinforcement (see ats_engine.rachana.objectives).
     placement_reinforcement_before: float = 0.0
     placement_reinforcement_after: float = 0.0
+    # Additive (pruning step): every bullet an accepted PRUNE removed, as
+    # (location, original_text) pairs. Kept verbatim rather than counted so a
+    # reviewer can judge each removal on its merits without re-running the
+    # engine, which is the whole basis on which subtraction is auditable.
+    removals: tuple[tuple[str, str], ...] = ()
 
     @classmethod
     def empty(cls) -> RunDiagnostics:

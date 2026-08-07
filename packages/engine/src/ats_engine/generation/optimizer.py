@@ -20,11 +20,13 @@ from ats_engine.models import (
     PlacementAction,
     PlanDecision,
     Profile,
+    RemovedContent,
     RequirementTerm,
     ResumePlan,
 )
 from ats_engine.parsing.vocab import normalize_term
 from ats_engine.pramana.scoring import score_resume
+from ats_engine.rachana.facts import build_fact_set
 from ats_engine.rachana.objectives import ScoreVector, relevant_terms_per_100_words, score_vector
 from ats_engine.rachana.operations import (
     SurfaceVariantMatch,
@@ -34,12 +36,25 @@ from ats_engine.rachana.operations import (
     substitute_surface_variant,
 )
 from ats_engine.rachana.preservation import PreservationGuard, build_guard, count_occurrences
+from ats_engine.rachana.pruning import (
+    REJECT_PROTECTED_FACT,
+    REJECT_ROLE_FLOOR,
+    REJECT_UNEVIDENCED_ENTITY,
+    REJECT_UNIQUE_EVIDENCE,
+    PruneProposal,
+    check_prune,
+    check_role_floor,
+    normalize_for_match,
+    screen_bullet,
+)
+from ats_engine.rachana.reordering import is_permutation, reorder_skill_items
 from ats_engine.scoring.ats_v2 import AtsScoreV2, project_ats_v2, score_resume_v2
 from ats_engine.validation.calibration import (
     CalibrationProfile,
     apply_calibration,
     calibrate_identity,
 )
+from ats_engine.validation.completeness import resume_completeness_errors
 from ats_engine.validation.fidelity import (
     BulletPair,
     contains_fact,
@@ -52,6 +67,9 @@ from ats_engine.validation.stuffing import (
     STUFFING_DETECTOR_VERSION,
     validate_resume_stuffing_findings,
 )
+
+# The operation whose apply step is, by construction, a no-op on the document.
+WEAVE_BULLET_OPERATION = "weave_bullet"
 
 _BATCH_SIZE = 8
 _MAX_ITERATIONS = 4
@@ -84,6 +102,34 @@ class _ProposalRecorder:
 
     records: dict[str, ProposalRecord]
     ids_by_label: dict[str, str]
+
+    def reclassify_no_ops(self) -> None:
+        """Demote accepted proposals that provably changed no delivered text.
+
+        ``_apply_actions`` writes summary, skills, headline, and
+        surface_variant changes into the plan and nothing else, so a
+        ``weave_bullet`` cannot alter the document by construction -- its
+        bullet already contains the term, which is precisely why the planner
+        emitted it. Counting it as an accepted *change* inflated every
+        accepted-action figure in the benchmark (7 of LatentView's 17, 3 of
+        CGI's 17) and told a reviewer the engine had done work it had not.
+
+        The proposal is still real and is still kept in the action list handed
+        to PRAMANA: it is genuine placement *provenance*, and
+        ``pramana.scoring._placement_bonus`` legitimately reads it to see that
+        a term appears in both skills and a bullet. What changes here is only
+        the honesty of the reporting -- provenance is recorded as provenance,
+        not as an edit. Giving weave_bullet a real effect would mean
+        paraphrasing a candidate-authored bullet, which is LLM-rewrite
+        territory and explicitly out of scope for this step.
+        """
+        for key, record in self.records.items():
+            if record.status is ProposalStatus.ACCEPTED and record.operation == WEAVE_BULLET_OPERATION:
+                self.records[key] = replace(
+                    record,
+                    status=ProposalStatus.NO_OP,
+                    gate_detail=("provenance only: the bullet already states this term, so no delivered text changed"),
+                )
 
     @classmethod
     def from_inventory(
@@ -246,6 +292,7 @@ def optimize(
     accept_generated_prose: bool = False,
     delivery_first: bool = True,
     optimizer_policy: str = "pareto",
+    word_budget: int = 950,
 ) -> tuple[ResumePlan, OptimizationTrace]:
     """Apply safe quality and score actions without ever regressing ATS v2.
 
@@ -320,8 +367,12 @@ def optimize(
     # what current_objectives is reassigned to while the loop is exploring
     # (and later discarding) placement batches.
     initial_objectives = current_objectives
+    # Tracked alongside current_objectives so pruning sees what the *final*
+    # placed document earns credit for, not what the source projection did.
+    current_credited = current_evaluation.credited
     source_score = current_score
     accepted_quality: list[str] = []
+    pruned_labels: list[str] = []
 
     if current_score.score + 0.001 < original.score:
         trace.delivery_state = DocumentState.NEEDS_INPUT_REVIEW
@@ -476,6 +527,7 @@ def optimize(
             accepted = candidate_actions
             current_score = candidate_score
             current_objectives = candidate_evaluation.objectives
+            current_credited = candidate_evaluation.credited
             trace.score_path.append(current_score.score)
             trace.accepted_actions.extend(_action_label(action) for action in survivors)
         else:
@@ -508,6 +560,46 @@ def optimize(
             and trace.score_path[-1] - trace.score_path[-2] < 0.5
         ):
             break
+
+    # Pruning runs last, against the fully-placed document: density's numerator
+    # is only settled once every accepted placement is in, and a removal must
+    # be judged against what the reader will actually receive.
+    #
+    # Pareto only, deliberately. The legacy policy is documented as the
+    # rollback switch that "retains the original strict-PRAMANA-score-
+    # improvement rule exactly"; a removal never improves that scalar, so
+    # running it there would either do nothing or quietly redefine what the
+    # rollback reproduces. Concentration is the pareto policy's mandate.
+    if optimizer_policy == "pareto":
+        current_plan, current_objectives, _removals, pruned_labels = _apply_pruning(
+            current_plan,
+            profile=profile,
+            requirements=requirements,
+            links=links,
+            source=source,
+            accepted=accepted,
+            objectives=current_objectives,
+            credited=current_credited,
+            context=context,
+            guard=guard,
+            trace=trace,
+            min_density_ratio=(
+                _PRUNE_MIN_DENSITY_GAIN_RATIO
+                if current_objectives.word_count > word_budget
+                else _PRUNE_MIN_DENSITY_GAIN_RATIO * _AT_BUDGET_STRICTNESS
+            ),
+        )
+        # After pruning, so ranking sees only content that survives.
+        current_plan, reorder_labels = _apply_reordering(
+            current_plan,
+            profile=profile,
+            requirements=requirements,
+            accepted=accepted,
+            context=context,
+            guard=guard,
+            trace=trace,
+        )
+        pruned_labels = [*pruned_labels, *reorder_labels]
 
     # The accepted-action expression above intentionally records exactly the
     # action list present in the final plan below, avoiding an untrusted
@@ -610,7 +702,14 @@ def optimize(
         )
         return source_plan, trace
 
-    trace.accepted_actions = [*accepted_quality, *[_action_label(action) for action in accepted]]
+    # weave_bullet is provenance, not an edit (see reclassify_no_ops): it stays
+    # in `accepted` for PRAMANA's placement bonus but must not be reported as a
+    # change the reader would see.
+    trace.accepted_actions = [
+        *accepted_quality,
+        *[_action_label(a) for a in accepted if a.operation != WEAVE_BULLET_OPERATION],
+        *pruned_labels,
+    ]
     if not trace.score_path or trace.score_path[-1] != final_score.score:
         trace.score_path.append(final_score.score)
     trace.calibration_suppressed = _calibrated_codes(final_findings)
@@ -913,6 +1012,14 @@ def validate_resume_plan_findings(
     """Run the shared calibrated fidelity and anti-stuffing gate for a plan."""
     action_list = list(actions)
     rendered = rendered_text if rendered_text is not None else generate_resume_text(plan)
+    # A ledgered removal must be excused here for the same reason it is excused
+    # by completeness: this gate detects content *silently* lost, and pairing a
+    # deliberately removed bullet against an empty candidate would report the
+    # removal as exactly the fabrication-adjacent failure it is not. Only the
+    # bullets the ledger names verbatim are skipped; see
+    # ``validation.fidelity._raw_source_bullet_findings``.
+    removed_texts = [item.original_text for item in plan.removed_content if item.kind == "bullet"]
+    removed_keys = {normalize_for_match(text) for text in removed_texts if normalize_for_match(text)}
     bullet_pairs: list[BulletPair] = []
     experience_matches = match_experience_indices(profile.experiences, plan.experience)
     for source_experience_index, source_experience in enumerate(profile.experiences):
@@ -922,6 +1029,8 @@ def validate_resume_plan_findings(
         )
         bullet_matches = match_bullet_indices(source_experience.bullets, candidate_bullets)
         for source_bullet_index, source_bullet in enumerate(source_experience.bullets):
+            if normalize_for_match(source_bullet) in removed_keys:
+                continue
             candidate_bullet_index = bullet_matches[source_bullet_index]
             bullet_pairs.append(
                 BulletPair(
@@ -937,6 +1046,7 @@ def validate_resume_plan_findings(
         candidate_experiences=plan.experience,
         bullet_pairs=bullet_pairs,
         calibrations=context.calibration,
+        removed_bullets=removed_texts,
     )
     stuffing = apply_calibration(
         validate_resume_stuffing_findings(
@@ -1405,18 +1515,46 @@ def _v2_plan_decisions(
             )
         )
 
+    # Pruning breaks the positional source<->delivered correspondence this loop
+    # used to assume, so bullets are matched by content and removals get their
+    # own decision. Without the `omitted` record below a prune would be
+    # unreviewable and irreversible: the change ledger is what lets a user
+    # restore a removed bullet, and what `kit.change_actions` rebuilds from.
+    removed_keys = {
+        normalize_for_match(item.original_text)
+        for item in plan.removed_content
+        if item.kind == "bullet" and normalize_for_match(item.original_text)
+    }
     for exp_index, source_experience in enumerate(profile.experiences):
         if exp_index >= len(plan.experience):
             continue
+        delivered_bullets = plan.experience[exp_index].bullets
+        matches = match_bullet_indices(source_experience.bullets, delivered_bullets)
         for bullet_index, source_bullet in enumerate(source_experience.bullets):
-            if bullet_index >= len(plan.experience[exp_index].bullets):
+            location_id = f"resume::exp{exp_index}::bullet{bullet_index}"
+            if normalize_for_match(source_bullet) in removed_keys:
+                decisions.append(
+                    PlanDecision(
+                        kind="bullet",
+                        location_id=location_id,
+                        original_text=source_bullet,
+                        tailored_text="",
+                        operation="omitted",
+                        reason=(
+                            "Removed a bullet with no job-relevant term, no checkable fact, and no unique "
+                            "evidence, to concentrate the resume. Restore it to put it back verbatim."
+                        ),
+                    )
+                )
                 continue
-            tailored_bullet = plan.experience[exp_index].bullets[bullet_index]
+            delivered_index = matches[bullet_index]
+            if delivered_index is None:
+                continue
+            tailored_bullet = delivered_bullets[delivered_index]
             target = f"experience:{exp_index}:bullet:{bullet_index}"
             action_terms = [action.term for action in actions if action.target == target]
             if tailored_bullet.strip() == source_bullet.strip() and not action_terms:
                 continue
-            location_id = f"resume::exp{exp_index}::bullet{bullet_index}"
             prior_decision = prior_by_location.get(location_id)
             bullet_reason = (
                 prior_decision.reason
@@ -1437,6 +1575,32 @@ def _v2_plan_decisions(
                     reason=_reason_with_bridges(bullet_reason, actions, target=target),
                     matched_keywords=(
                         list(prior_decision.matched_keywords) if prior_decision is not None else action_terms
+                    ),
+                )
+            )
+
+    # A pure reorder produces no per-bullet decision above -- the bullets are
+    # matched by content and their text is unchanged -- so without this record
+    # the move would be invisible and irreversible, which is precisely why
+    # bullet sorting was removed from `_select_experience` in the first place.
+    # The record names the order before and after; rejecting it restores the
+    # candidate's own sequence (see `kit.change_actions._apply_bullet_order`).
+    for exp_index, source_experience in enumerate(profile.experiences):
+        if exp_index >= len(plan.experience):
+            continue
+        source_order = [bullet for bullet in source_experience.bullets if bullet.strip()]
+        delivered_order = [bullet for bullet in plan.experience[exp_index].bullets if bullet.strip()]
+        if sorted(source_order) == sorted(delivered_order) and source_order != delivered_order:
+            decisions.append(
+                PlanDecision(
+                    kind="bullet",
+                    location_id=f"resume::exp{exp_index}::order",
+                    original_text="\n".join(source_order),
+                    tailored_text="\n".join(delivered_order),
+                    operation="reordered",
+                    reason=(
+                        "Ordered this role's bullets by job relevance so the most relevant work reads "
+                        "first. No wording changed. Reject to restore your original order."
                     ),
                 )
             )
@@ -1622,6 +1786,7 @@ def _finalize_diagnostics(
     rather than this function recomputing a third PRAMANA pass.
     """
     recorder.finalize_unevaluated()
+    recorder.reclassify_no_ops()
     proposals = tuple(recorder.records.values())
     if len(proposals) != len(recorder.ids_by_label) or len({record.id for record in proposals}) != len(proposals):
         raise AssertionError("every planner-emitted action must have exactly one proposal record")
@@ -1644,6 +1809,14 @@ def _finalize_diagnostics(
             gates[record.gate_code.value] += 1
         if record.status is ProposalStatus.ACCEPTED:
             operations[record.operation] = operations.get(record.operation, 0) + 1
+    # Removals are not PlacementActions and deliberately never enter the
+    # planner inventory: `placements` is fed straight to PRAMANA's placement
+    # bonus, and a synthetic action there would corrupt the score it is meant
+    # to describe. They are counted here so the benchmark's operation
+    # histogram still reports them alongside everything else.
+    removals = tuple((item.location, item.original_text) for item in delivered_plan.removed_content)
+    if removals:
+        operations["prune"] = len(removals)
     trace.diagnostics = RunDiagnostics(
         proposals=proposals,
         proposals_by_status={key: value for key, value in sorted(statuses.items()) if value},
@@ -1668,6 +1841,7 @@ def _finalize_diagnostics(
         placement_reinforcement_after=(
             final_objectives.placement_reinforcement if final_objectives is not None else 0.0
         ),
+        removals=removals,
     )
 
 
@@ -1710,6 +1884,10 @@ class _PlanEvaluation:
 
     ats_score: AtsScoreV2
     objectives: ScoreVector
+    # The requirements this text actually earns credit for. Pruning needs it to
+    # tell a bullet that is the sole support for something the resume is being
+    # paid for from one supporting a requirement with no credit to lose.
+    credited: frozenset[str] = frozenset()
 
 
 def _evaluate_plan(
@@ -1728,7 +1906,11 @@ def _evaluate_plan(
         tailored=True,
         placements=actions,
     )
-    return _PlanEvaluation(ats_score=project_ats_v2(pramana), objectives=score_vector(text, requirements, pramana))
+    return _PlanEvaluation(
+        ats_score=project_ats_v2(pramana),
+        objectives=score_vector(text, requirements, pramana),
+        credited=frozenset(credit.requirement.canonical for credit in pramana.per_requirement if credit.credit > 0),
+    )
 
 
 def _score_plan(
@@ -1810,6 +1992,288 @@ def _pareto_verdict(before: ScoreVector, after: ScoreVector) -> bool:
         or after.density > before.density + _DENSITY_TOLERANCE
         or after.placement_reinforcement > before.placement_reinforcement + _PLACEMENT_TOLERANCE
     )
+
+
+# A prune must *concentrate* the document, not merely shorten it. The
+# threshold is relative rather than absolute because absolute density gain
+# scales with the numerator: removing 17 words from a 1000-word resume raises
+# density by 0.026 when 15 canonicals are visible but only 0.009 when 5 are,
+# so any fixed cut-off would silently mean "only fixtures with dense JDs may
+# be pruned". Relative gain is scale-free: removing k words with the numerator
+# held constant is exactly a k/(N-k) improvement, so 0.5% also implies a
+# materially sized cut (~5 words in a 1000-word document) and a prune that
+# takes a canonical with it fails outright, since the numerator drops.
+_PRUNE_MIN_DENSITY_GAIN_RATIO = 0.005
+# How much harder a prune must work once the document is already inside
+# EngineSettings.resume_word_budget. This is the whole mechanism by which the
+# budget "prefers proposals moving the document toward it": over budget,
+# concision is the binding need and the ordinary threshold applies; at or under
+# it, length is no longer the problem, so a removal has to justify itself on
+# concentration alone. Nothing is ever truncated to reach the budget.
+_AT_BUDGET_STRICTNESS = 4.0
+
+
+def _prune_gate_code(reason: str) -> GateCode:
+    """Map a pruning rejection reason to its stable diagnostics code."""
+    return {
+        REJECT_UNIQUE_EVIDENCE: GateCode.PRUNE_UNIQUE_EVIDENCE,
+        REJECT_PROTECTED_FACT: GateCode.PRUNE_PROTECTED_FACT,
+        REJECT_UNEVIDENCED_ENTITY: GateCode.PRUNE_UNEVIDENCED_ENTITY,
+        REJECT_ROLE_FLOOR: GateCode.PRUNE_ROLE_FLOOR,
+    }[reason]
+
+
+def _prune_verdict(before: ScoreVector, after: ScoreVector, *, min_density_ratio: float) -> str:
+    """Whether a prune is acceptable. Returns "" to accept, or a reject reason.
+
+    Pruning gets its own rule rather than reusing ``_pareto_verdict`` for one
+    structural reason: that function's density threshold is *absolute*
+    (``_DENSITY_TOLERANCE``), sized for an additive action that makes one more
+    canonical visible and moves density by roughly 0.1. A removal moves density
+    by a fraction of that -- correctly so, it adds no canonical -- and would be
+    read as a flat candidate and rejected on every fixture. The rule below is
+    strictly *more* conservative than pareto on every other objective:
+
+    * ``pramana_coverage`` may not fall **at all**, not merely within
+      tolerance. Coverage is what the resume is credited for; content earning
+      it is content that must stay.
+    * ``jd_surface_adoption`` and ``placement_reinforcement`` keep pareto's own
+      regression tolerances, so a removal cannot quietly undo a placement.
+    * ``density`` must rise by ``min_density_ratio``, and ``word_count`` must
+      actually fall -- together, "cutting is not automatically good".
+    """
+    if after.pramana_coverage < before.pramana_coverage:
+        return "prune would reduce PRAMANA coverage"
+    if after.jd_surface_adoption < before.jd_surface_adoption - _ADOPTION_TOLERANCE:
+        return "prune would reduce JD-surface adoption"
+    if after.placement_reinforcement < before.placement_reinforcement - _PLACEMENT_TOLERANCE:
+        return "prune would reduce placement reinforcement"
+    if after.word_count >= before.word_count:
+        return "prune did not shorten the document"
+    if after.density < before.density * (1.0 + min_density_ratio):
+        return (
+            f"prune raised density by less than {min_density_ratio:.1%} ({before.density:.4f} -> {after.density:.4f})"
+        )
+    return ""
+
+
+def _apply_pruning(
+    plan: ResumePlan,
+    *,
+    profile: Profile,
+    requirements: list[RequirementTerm],
+    links: list[EvidenceLink],
+    source: str,
+    accepted: list[PlacementAction],
+    objectives: ScoreVector,
+    credited: frozenset[str],
+    context: ResumeGateContext,
+    guard: PreservationGuard,
+    trace: OptimizationTrace,
+    min_density_ratio: float,
+) -> tuple[ResumePlan, ScoreVector, list[RemovedContent], list[str]]:
+    """Remove provably-safe low-relevance bullets, one at a time.
+
+    One at a time, each re-scored and each re-validated, because a batch would
+    make it impossible to say which removal caused a regression -- and a
+    regression here means deleted candidate content, the one failure this
+    project treats as product-defining. Every rejection is recorded against
+    the specific protection that fired.
+    """
+    fact_set = build_fact_set(profile)
+    current = plan
+    current_objectives = objectives
+    removals: list[RemovedContent] = []
+    # Returned rather than appended to the trace here: `optimize` rebuilds
+    # `trace.accepted_actions` from scratch after the final gates, so a label
+    # written now would be discarded.
+    labels: list[str] = []
+
+    # Oldest role first, then source order. Older content is the lowest-risk
+    # place to cut, and a fixed order keeps the run reproducible.
+    proposals: list[PruneProposal] = []
+    document_text = generate_resume_text(current)
+    for experience_index, entry in enumerate(current.experience):
+        for bullet_index, bullet in enumerate(entry.bullets):
+            proposal = screen_bullet(
+                experience_index,
+                bullet_index,
+                bullet,
+                requirements=requirements,
+                document_text=document_text,
+            )
+            if proposal is not None:
+                proposals.append(proposal)
+    proposals.sort(key=lambda item: (-item.experience_index, item.bullet_index))
+
+    for proposal in proposals:
+        role = current.experience[proposal.experience_index]
+        # The bullet may have shifted index after an earlier accepted removal
+        # in the same role; match on text, which is what the ledger records.
+        live_index = next(
+            (
+                index
+                for index, bullet in enumerate(role.bullets)
+                if normalize_for_match(bullet) == normalize_for_match(proposal.text)
+            ),
+            None,
+        )
+        if live_index is None:
+            continue
+        rejection = check_prune(
+            proposal,
+            role=role,
+            links=links,
+            fact_set=fact_set,
+            credited_canonicals=credited,
+        ) or check_role_floor(
+            proposal.experience_index,
+            # Emptied slots are removals already applied, not live content.
+            sum(1 for bullet in role.bullets if bullet.strip()),
+        )
+        if rejection is not None:
+            trace.rejected_actions.append(
+                _rejection(
+                    action=f"prune:{proposal.location}",
+                    reason=rejection.detail,
+                    code=_prune_gate_code(rejection.reason),
+                )
+            )
+            continue
+
+        candidate = deepcopy(current)
+        # Emptied, not popped: popping would shift every later bullet's index,
+        # and the change-ledger id (`resume::expN::bulletM`) plus
+        # `kit.change_actions._set_bullet`'s restore-by-position are both keyed
+        # on the *source* index. Blanking the slot keeps a rejected removal
+        # restorable into exactly the place it came from. Neither renderer
+        # emits an empty bullet, so the delivered document really is shorter.
+        candidate.experience[proposal.experience_index].bullets[live_index] = ""
+        candidate_removals = [
+            *removals,
+            RemovedContent(kind="bullet", location=proposal.location, original_text=proposal.text),
+        ]
+        candidate.removed_content = list(candidate_removals)
+
+        evaluation = _evaluate_plan(candidate, source, requirements, links, accepted)
+        reject_reason = _prune_verdict(current_objectives, evaluation.objectives, min_density_ratio=min_density_ratio)
+        if reject_reason:
+            code = GateCode.PRUNE_COVERAGE_REGRESSION if "coverage" in reject_reason else GateCode.PRUNE_NO_DENSITY_GAIN
+            trace.rejected_actions.append(
+                _rejection(action=f"prune:{proposal.location}", reason=reject_reason, code=code)
+            )
+            continue
+
+        # The removal must survive exactly the gates a delivered document
+        # faces: nothing job-relevant weakened, nothing unaccounted-for gone.
+        candidate_text = generate_resume_text(candidate)
+        regressions = guard.regressions(candidate_text)
+        completeness = resume_completeness_errors(candidate_text, profile, candidate_removals)
+        findings = _optimization_blockers(
+            validate_resume_plan_findings(candidate, profile, requirements, accepted, context)
+        )
+        if regressions or completeness or findings:
+            detail = (
+                regressions[0].describe()
+                if regressions
+                else (completeness[0] if completeness else _finding_reason(findings))
+            )
+            trace.rejected_actions.append(
+                _rejection(
+                    action=f"prune:{proposal.location}",
+                    reason=detail,
+                    code=(
+                        GateCode.PROTECTED_FACT_LOSS
+                        if regressions
+                        else (
+                            GateCode.PRUNE_COMPLETENESS_VIOLATION if completeness else _gate_code_for_findings(findings)
+                        )
+                    ),
+                )
+            )
+            continue
+
+        current = candidate
+        current_objectives = evaluation.objectives
+        removals = candidate_removals
+        labels.append(f"prune:{proposal.location}")
+
+    current.removed_content = list(removals)
+    return current, current_objectives, removals, labels
+
+
+def _apply_reordering(
+    plan: ResumePlan,
+    *,
+    profile: Profile,
+    requirements: list[RequirementTerm],
+    accepted: list[PlacementAction],
+    context: ResumeGateContext,
+    guard: PreservationGuard,
+    trace: OptimizationTrace,
+) -> tuple[ResumePlan, list[str]]:
+    """Rank bullets and skill items by JD relevance, or change nothing.
+
+    Applied as one candidate rather than per item: a reorder moves no words and
+    adds no term, so there is no per-item score to compare and nothing a
+    bisect could isolate. Either the whole reordering passes the delivered
+    document's own gates or none of it is kept.
+
+    Not routed through ``_pareto_verdict`` deliberately -- see
+    ``rachana.reordering``. A permutation moves none of the four objectives by
+    construction, so that rule would reject every reorder as flat. It is gated
+    as a quality proposal, the class the optimizer already accepts at an equal
+    score because it is about presentation rather than keyword placement, and
+    it still faces the preservation guard and the full validation gate below.
+    """
+    candidate = deepcopy(plan)
+    labels: list[str] = []
+
+    for group_index, (heading, items) in enumerate(candidate.skill_groups):
+        ranked = reorder_skill_items(list(items), requirements)
+        if not is_permutation(list(items), ranked):
+            raise AssertionError(f"SKILL_REORDER changed the item multiset in group {heading!r}")
+        if ranked != list(items):
+            candidate.skill_groups[group_index] = (heading, ranked)
+            labels.append(f"skill_reorder:skills:{group_index}")
+
+    # Bullet REORDER is implemented and unit-tested in rachana.reordering but is
+    # deliberately NOT applied here. Measured, enabling it rolled CGI and
+    # LatentView back to the source projection entirely (1002 -> 1002 words, all
+    # 17 accepted actions lost). The cause is structural, not a tuning problem:
+    # a PlacementAction addresses its evidence as `experience:<i>:bullet:<j>`,
+    # and PRAMANA resolves that provenance positionally
+    # (`pramana.scoring._experience_bullets`). Permuting bullets silently
+    # invalidates every one of those targets, the placement bonus collapses,
+    # the final score falls below the source floor, and the whole run is
+    # discarded -- so the reorder would cost far more than the reading-order
+    # benefit it buys.
+    #
+    # Reported rather than worked around, per the brief: making this safe needs
+    # placement provenance to be content-addressed rather than index-addressed,
+    # which is a change to the scorer's evidence resolution and belongs in its
+    # own PR. Nothing here weakens a gate to get the reorder through.
+
+    if not labels:
+        return plan, []
+
+    candidate_text = generate_resume_text(candidate)
+    regressions = guard.regressions(candidate_text)
+    findings = _optimization_blockers(
+        validate_resume_plan_findings(candidate, profile, requirements, accepted, context)
+    )
+    if regressions or findings:
+        detail = regressions[0].describe() if regressions else _finding_reason(findings)
+        for label in labels:
+            trace.rejected_actions.append(
+                _rejection(
+                    action=label,
+                    reason=detail,
+                    code=GateCode.PROTECTED_FACT_LOSS if regressions else _gate_code_for_findings(findings),
+                )
+            )
+        return plan, []
+    return candidate, labels
 
 
 def _dedupe_actions(actions: list[PlacementAction]) -> list[PlacementAction]:

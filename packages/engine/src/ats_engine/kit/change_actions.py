@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from copy import deepcopy
 from dataclasses import dataclass, field
 
@@ -32,7 +33,7 @@ from ats_engine.kit.contract import (
     WeightedKeyword,
 )
 from ats_engine.kit.grounding import EvidenceContext, GroundingOutcome, build_evidence_context, ground_text
-from ats_engine.models import EvidenceLink, JDProfile, PlacementAction, Profile
+from ats_engine.models import EvidenceLink, JDProfile, PlacementAction, Profile, RemovedContent
 from ats_engine.parsing.job_description import parse_jd
 from ats_engine.parsing.resume import build_profile
 from ats_engine.parsing.vocab import normalize_term
@@ -356,7 +357,13 @@ def _rebuild_resume(
     for record in resume.change_ledger:
         if record.change_type is not ChangeType.BULLET:
             continue
-        _set_bullet(document, record.id, _effective_record(record))
+        if record.operation is ChangeOperation.OMITTED:
+            _apply_omission(document, record)
+            continue
+        if record.id.endswith("::order"):
+            continue
+        _set_bullet(document, record.id, _effective_record(record), delivered=record.tailored_text)
+    _apply_bullet_orders(document, resume.change_ledger)
 
     # Re-ground every editable unit and refresh the claim trace from scratch, so
     # no revision-zero claims survive a content change.
@@ -393,7 +400,7 @@ def _rebuild_resume(
     # fatal (an unusable or lossy resume must never persist); style + anti-stuffing
     # + JD-echo are warnings, matching initial generation's severity.
     errors = _structural_errors(text, latex, job_description)
-    errors.extend(resume_completeness_errors(text, profile))
+    errors.extend(resume_completeness_errors(text, profile, _removal_ledger(resume.change_ledger)))
     # The untouched units were already fully validated on delivery. Revalidate
     # every unit changed by this atomic action against its immutable ledger
     # baseline instead of re-running a raw-source heuristic over unrelated,
@@ -592,6 +599,25 @@ def _apply_validation(
     )
 
 
+def _removal_ledger(ledger: list[ChangeRecord]) -> list[RemovedContent]:
+    """The bullet removals currently *in effect* in a persisted revision.
+
+    A rebuild must present the same verified ledger the initial render did, or
+    completeness would read an accepted prune as a silent loss and refuse to
+    persist the revision. Only records whose removal is still in effect count:
+    once the user rejects an omission, ``_effective_record`` restores the
+    original bullet, the text is on the page again, and excusing it would make
+    the ledger's own claim false (which completeness independently rejects).
+    """
+    return [
+        RemovedContent(kind="bullet", location=record.id, original_text=record.original_text)
+        for record in ledger
+        if record.change_type is ChangeType.BULLET
+        and record.operation is ChangeOperation.OMITTED
+        and not _effective_record(record).strip()
+    ]
+
+
 def _effective_record(record: ChangeRecord | None) -> str:
     if record is None:
         return ""
@@ -602,17 +628,102 @@ def _effective_record(record: ChangeRecord | None) -> str:
     return ""
 
 
-def _set_bullet(document: ResumeDocument, location_id: str, text: str) -> None:
+def _bullet_location(location_id: str) -> tuple[int, int] | None:
+    try:
+        _, exp_part, bullet_part = location_id.split("::")
+        return int(exp_part.removeprefix("exp")), int(bullet_part.removeprefix("bullet"))
+    except (ValueError, IndexError):
+        return None
+
+
+def _apply_omission(document: ResumeDocument, record: ChangeRecord) -> None:
+    """Make a removal record true of the document, in either direction.
+
+    A removal cannot be applied by writing into a fixed slot: the delivered
+    document does not render an emptied bullet, so the position an index names
+    is no longer the position the record owns, and blanking it would delete a
+    *different*, live bullet. Both directions are therefore content-addressed:
+
+    * still removed -- ensure no bullet matching the original remains;
+    * rejected by the user -- ensure the original is back, reinserted at its
+      source position (clamped), which is what makes a prune reversible.
+    """
+    location = _bullet_location(record.id)
+    if location is None:
+        return
+    exp_index, bullet_index = location
+    if not (0 <= exp_index < len(document.experience)):
+        return
+    bullets = document.experience[exp_index].bullets
+    key = _normalize_bullet_key(record.original_text)
+    if not key:
+        return
+    present = [index for index, bullet in enumerate(bullets) if _normalize_bullet_key(bullet) == key]
+    if _effective_record(record).strip():
+        if not present:
+            bullets.insert(min(bullet_index, len(bullets)), record.original_text)
+        return
+    for index in reversed(present):
+        bullets.pop(index)
+
+
+def _apply_bullet_orders(document: ResumeDocument, ledger: list[ChangeRecord]) -> None:
+    """Re-apply (or, if rejected, undo) each role's recorded bullet order."""
+    for record in ledger:
+        if record.change_type is not ChangeType.BULLET or not record.id.endswith("::order"):
+            continue
+        location = _bullet_location(record.id.replace("::order", "::bullet0"))
+        if location is None or not (0 <= location[0] < len(document.experience)):
+            continue
+        bullets = document.experience[location[0]].bullets
+        wanted = [line for line in _effective_record(record).splitlines() if line.strip()]
+        by_key = {_normalize_bullet_key(bullet): bullet for bullet in bullets if bullet.strip()}
+        ordered = [by_key.pop(_normalize_bullet_key(line)) for line in wanted if _normalize_bullet_key(line) in by_key]
+        # Anything the record does not mention (a later rewrite, an unpruned
+        # leftover) keeps its relative position at the end rather than vanishing.
+        ordered.extend(bullet for bullet in bullets if _normalize_bullet_key(bullet) in by_key)
+        if sorted(ordered) == sorted(bullet for bullet in bullets if bullet.strip()):
+            document.experience[location[0]].bullets = ordered
+
+
+def _set_bullet(document: ResumeDocument, location_id: str, text: str, *, delivered: str = "") -> None:
+    """Write *text* into the slot this record owns.
+
+    ``location_id`` carries the bullet's **source** index, which is only the
+    same as its document position while the delivered order matches the source
+    order. A ``REORDER`` breaks that, so the slot is found by its delivered
+    content first (``delivered`` is what this record put on the page, so it
+    identifies the slot wherever the reorder moved it), and by index only as a
+    fallback.
+
+    The fallback is what handles an emptied slot: a ``PRUNE`` blanks a bullet
+    in place rather than removing it precisely so its index stays valid, and an
+    omission record has no delivered text to search for. Reordering moves only
+    non-empty bullets, so those positions stay correct.
+    """
     try:
         _, exp_part, bullet_part = location_id.split("::")
         exp_index = int(exp_part.removeprefix("exp"))
         bullet_index = int(bullet_part.removeprefix("bullet"))
     except (ValueError, IndexError):
         return
-    if 0 <= exp_index < len(document.experience):
-        bullets = document.experience[exp_index].bullets
-        if 0 <= bullet_index < len(bullets):
-            bullets[bullet_index] = text
+    if not (0 <= exp_index < len(document.experience)):
+        return
+    bullets = document.experience[exp_index].bullets
+    if delivered.strip():
+        target = _normalize_bullet_key(delivered)
+        matches = [index for index, bullet in enumerate(bullets) if _normalize_bullet_key(bullet) == target]
+        # Exactly one match identifies the slot unambiguously; two identical
+        # delivered bullets do not, so fall back rather than guess.
+        if len(matches) == 1:
+            bullets[matches[0]] = text
+            return
+    if 0 <= bullet_index < len(bullets):
+        bullets[bullet_index] = text
+
+
+def _normalize_bullet_key(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (text or "").lower())
 
 
 def _paragraph_index(location_id: str) -> int:

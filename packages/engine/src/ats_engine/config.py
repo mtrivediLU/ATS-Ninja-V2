@@ -43,6 +43,17 @@ class EngineSettings:
             of the three beyond tolerance -- see ``generation.optimizer``.
             ``"legacy"`` is a rollback switch that retains the original
             strict-PRAMANA-score-improvement rule exactly.
+        resume_word_budget: Target delivered length, in words. A *target*, not
+            a truncation: nothing is ever cut to reach it, and a document over
+            budget is delivered unchanged if no removal is provably safe. It
+            only changes how hard a prune has to work -- see
+            ``generation.optimizer._prune_verdict``. The default is chosen from
+            the fixtures rather than from folklore: their source projections
+            run 995-1002 words, and mainstream two-page resume guidance lands
+            around 800-1000, so 950 sits just below every fixture's current
+            length. That keeps the budget *active* (concision is the binding
+            need on real input) without demanding cuts that would have to reach
+            protected content to satisfy it.
     """
 
     ollama_base_url: str = DEFAULT_OLLAMA_BASE_URL
@@ -54,6 +65,7 @@ class EngineSettings:
     tailoring_v2: bool = True
     delivery_first: bool = True
     optimizer_policy: str = "pareto"
+    resume_word_budget: int = 950
 
     @classmethod
     def from_env(cls, environ: dict[str, str] | None = None) -> EngineSettings:
@@ -70,4 +82,5 @@ class EngineSettings:
             tailoring_v2=(env.get("ENGINE_TAILORING_V2", "1").strip().lower() not in {"0", "false", "no", "off"}),
             delivery_first=(env.get("ENGINE_DELIVERY_FIRST", "1").strip().lower() not in {"0", "false", "no", "off"}),
             optimizer_policy=(env.get("ENGINE_OPTIMIZER_POLICY", "pareto").strip().lower() or "pareto"),
+            resume_word_budget=int(env.get("ENGINE_RESUME_WORD_BUDGET", 950)),
         )

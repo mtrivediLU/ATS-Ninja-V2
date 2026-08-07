@@ -84,9 +84,34 @@ def _nonempty(values: Any) -> frozenset[str]:
     return frozenset(cleaned for cleaned in (_clean(value) for value in values) if cleaned)
 
 
+# A team size stated in words ("a team of four engineers") is as checkable as
+# one stated in digits, but _METRIC above only sees digits. Credential ids are
+# the identifiers whose loss from a delivered PDF motivated this module. Both
+# live here, beside the metric pattern, because "what counts as a checkable
+# fact" must have exactly one definition: ``generation.planning`` uses them to
+# tell an LLM what a rewrite may not touch, and ``rachana.pruning`` uses them
+# to decide what a removal may not take with it.
+TEAM_FACT_PATTERN = re.compile(
+    r"\b(?:team|group)\s+of\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+"
+    r"(?:engineers?|developers?|analysts?|people|members?|staff)\b",
+    flags=re.IGNORECASE,
+)
+CREDENTIAL_ID_PATTERN = re.compile(r"\b[A-Z]{2,8}-\d{2,6}\b")
+
+
 def extract_metrics(text: str) -> frozenset[str]:
     """Every number-bearing claim in *text*, normalized for comparison."""
     return frozenset(re.sub(r"\s+", "", match.group(0)) for match in _METRIC.finditer(text or ""))
+
+
+def extract_team_facts(text: str) -> frozenset[str]:
+    """Every stated team/group size in *text* (digit or spelled out)."""
+    return frozenset(match.group(0) for match in TEAM_FACT_PATTERN.finditer(text or ""))
+
+
+def extract_credential_ids(text: str) -> frozenset[str]:
+    """Every credential identifier in *text*."""
+    return frozenset(match.group(0) for match in CREDENTIAL_ID_PATTERN.finditer(text or ""))
 
 
 def build_fact_set(profile: Profile) -> ImmutableFactSet:

@@ -19,6 +19,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import re
 from copy import deepcopy
 from functools import cache
 from pathlib import Path
@@ -60,7 +61,7 @@ from ats_engine.generation.planning import (
 )
 from ats_engine.generation.resume import generate_resume_text
 from ats_engine.kit.change_actions import ChangeAction, apply_change_actions
-from ats_engine.kit.contract import ApplicationKit
+from ats_engine.kit.contract import ApplicationKit, ChangeOperation, ChangeType
 from ats_engine.models import (
     ContactInfo,
     EvidenceLink,
@@ -318,14 +319,30 @@ def test_synthetic_shapes_preserve_every_protected_resume_fact(case: str) -> Non
         )
     ]
 
+    # Source bullets are paired to delivered bullets by content, not position:
+    # an accepted PRUNE removes a bullet, so the two lists are no longer
+    # index-aligned. Removals are read from the kit's own change ledger and
+    # handed to the validator exactly as the optimizer does, so this still
+    # asserts that every *retained* bullet kept its facts, and that the only
+    # absences are ones the ledger accounts for.
+    removed = [
+        record.original_text
+        for record in kit.resume.change_ledger
+        if record.change_type is ChangeType.BULLET and record.operation is ChangeOperation.OMITTED
+    ]
+    removed_keys = {_bullet_key(text) for text in removed}
+    delivered_by_key = {
+        _bullet_key(bullet): bullet for entry in document.experience for bullet in entry.bullets if bullet.strip()
+    }
     bullet_pairs = [
         BulletPair(
             original=source_bullet,
-            candidate=document.experience[experience_index].bullets[bullet_index],
+            candidate=delivered_by_key.get(_bullet_key(source_bullet), ""),
             location=f"experience:{experience_index}:bullet:{bullet_index}",
         )
         for experience_index, source_experience in enumerate(profile.experiences)
         for bullet_index, source_bullet in enumerate(source_experience.bullets)
+        if _bullet_key(source_bullet) not in removed_keys
     ]
     assert (
         validate_resume_fidelity(
@@ -343,6 +360,7 @@ def test_synthetic_shapes_preserve_every_protected_resume_fact(case: str) -> Non
                 for entry in document.experience
             ],
             bullet_pairs=bullet_pairs,
+            removed_bullets=removed,
         )
         == []
     )
@@ -359,6 +377,11 @@ def test_real_case_contract_is_byte_stable_without_a_provider(case: str) -> None
         separators=(",", ":"),
     )
     assert set(first["stage_timings"]["stages_ms"].values()) == {0}
+
+
+def _bullet_key(text: str) -> str:
+    """Whitespace/punctuation-insensitive bullet identity, matching the engine's."""
+    return re.sub(r"[^a-z0-9]+", "", (text or "").lower())
 
 
 def _render_resume_as_pdf(text: str) -> bytes:
@@ -551,6 +574,22 @@ def gated_coo_plan() -> tuple[Profile, JDProfile, ResumePlan, ResumeGateContext]
     return profile, jd_profile, plan, context
 
 
+def _mutate_bullet_containing(plan: ResumePlan, needle: str, mutate: Any) -> None:
+    """Apply *mutate* to the bullet that actually states *needle*.
+
+    Addressed by content rather than by index: REORDER ranks a role's bullets
+    by JD relevance, so a fixed position no longer names a fixed bullet. The
+    point of this test is that deleting a genuine fact stays fatal, which is
+    unrelated to where that fact happens to sit on the page.
+    """
+    for entry in plan.experience:
+        for index, bullet in enumerate(entry.bullets):
+            if needle in bullet:
+                entry.bullets[index] = mutate(bullet)
+                return
+    raise AssertionError(f"no bullet in the delivered plan states {needle!r}")
+
+
 @pytest.mark.parametrize(
     ("deletion", "expected_fact"),
     [
@@ -580,20 +619,13 @@ def test_same_calibrated_gate_context_keeps_genuine_fact_deletions_fatal(
     elif deletion == "location":
         candidate.experience[0].location = ""
     elif deletion == "metric":
-        candidate.experience[0].bullets[1] = candidate.experience[0].bullets[1].replace("40%", "")
+        _mutate_bullet_containing(candidate, "40%", lambda bullet: bullet.replace("40%", ""))
     elif deletion == "certification":
         candidate.certifications[0].credential_id = ""
     elif deletion == "technology":
-        candidate.experience[0].bullets[0] = (
-            candidate.experience[0]
-            .bullets[0]
-            .replace(
-                "PostgreSQL",
-                "database",
-            )
-        )
+        _mutate_bullet_containing(candidate, "PostgreSQL", lambda bullet: bullet.replace("PostgreSQL", "database"))
     elif deletion == "responsibility":
-        candidate.experience[0].bullets[0] = "Architected and built a data warehouse."
+        _mutate_bullet_containing(candidate, "PostgreSQL", lambda _bullet: "Architected and built a data warehouse.")
 
     findings = validate_resume_plan_findings(
         candidate,
@@ -1510,9 +1542,13 @@ def test_all_unsafe_actions_deliver_validated_source_floor(
         gate_context=context,
     )
 
-    assert trace.delivery_state is DocumentState.GENERATED_WITH_FALLBACK
-    assert trace.fallback_reason
-    assert not trace.accepted_actions
+    # Every *placement* is unsafe and every one is rejected -- that is what this
+    # test pins. It no longer implies the run produced nothing: pruning and
+    # reordering are not placements, they are gated separately, and they can
+    # still safely improve the document when no keyword placement survives.
+    # The floor being asserted is therefore "no unsafe placement reached the
+    # page", not "the page is byte-identical to the source projection".
+    assert not [action for action in trace.accepted_actions if action.startswith("unsafe_delete")]
     assert trace.rejected_actions
     assert [experience.company for experience in delivered.experience] == [
         experience.company for experience in profile.experiences
