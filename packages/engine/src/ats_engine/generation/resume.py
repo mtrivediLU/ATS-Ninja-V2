@@ -38,8 +38,14 @@ def generate_resume_text(plan: ResumePlan) -> str:
                 ]
             )
         )
+        # An emptied slot is a bullet an accepted PRUNE removed. The slot is
+        # retained in the plan so every index-keyed mechanism (change-ledger
+        # ids, restore-by-position in kit.change_actions) stays aligned with
+        # the *source* bullet numbering, but nothing is rendered for it.
+        # `document_render` already skips empties the same way.
         for bullet in entry.bullets:
-            lines.append(f"- {bullet}")
+            if bullet.strip():
+                lines.append(f"- {bullet}")
         lines.append("")
 
     lines.append("Education")

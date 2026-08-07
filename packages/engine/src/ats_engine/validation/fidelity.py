@@ -324,6 +324,7 @@ def validate_raw_source_fidelity(
     bullet_pairs: Sequence[BulletPair] = (),
     calibrations: Iterable[CalibrationKey] | CalibrationProfile = (),
     detector_version: str = FIDELITY_DETECTOR_VERSION,
+    removed_bullets: Sequence[str] = (),
 ) -> FidelityReport:
     """Validate a rendered resume against raw candidate-authored evidence.
 
@@ -331,6 +332,11 @@ def validate_raw_source_fidelity(
     lost them. Calibration accepts only exact reviewed identities and merely
     changes matching findings to ``CAL_FALSE_POSITIVE``; it never suppresses
     another source fact or mutates detector evidence.
+
+    ``removed_bullets`` carries the verbatim text of bullets an accepted
+    ``PRUNE`` removed; see ``_raw_source_bullet_findings`` for why a ledgered
+    removal is not the silent loss this validator exists to catch, and for the
+    limits that keep the exclusion from laundering anything.
     """
     raw_source = source_text or (profile.raw_markdown if profile is not None else "")
     findings: list[ValidationFinding] = []
@@ -364,7 +370,9 @@ def validate_raw_source_fidelity(
 
     findings.extend(_unsupported_candidate_metric_findings(raw_source, candidate_text, detector_version))
     findings.extend(_unsupported_credential_id_findings(raw_source, candidate_text, detector_version))
-    findings.extend(_raw_source_bullet_findings(raw_source, candidate_text, detector_version))
+    findings.extend(
+        _raw_source_bullet_findings(raw_source, candidate_text, detector_version, _removal_keys(removed_bullets))
+    )
 
     for index, pair in enumerate(bullet_pairs):
         source_span = pair.location.strip() or _source_span_for_fact(raw_source or pair.original, pair.original)
@@ -402,6 +410,7 @@ def validate_raw_source_findings(
     bullet_pairs: Sequence[BulletPair] = (),
     calibrations: Iterable[CalibrationKey] | CalibrationProfile = (),
     detector_version: str = FIDELITY_DETECTOR_VERSION,
+    removed_bullets: Sequence[str] = (),
 ) -> tuple[ValidationFinding, ...]:
     """Return typed findings directly for structured validation consumers."""
     return validate_raw_source_fidelity(
@@ -412,6 +421,7 @@ def validate_raw_source_findings(
         bullet_pairs=bullet_pairs,
         calibrations=calibrations,
         detector_version=detector_version,
+        removed_bullets=removed_bullets,
     ).findings
 
 
@@ -424,6 +434,7 @@ def validate_resume_fidelity(
     bullet_pairs: Sequence[BulletPair] = (),
     calibrations: Iterable[CalibrationKey] | CalibrationProfile = (),
     detector_version: str = FIDELITY_DETECTOR_VERSION,
+    removed_bullets: Sequence[str] = (),
 ) -> list[str]:
     """Legacy list-string compatibility wrapper around structured fidelity."""
     return list(
@@ -435,6 +446,7 @@ def validate_resume_fidelity(
             bullet_pairs=bullet_pairs,
             calibrations=calibrations,
             detector_version=detector_version,
+            removed_bullets=removed_bullets,
         ).errors
     )
 
@@ -519,15 +531,45 @@ def bullet_preserves_facts(original: str, candidate: str, *, source_text: str = 
     return not bullet_fidelity_errors(original, candidate, source_text=source_text)
 
 
+def _removal_keys(removed_bullets: Sequence[str]) -> frozenset[str]:
+    """Normalized keys for ledgered removals, matching completeness's own rule."""
+    return frozenset(
+        key for key in (re.sub(r"[^a-z0-9]+", "", (text or "").lower()) for text in removed_bullets) if key
+    )
+
+
 def _raw_source_bullet_findings(
     raw_source: str,
     candidate_text: str,
     detector_version: str,
+    removed_keys: frozenset[str] = frozenset(),
 ) -> list[ValidationFinding]:
-    """Check raw *experience* bullets independently of parsed profile state."""
+    """Check raw *experience* bullets independently of parsed profile state.
+
+    ``removed_keys`` excuses exactly the source bullets an accepted, recorded
+    ``PRUNE`` deliberately removed. This is the same distinction
+    ``validation.completeness`` draws, and for the same reason: this check
+    exists to catch content *silently* lost while rewriting, and a removal
+    that is ledgered, reversible, and shown to the user is the opposite of
+    silent. Without it a legitimate removal would read here as the very
+    failure it is not.
+
+    The exclusion is deliberately narrow and cannot launder anything:
+
+    * it is keyed on the ledger's verbatim ``original_text``, so it can only
+      ever skip a bullet the ledger actually names;
+    * the ledger itself is not trusted here -- ``completeness`` independently
+      proves each entry names real source text that is really absent from the
+      render, and rejects the run otherwise;
+    * every *other* source bullet is checked exactly as before, as is every
+      profile-level fact (employers, titles, dates), which pruning may never
+      remove.
+    """
     findings: list[ValidationFinding] = []
     for index, source_bullet in enumerate(_extract_raw_experience_bullets(raw_source), start=1):
         prefix = f"raw source bullet {index}"
+        if re.sub(r"[^a-z0-9]+", "", source_bullet.text.lower()) in removed_keys:
+            continue
         findings.extend(
             _with_detail_prefix(
                 _bullet_retention_findings(

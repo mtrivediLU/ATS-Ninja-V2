@@ -23,6 +23,7 @@ from ats_engine.models import (
 )
 from ats_engine.parsing.resume import find_metrics, term_in_text
 from ats_engine.providers.base import LLMProvider, generate_json, generate_text, run_concurrently
+from ats_engine.rachana.facts import extract_credential_ids, extract_team_facts
 from ats_engine.validation.fidelity import bullet_fidelity_errors, extract_named_entities
 from ats_engine.validation.naturalness import (
     bullet_safety_errors,
@@ -1107,22 +1108,20 @@ def _rewrite_bullets_batch(
     return rewritten
 
 
-_TEAM_FACT = re.compile(
-    r"\b(?:team|group)\s+of\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+"
-    r"(?:engineers?|developers?|analysts?|people|members?|staff)\b",
-    flags=re.IGNORECASE,
-)
-_CREDENTIAL_FACT = re.compile(r"\b[A-Z]{2,8}-\d{2,6}\b")
-
-
 def _protected_facts(text: str) -> list[str]:
-    """Return exact high-risk facts an AI proposal must retain."""
+    """Return exact high-risk facts an AI proposal must retain.
+
+    The team-size and credential-id patterns moved to ``rachana.facts`` so
+    "what counts as a checkable fact" has one definition shared with the
+    pruning gate, which must refuse to remove the same things a rewrite must
+    refuse to drop. Behavior here is unchanged.
+    """
     return _dedupe(
         [
             *find_metrics(text),
             *extract_named_entities(text),
-            *(match.group(0) for match in _TEAM_FACT.finditer(text or "")),
-            *(match.group(0) for match in _CREDENTIAL_FACT.finditer(text or "")),
+            *sorted(extract_team_facts(text)),
+            *sorted(extract_credential_ids(text)),
         ]
     )
 
