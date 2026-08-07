@@ -2520,12 +2520,17 @@ def _prose_improvement(before: ScoreVector, after: ScoreVector) -> str:
 
 @dataclass(frozen=True, slots=True)
 class _ProseTarget:
-    """One field a prose rewrite may be proposed for."""
+    """One field a prose rewrite may be proposed for.
+
+    An *address*, deliberately carrying no copy of the field's text: the text is
+    always read back through ``candidate_text_for`` against the live plan. Two
+    representations of "the original text" in one struct is exactly the shape
+    that made an earlier version of the ledger check compare the wrong pair.
+    """
 
     operation: str
     target: str
     location_id: str
-    original_text: str
     role_index: int
     bullet_index: int
 
@@ -2562,7 +2567,6 @@ def _prose_targets(plan: ResumePlan, profile: Profile, requirements: list[Requir
                 operation=SUMMARY_REWRITE,
                 target="resume:summary",
                 location_id="resume::summary",
-                original_text=plan.summary,
                 role_index=-1,
                 bullet_index=-1,
             )
@@ -2585,7 +2589,6 @@ def _prose_targets(plan: ResumePlan, profile: Profile, requirements: list[Requir
                         operation=BULLET_REWRITE,
                         target=f"experience:{role_index}:bullet:{bullet_index}",
                         location_id=f"resume::exp{role_index}::bullet{bullet_index}",
-                        original_text=bullet,
                         role_index=role_index,
                         bullet_index=bullet_index,
                     ),
