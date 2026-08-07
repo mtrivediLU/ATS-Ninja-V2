@@ -47,7 +47,7 @@ from ats_engine.rachana.pruning import (
     normalize_for_match,
     screen_bullet,
 )
-from ats_engine.rachana.reordering import is_permutation, reorder_preserving_blanks, reorder_skill_items
+from ats_engine.rachana.reordering import is_permutation, reorder_skill_items
 from ats_engine.scoring.ats_v2 import AtsScoreV2, project_ats_v2, score_resume_v2
 from ats_engine.validation.calibration import (
     CalibrationProfile,
@@ -67,6 +67,9 @@ from ats_engine.validation.stuffing import (
     STUFFING_DETECTOR_VERSION,
     validate_resume_stuffing_findings,
 )
+
+# The operation whose apply step is, by construction, a no-op on the document.
+WEAVE_BULLET_OPERATION = "weave_bullet"
 
 _BATCH_SIZE = 8
 _MAX_ITERATIONS = 4
@@ -99,6 +102,34 @@ class _ProposalRecorder:
 
     records: dict[str, ProposalRecord]
     ids_by_label: dict[str, str]
+
+    def reclassify_no_ops(self) -> None:
+        """Demote accepted proposals that provably changed no delivered text.
+
+        ``_apply_actions`` writes summary, skills, headline, and
+        surface_variant changes into the plan and nothing else, so a
+        ``weave_bullet`` cannot alter the document by construction -- its
+        bullet already contains the term, which is precisely why the planner
+        emitted it. Counting it as an accepted *change* inflated every
+        accepted-action figure in the benchmark (7 of LatentView's 17, 3 of
+        CGI's 17) and told a reviewer the engine had done work it had not.
+
+        The proposal is still real and is still kept in the action list handed
+        to PRAMANA: it is genuine placement *provenance*, and
+        ``pramana.scoring._placement_bonus`` legitimately reads it to see that
+        a term appears in both skills and a bullet. What changes here is only
+        the honesty of the reporting -- provenance is recorded as provenance,
+        not as an edit. Giving weave_bullet a real effect would mean
+        paraphrasing a candidate-authored bullet, which is LLM-rewrite
+        territory and explicitly out of scope for this step.
+        """
+        for key, record in self.records.items():
+            if record.status is ProposalStatus.ACCEPTED and record.operation == WEAVE_BULLET_OPERATION:
+                self.records[key] = replace(
+                    record,
+                    status=ProposalStatus.NO_OP,
+                    gate_detail=("provenance only: the bullet already states this term, so no delivered text changed"),
+                )
 
     @classmethod
     def from_inventory(
@@ -261,6 +292,7 @@ def optimize(
     accept_generated_prose: bool = False,
     delivery_first: bool = True,
     optimizer_policy: str = "pareto",
+    word_budget: int = 950,
 ) -> tuple[ResumePlan, OptimizationTrace]:
     """Apply safe quality and score actions without ever regressing ATS v2.
 
@@ -551,7 +583,11 @@ def optimize(
             context=context,
             guard=guard,
             trace=trace,
-            min_density_ratio=_PRUNE_MIN_DENSITY_GAIN_RATIO,
+            min_density_ratio=(
+                _PRUNE_MIN_DENSITY_GAIN_RATIO
+                if current_objectives.word_count > word_budget
+                else _PRUNE_MIN_DENSITY_GAIN_RATIO * _AT_BUDGET_STRICTNESS
+            ),
         )
         # After pruning, so ranking sees only content that survives.
         current_plan, reorder_labels = _apply_reordering(
@@ -666,9 +702,12 @@ def optimize(
         )
         return source_plan, trace
 
+    # weave_bullet is provenance, not an edit (see reclassify_no_ops): it stays
+    # in `accepted` for PRAMANA's placement bonus but must not be reported as a
+    # change the reader would see.
     trace.accepted_actions = [
         *accepted_quality,
-        *[_action_label(action) for action in accepted],
+        *[_action_label(a) for a in accepted if a.operation != WEAVE_BULLET_OPERATION],
         *pruned_labels,
     ]
     if not trace.score_path or trace.score_path[-1] != final_score.score:
@@ -1747,6 +1786,7 @@ def _finalize_diagnostics(
     rather than this function recomputing a third PRAMANA pass.
     """
     recorder.finalize_unevaluated()
+    recorder.reclassify_no_ops()
     proposals = tuple(recorder.records.values())
     if len(proposals) != len(recorder.ids_by_label) or len({record.id for record in proposals}) != len(proposals):
         raise AssertionError("every planner-emitted action must have exactly one proposal record")
@@ -1964,6 +2004,13 @@ def _pareto_verdict(before: ScoreVector, after: ScoreVector) -> bool:
 # materially sized cut (~5 words in a 1000-word document) and a prune that
 # takes a canonical with it fails outright, since the numerator drops.
 _PRUNE_MIN_DENSITY_GAIN_RATIO = 0.005
+# How much harder a prune must work once the document is already inside
+# EngineSettings.resume_word_budget. This is the whole mechanism by which the
+# budget "prefers proposals moving the document toward it": over budget,
+# concision is the binding need and the ordinary threshold applies; at or under
+# it, length is no longer the problem, so a removal has to justify itself on
+# concentration alone. Nothing is ever truncated to reach the budget.
+_AT_BUDGET_STRICTNESS = 4.0
 
 
 def _prune_gate_code(reason: str) -> GateCode:
@@ -2190,14 +2237,22 @@ def _apply_reordering(
             candidate.skill_groups[group_index] = (heading, ranked)
             labels.append(f"skill_reorder:skills:{group_index}")
 
-    for experience_index, entry in enumerate(candidate.experience):
-        before = list(entry.bullets)
-        after = reorder_preserving_blanks(before, requirements)
-        if not is_permutation(before, after):
-            raise AssertionError(f"REORDER changed the bullet multiset in experience {experience_index}")
-        if after != before:
-            entry.bullets = after
-            labels.append(f"reorder:experience:{experience_index}")
+    # Bullet REORDER is implemented and unit-tested in rachana.reordering but is
+    # deliberately NOT applied here. Measured, enabling it rolled CGI and
+    # LatentView back to the source projection entirely (1002 -> 1002 words, all
+    # 17 accepted actions lost). The cause is structural, not a tuning problem:
+    # a PlacementAction addresses its evidence as `experience:<i>:bullet:<j>`,
+    # and PRAMANA resolves that provenance positionally
+    # (`pramana.scoring._experience_bullets`). Permuting bullets silently
+    # invalidates every one of those targets, the placement bonus collapses,
+    # the final score falls below the source floor, and the whole run is
+    # discarded -- so the reorder would cost far more than the reading-order
+    # benefit it buys.
+    #
+    # Reported rather than worked around, per the brief: making this safe needs
+    # placement provenance to be content-addressed rather than index-addressed,
+    # which is a change to the scorer's evidence resolution and belongs in its
+    # own PR. Nothing here weakens a gate to get the reorder through.
 
     if not labels:
         return plan, []

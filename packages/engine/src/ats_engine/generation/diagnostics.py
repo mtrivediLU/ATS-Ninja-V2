@@ -23,6 +23,10 @@ class ProposalStatus(StrEnum):
     """Terminal disposition of one planner-emitted placement proposal."""
 
     ACCEPTED = "accepted"
+    # Evaluated, applied, and provably changed no delivered text. Distinct from
+    # ACCEPTED so an operation that cannot alter the document is never counted
+    # as a change to it (see WEAVE_BULLET_OPERATION in generation.optimizer).
+    NO_OP = "no_op"
     REJECTED = "rejected"
     ROLLED_BACK = "rolled_back"
     SUPERSEDED = "superseded"

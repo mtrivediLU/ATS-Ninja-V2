@@ -158,6 +158,7 @@ def run_pipeline(
                 accept_generated_prose=prose is not None,
                 delivery_first=resolved_settings.delivery_first,
                 optimizer_policy=resolved_settings.optimizer_policy,
+                word_budget=resolved_settings.resume_word_budget,
             )
             result.metadata["optimization_trace"] = optimization_trace
             result.metadata["resume_gate_context"] = gate_context
